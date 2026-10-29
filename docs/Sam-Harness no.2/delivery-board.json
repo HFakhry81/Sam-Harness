@@ -1,0 +1,230 @@
+{
+  "version": 1,
+  "engagementId": "eng-mvttb159",
+  "targetRepo": "E:\\UpNexa.com\\Sam-Harness",
+  "packDir": "E:\\UpNexa.com\\Sam-Harness\\docs\\Sam-Harness no.2",
+  "updatedAt": "2026-10-29T17:24:51.356Z",
+  "goNoGo": {
+    "decision": "GO",
+    "by": "cli,--go",
+    "at": "2026-10-29T10:39:53.992Z",
+    "reason": "Owner authorized implementation for this run"
+  },
+  "tickets": [
+    {
+      "id": "AUTO-1",
+      "title": "📅 Booking Engine Core",
+      "priority": "P0",
+      "status": "ready",
+      "why": "📅 Booking Engine Core",
+      "filesLikely": [],
+      "acceptance": [
+        "**P0-BOOK-01: Appointment Collision Logic**",
+        "**P0-BOOK-02: Resource Rental Logic**",
+        "**P0-BOOK-03: Batch Scheduling Logic**"
+      ],
+      "dod": [
+        {
+          "id": "dod-acceptance",
+          "label": "Acceptance criteria written and testable",
+          "done": false
+        },
+        {
+          "id": "dod-evidence",
+          "label": "Evidence paths cited (or explicit not-found)",
+          "done": false
+        },
+        {
+          "id": "dod-review",
+          "label": "Peer/agent review passed or waived with reason",
+          "done": false
+        },
+        {
+          "id": "dod-smoke",
+          "label": "Smoke/check command identified",
+          "done": false
+        },
+        {
+          "id": "dod-no-scope-creep",
+          "label": "Change stays within ticket scope",
+          "done": false
+        }
+      ],
+      "evidenceRefs": [],
+      "createdAt": "2026-10-29T17:24:51.315Z",
+      "updatedAt": "2026-10-29T17:24:51.353Z"
+    },
+    {
+      "id": "AUTO-2",
+      "title": "⚡ State Transitions & Triggers",
+      "priority": "P0",
+      "status": "ready",
+      "why": "⚡ State Transitions & Triggers",
+      "filesLikely": [
+        "src/controlplane/qrHandler.ts"
+      ],
+      "acceptance": [
+        "**P0-QR-01: QR Validation Trigger**"
+      ],
+      "dod": [
+        {
+          "id": "dod-acceptance",
+          "label": "Acceptance criteria written and testable",
+          "done": false
+        },
+        {
+          "id": "dod-evidence",
+          "label": "Evidence paths cited (or explicit not-found)",
+          "done": false
+        },
+        {
+          "id": "dod-review",
+          "label": "Peer/agent review passed or waived with reason",
+          "done": false
+        },
+        {
+          "id": "dod-smoke",
+          "label": "Smoke/check command identified",
+          "done": false
+        },
+        {
+          "id": "dod-no-scope-creep",
+          "label": "Change stays within ticket scope",
+          "done": false
+        }
+      ],
+      "evidenceRefs": [],
+      "createdAt": "2026-10-29T17:24:51.315Z",
+      "updatedAt": "2026-10-29T17:24:51.353Z"
+    },
+    {
+      "id": "AUTO-3",
+      "title": "💰 Financials",
+      "priority": "P0",
+      "status": "ready",
+      "why": "💰 Financials",
+      "filesLikely": [],
+      "acceptance": [
+        "**P0-BILL-01: Billing Engine & Invoicing**"
+      ],
+      "dod": [
+        {
+          "id": "dod-acceptance",
+          "label": "Acceptance criteria written and testable",
+          "done": false
+        },
+        {
+          "id": "dod-evidence",
+          "label": "Evidence paths cited (or explicit not-found)",
+          "done": false
+        },
+        {
+          "id": "dod-review",
+          "label": "Peer/agent review passed or waived with reason",
+          "done": false
+        },
+        {
+          "id": "dod-smoke",
+          "label": "Smoke/check command identified",
+          "done": false
+        },
+        {
+          "id": "dod-no-scope-creep",
+          "label": "Change stays within ticket scope",
+          "done": false
+        }
+      ],
+      "evidenceRefs": [],
+      "createdAt": "2026-10-29T17:24:51.315Z",
+      "updatedAt": "2026-10-29T17:24:51.353Z"
+    },
+    {
+      "id": "AUTO-4",
+      "title": "🔄 Lifecycle Refinement",
+      "priority": "P1",
+      "status": "backlog",
+      "why": "🔄 Lifecycle Refinement",
+      "filesLikely": [
+        "src/controlplane/taskLifecycle.ts"
+      ],
+      "acceptance": [
+        "**P1-STATE-01: Booking State Machine (Pending $\\rightarrow$ Confirmed)**",
+        "**P1-STATE-02: Session Timer Logic (Checked-In $\\rightarrow$ Completed)**"
+      ],
+      "dod": [
+        {
+          "id": "dod-acceptance",
+          "label": "Acceptance criteria written and testable",
+          "done": false
+        },
+        {
+          "id": "dod-evidence",
+          "label": "Evidence paths cited (or explicit not-found)",
+          "done": false
+        },
+        {
+          "id": "dod-review",
+          "label": "Peer/agent review passed or waived with reason",
+          "done": false
+        },
+        {
+          "id": "dod-smoke",
+          "label": "Smoke/check command identified",
+          "done": false
+        },
+        {
+          "id": "dod-no-scope-creep",
+          "label": "Change stays within ticket scope",
+          "done": false
+        }
+      ],
+      "evidenceRefs": [],
+      "createdAt": "2026-10-29T17:24:51.315Z",
+      "updatedAt": "2026-10-29T17:24:51.353Z"
+    },
+    {
+      "id": "AUTO-5",
+      "title": "📜 Governance",
+      "priority": "P1",
+      "status": "backlog",
+      "why": "📜 Governance",
+      "filesLikely": [
+        "docs/Sam-Harness no.1/audit-history.md",
+        "src/audit/ledger.ts"
+      ],
+      "acceptance": [
+        "**P1-AUDIT-01: Results Ledger Implementation**"
+      ],
+      "dod": [
+        {
+          "id": "dod-acceptance",
+          "label": "Acceptance criteria written and testable",
+          "done": false
+        },
+        {
+          "id": "dod-evidence",
+          "label": "Evidence paths cited (or explicit not-found)",
+          "done": false
+        },
+        {
+          "id": "dod-review",
+          "label": "Peer/agent review passed or waived with reason",
+          "done": false
+        },
+        {
+          "id": "dod-smoke",
+          "label": "Smoke/check command identified",
+          "done": false
+        },
+        {
+          "id": "dod-no-scope-creep",
+          "label": "Change stays within ticket scope",
+          "done": false
+        }
+      ],
+      "evidenceRefs": [],
+      "createdAt": "2026-10-29T17:24:51.315Z",
+      "updatedAt": "2026-10-29T17:24:51.353Z"
+    }
+  ]
+}

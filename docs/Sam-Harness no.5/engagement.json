@@ -1,0 +1,10 @@
+{
+  "id": "eng-mvu3pci3",
+  "clientName": "UpNexa",
+  "projectName": "Sam-Harness",
+  "targetRepo": "Sam-Harness",
+  "docsRoot": "Sam-Harness\\docs",
+  "goal": "L3 — تقرير Control Plane + ذاكرة/تعلم",
+  "route": "architecture",
+  "createdAt": "2026-10-29T22:14:29.259Z"
+}

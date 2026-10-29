@@ -1,0 +1,87 @@
+# Evidence pack (local scout)
+
+Target: `E:\UpNexa.com\Sam-Harness`
+Scanned: 2026-10-29T18:01:16.902Z
+Hits: 79
+
+Auditor MUST cite these paths (or mark "not found") — do not invent frameworks.
+
+- `src/controlplane/projectMemory.ts` — goal-aware Control Plane evidence
+- `src/controlplane/dailyOps.ts` — goal-aware Control Plane evidence
+- `src/controlplane/artifacts.ts` — goal-aware Control Plane evidence
+- `src/controlplane/runLessons.ts` — goal-aware Control Plane evidence
+- `src/controlplane/taskSpec.ts` — goal-aware Control Plane evidence
+- `src/controlplane/server.ts` — goal-aware Control Plane evidence
+- `src/controlplane/public/app.js` — goal-aware Control Plane evidence
+- `src/controlplane/public/index.html` — goal-aware Control Plane evidence
+- `agent-memory.md` — goal-aware Control Plane evidence
+- `docs/AGENCY_OPS.md` — goal-aware Control Plane evidence
+- `docs/AGENCY_PLATFORM_ROADMAP.md` — goal-aware Control Plane evidence
+- `docs/WORKFLOW_REVIEW_LOOP.md` — goal-aware Control Plane evidence
+- `docs/DELIVERY_OS.md` — RBAC/auth signals (content)
+- `docs/project-spec.md` — booking/occupancy signals (content)
+- `docs/REQUIREMENTS-ROADMAP.md` — Control Plane / memory / ops signals (content)
+- `docs/Sam-Harness no.1/audit-history.md` — booking/occupancy signals (content)
+- `docs/Sam-Harness no.1/audit-report.md` — booking/occupancy signals (content)
+- `docs/Sam-Harness no.1/ceo-draft.md` — booking/occupancy signals (content)
+- `docs/Sam-Harness no.1/CODE_VS_PLAN_GAP_MATRIX.md` — booking/occupancy signals (content)
+- `docs/Sam-Harness no.1/DELIVERY_BOARD.md` — tenant/workspace isolation signals (content)
+- `docs/Sam-Harness no.1/evidence-pack.md` — tenant/workspace isolation signals (content)
+- `docs/Sam-Harness no.1/execution-plan.md` — booking/occupancy signals (content)
+- `docs/Sam-Harness no.1/help-system-spec.md` — QR/check-in signals (content)
+- `docs/Sam-Harness no.1/IMPLEMENTATION_BACKLOG.md` — booking/occupancy signals (content)
+- `docs/Sam-Harness no.1/marketing-campaign.md` — QR/check-in signals (content)
+- `docs/Sam-Harness no.1/NEXT_SPRINT.md` — booking/occupancy signals (content)
+- `docs/Sam-Harness no.1/review-loop/audit-v1.md` — QR/check-in signals (content)
+- `docs/Sam-Harness no.1/review-loop/audit-v2.md` — booking/occupancy signals (content)
+- `docs/Sam-Harness no.1/review-loop/audit-v3.md` — tenant/workspace isolation signals (content)
+- `docs/Sam-Harness no.1/review-loop/audit-v4.md` — tenant/workspace isolation signals (content)
+- `docs/Sam-Harness no.1/review-loop/audit-v5.md` — QR/check-in signals (content)
+- `docs/Sam-Harness no.1/review-loop/rejection-v1.md` — QR/check-in signals (content)
+- `docs/Sam-Harness no.1/review-loop/rejection-v2.md` — booking/occupancy signals (content)
+- `docs/Sam-Harness no.1/review-loop/rejection-v3.md` — tenant/workspace isolation signals (content)
+- `docs/Sam-Harness no.1/review-loop/rejection-v4.md` — tenant/workspace isolation signals (content)
+- `docs/Sam-Harness no.1/review-loop/rejection-v5.md` — QR/check-in signals (content)
+- `docs/Sam-Harness no.1/review-loop/remediation-brief-v1.md` — booking/occupancy signals (content)
+- `docs/Sam-Harness no.1/review-loop/remediation-brief-v2.md` — booking/occupancy signals (content)
+- `docs/Sam-Harness no.1/review-loop/remediation-brief-v3.md` — booking/occupancy signals (content)
+- `docs/Sam-Harness no.1/review-loop/remediation-brief-v4.md` — booking/occupancy signals (content)
+- `docs/Sam-Harness no.1/review-loop/strategy-v1.md` — booking/occupancy signals (content)
+- `docs/Sam-Harness no.1/review-loop/strategy-v2.md` — booking/occupancy signals (content)
+- `docs/Sam-Harness no.1/review-loop/strategy-v3.md` — booking/occupancy signals (content)
+- `docs/Sam-Harness no.1/review-loop/strategy-v4.md` — booking/occupancy signals (content)
+- `docs/Sam-Harness no.1/review-loop/strategy-v5.md` — booking/occupancy signals (content)
+- `docs/Sam-Harness no.1/TICKET_P0_STARTER.md` — tenant/workspace isolation signals (content)
+- `docs/Sam-Harness no.2/ceo-draft.md` — booking/occupancy signals (content)
+- `docs/Sam-Harness no.2/CODE_VS_PLAN_GAP_MATRIX.md` — booking/occupancy signals (content)
+- `docs/Sam-Harness no.2/DELIVERY_BOARD.md` — RBAC/auth signals (content)
+- `docs/Sam-Harness no.2/evidence-pack.md` — tenant/workspace isolation signals (content)
+- `docs/Sam-Harness no.2/execution-plan.md` — booking/occupancy signals (content)
+- `docs/Sam-Harness no.2/help-system-spec.md` — booking/occupancy signals (content)
+- `docs/Sam-Harness no.2/IMPLEMENTATION_BACKLOG.md` — booking/occupancy signals (content)
+- `docs/Sam-Harness no.2/marketing-campaign.md` — booking/occupancy signals (content)
+- `docs/Sam-Harness no.2/NEXT_SPRINT.md` — booking/occupancy signals (content)
+- `docs/Sam-Harness no.2/review-loop/audit-v2.md` — booking/occupancy signals (content)
+- `docs/Sam-Harness no.2/review-loop/audit-v3.md` — tenant/workspace isolation signals (content)
+- `docs/Sam-Harness no.2/review-loop/audit-v4.md` — tenant/workspace isolation signals (content)
+- `docs/Sam-Harness no.2/review-loop/audit-v5.md` — QR/check-in signals (content)
+- `docs/Sam-Harness no.2/review-loop/rejection-v1.md` — QR/check-in signals (content)
+- `docs/Sam-Harness no.2/review-loop/rejection-v2.md` — booking/occupancy signals (content)
+- `docs/Sam-Harness no.2/review-loop/rejection-v3.md` — tenant/workspace isolation signals (content)
+- `docs/Sam-Harness no.2/review-loop/rejection-v4.md` — tenant/workspace isolation signals (content)
+- `docs/Sam-Harness no.2/review-loop/rejection-v5.md` — QR/check-in signals (content)
+- `docs/Sam-Harness no.2/review-loop/remediation-brief-v1.md` — booking/occupancy signals (content)
+- `docs/Sam-Harness no.2/review-loop/remediation-brief-v2.md` — booking/occupancy signals (content)
+- `docs/Sam-Harness no.2/review-loop/remediation-brief-v3.md` — booking/occupancy signals (content)
+- `docs/Sam-Harness no.2/review-loop/remediation-brief-v4.md` — booking/occupancy signals (content)
+- `docs/Sam-Harness no.2/review-loop/strategy-v1.md` — booking/occupancy signals (content)
+- `docs/Sam-Harness no.2/review-loop/strategy-v2.md` — booking/occupancy signals (content)
+- `docs/Sam-Harness no.2/review-loop/strategy-v3.md` — booking/occupancy signals (content)
+- `docs/Sam-Harness no.2/review-loop/strategy-v4.md` — booking/occupancy signals (content)
+- `docs/Sam-Harness no.2/review-loop/strategy-v5.md` — booking/occupancy signals (content)
+- `docs/Sam-Harness no.2/TICKET_P0_STARTER.md` — booking/occupancy signals (content)
+- `docs/Sam-Harness no.3/audit-history.md` — Control Plane / memory / ops signals (content)
+- `docs/Sam-Harness no.3/ceo-draft.md` — activity template / status machine signals (content)
+- `docs/Sam-Harness no.3/CODE_VS_PLAN_GAP_MATRIX.md` — Control Plane / memory / ops signals (content)
+- `docs/Sam-Harness no.3/DELIVERY_BOARD.md` — RBAC/auth signals (content)
+- `docs/Sam-Harness no.3/evidence-pack.md` — tenant/workspace isolation signals (content)

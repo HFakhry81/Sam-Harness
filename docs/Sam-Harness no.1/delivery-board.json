@@ -1,0 +1,98 @@
+{
+  "version": 1,
+  "engagementId": "eng-mvtsare3",
+  "targetRepo": "E:\\UpNexa.com\\Sam-Harness",
+  "packDir": "E:\\UpNexa.com\\Sam-Harness\\docs\\Sam-Harness no.1",
+  "updatedAt": "2026-10-29T16:57:17.915Z",
+  "goNoGo": {
+    "decision": "GO",
+    "by": "cli,--go",
+    "at": "2026-10-29T10:39:53.992Z",
+    "reason": "Owner authorized implementation for this run"
+  },
+  "tickets": [
+    {
+      "id": "M-1009",
+      "title": "Multi-Tenant Isolation",
+      "priority": "P1",
+      "status": "in_progress",
+      "why": "Isolate tenants",
+      "filesLikely": [],
+      "acceptance": [
+        "Add tenant_id",
+        "Middleware"
+      ],
+      "dod": [
+        {
+          "id": "dod-acceptance",
+          "label": "Acceptance criteria written and testable",
+          "done": false
+        },
+        {
+          "id": "dod-evidence",
+          "label": "Evidence paths cited (or explicit not-found)",
+          "done": false
+        },
+        {
+          "id": "dod-review",
+          "label": "Peer/agent review passed or waived with reason",
+          "done": false
+        },
+        {
+          "id": "dod-smoke",
+          "label": "Smoke/check command identified",
+          "done": false
+        },
+        {
+          "id": "dod-no-scope-creep",
+          "label": "Change stays within ticket scope",
+          "done": false
+        }
+      ],
+      "evidenceRefs": [],
+      "createdAt": "2026-10-29T10:39:53.952Z",
+      "updatedAt": "2026-10-29T10:39:53.968Z"
+    },
+    {
+      "id": "M-1010",
+      "title": "BookingType Triad",
+      "priority": "P0",
+      "status": "ready",
+      "why": "BookingType Triad",
+      "filesLikely": [],
+      "acceptance": [
+        "occupancy_mode"
+      ],
+      "dod": [
+        {
+          "id": "dod-acceptance",
+          "label": "Acceptance criteria written and testable",
+          "done": false
+        },
+        {
+          "id": "dod-evidence",
+          "label": "Evidence paths cited (or explicit not-found)",
+          "done": false
+        },
+        {
+          "id": "dod-review",
+          "label": "Peer/agent review passed or waived with reason",
+          "done": false
+        },
+        {
+          "id": "dod-smoke",
+          "label": "Smoke/check command identified",
+          "done": false
+        },
+        {
+          "id": "dod-no-scope-creep",
+          "label": "Change stays within ticket scope",
+          "done": false
+        }
+      ],
+      "evidenceRefs": [],
+      "createdAt": "2026-10-29T10:39:53.952Z",
+      "updatedAt": "2026-10-29T10:39:53.968Z"
+    }
+  ]
+}
