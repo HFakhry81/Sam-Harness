@@ -1,0 +1,383 @@
+<!DOCTYPE html>
+<html lang="ar" dir="rtl">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Sam-Harness — Control Plane</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link
+      href="https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,500;600;650;700&family=IBM+Plex+Mono:wght@400;500&family=Readex+Pro:wght@400;500;600;700&display=swap"
+      rel="stylesheet"
+    />
+    <link rel="stylesheet" href="/styles.css" />
+  </head>
+  <body>
+    <div class="atmosphere" aria-hidden="true"></div>
+    <header class="top">
+      <div class="brand">
+        <span class="brand-mark">SH</span>
+        <div>
+          <p class="brand-name">Sam-Harness</p>
+          <p class="brand-sub">Control Plane · Hybrid Agency</p>
+        </div>
+      </div>
+      <div class="top-actions">
+        <button type="button" class="btn ghost tiny" id="btnNewTaskTop">مهمة جديدة</button>
+        <div class="top-meta" id="healthMeta">…</div>
+      </div>
+    </header>
+
+    <nav class="platform-nav" id="platformNav" aria-label="أقسام المنصة">
+      <button type="button" class="active" data-view="compose">المهمة</button>
+      <button type="button" data-view="daily">المهام اليومية</button>
+      <button type="button" data-view="profiles">الهجين</button>
+      <button type="button" data-view="memory">الذاكرة</button>
+      <button type="button" data-view="rollback">Rollback</button>
+    </nav>
+
+    <div class="layout">
+      <aside class="rail" id="sessionRail">
+        <div class="rail-head">
+          <strong>جلسة اليوم</strong>
+          <button type="button" class="linkish" id="btnClearSession">تفريغ</button>
+        </div>
+        <p class="rail-sub" id="sessionMeta">لا مهام بعد</p>
+        <ol class="session-list" id="sessionList"></ol>
+      </aside>
+
+      <main class="shell">
+        <section class="stage" id="stageCompose">
+          <p class="eyebrow">المهمة</p>
+          <h1 class="hero-title">اكتب مهمتك.<br /><em>الوكالة تبني وتنفّذ.</em></h1>
+          <p class="lede">
+            مهمة → مواصفة → تشغيل → تقرير → مهمة تالية. مشغّل متعدد المسارات أو تحليل مستودع — بدون إعادة تشغيل.
+          </p>
+
+          <label class="field-label" for="prompt">ماذا تريد من الوكالة؟</label>
+          <textarea
+            id="prompt"
+            class="composer"
+            rows="8"
+            placeholder="مثال: اعمل ملف Excel على سطح المكتب… أو حلّل Maw3ed وأخرج حزمة تقارير…"
+            autofocus
+          ></textarea>
+
+          <div class="meta-row">
+            <div class="field">
+              <label for="title">عنوان مختصر (اختياري)</label>
+              <input id="title" type="text" placeholder="يُستنتج تلقائياً إن تُرك فارغاً" />
+            </div>
+            <div class="field">
+              <label for="route">المسار</label>
+              <select id="route">
+                <option value="auto">تلقائي ذكي</option>
+                <option value="architecture">تحليل / تقارير</option>
+                <option value="operational">مهام سطح المكتب</option>
+                <option value="implement">تنفيذ (يتطلب GO لاحقاً)</option>
+              </select>
+            </div>
+          </div>
+
+          <div id="codeWorkspaceFields" class="meta-row hidden">
+            <div class="field grow">
+              <label for="targetRepo">مستودع الكود</label>
+              <input id="targetRepo" type="text" value="E:\UpNexa.com\Sam-Harness" />
+            </div>
+            <div class="field grow">
+              <label for="packDir">مجلد الحزم (docs)</label>
+              <input id="packDir" type="text" value="E:\UpNexa.com\Sam-Harness\docs" />
+            </div>
+          </div>
+
+          <section id="operatorWorkspacePanel" class="workspace-panel">
+            <p class="workspace-title">نمط المشغّل · مسارات متعددة</p>
+            <p class="workspace-lede">
+              لا مستودع واحد — كل خطوة بمسارها. بعد المعاينة تظهر جذور المهمة وخطوات التنفيذ.
+            </p>
+            <div class="roots-row">
+              <div>
+                <span class="roots-label">Allowlist</span>
+                <ul id="allowlistRoots" class="roots-list"></ul>
+              </div>
+              <div>
+                <span class="roots-label">جذور هذه المهمة</span>
+                <ul id="taskRoots" class="roots-list">
+                  <li class="dim">بعد المعاينة / الحفظ</li>
+                </ul>
+              </div>
+            </div>
+            <ol id="planStepsPreview" class="plan-steps"></ol>
+          </section>
+
+          <label class="check hidden" id="allowCodeWrap">
+            <input type="checkbox" id="allowCode" />
+            السماح لاحقاً بتنفيذ على كود العميل (مع GO صريح عند التشغيل)
+          </label>
+
+          <div class="actions">
+            <button type="button" class="btn ghost" id="btnPreview">معاينة Spec</button>
+            <button type="button" class="btn ghost" id="btnSave">احفظ Task</button>
+            <button type="button" class="btn primary" id="btnSaveRun">احفظ وشغّل</button>
+          </div>
+
+          <section class="clarify hidden" id="clarifyBox">
+            <p class="clarify-title">توضيح مطلوب قبل كتابة Task</p>
+            <p class="clarify-meta" id="clarifyMeta">—</p>
+            <div id="clarifyFields"></div>
+            <div class="actions">
+              <button type="button" class="btn primary" id="btnClarifySubmit">
+                أكّد وأكمل المواصفة
+              </button>
+            </div>
+          </section>
+
+          <details class="preview" id="previewBox" hidden>
+            <summary>معاينة Task Spec</summary>
+            <pre id="previewBody"></pre>
+          </details>
+        </section>
+
+        <section class="stage hidden" id="stageDaily">
+          <p class="eyebrow">P6 · Daily Ops</p>
+          <h1 class="hero-title">مهام يومية.<br /><em>جدول + نتائج.</em></h1>
+          <p class="lede">سجّل مهاماً متكررة على الجهاز ضمن الـ Allowlist، مع دفتر نتائج قابل للمراجعة.</p>
+          <div class="platform-panel">
+            <div class="ops-form">
+              <div class="field">
+                <label for="dailyPrompt">وصف المهمة</label>
+                <input id="dailyPrompt" type="text" placeholder="مثال: انسخ تقرير اليوم إلى Desktop\Archive" />
+              </div>
+              <div class="field">
+                <label for="dailyCron">جدولة (محلية)</label>
+                <select id="dailyCron">
+                  <option value="manual">يدوي فقط</option>
+                  <option value="daily-09">يومياً 09:00</option>
+                  <option value="daily-18">يومياً 18:00</option>
+                  <option value="weekdays-09">أيام العمل 09:00</option>
+                </select>
+              </div>
+              <button type="button" class="btn primary" id="btnDailyAdd">إضافة</button>
+            </div>
+            <table class="ops-table">
+              <thead>
+                <tr>
+                  <th>المهمة</th>
+                  <th>الجدول</th>
+                  <th>الحالة</th>
+                  <th>آخر نتيجة</th>
+                  <th></th>
+                </tr>
+              </thead>
+              <tbody id="dailyOpsBody"></tbody>
+            </table>
+            <p class="lede-sm" id="dailyLedgerMeta" style="margin-top: 1rem">دفتر النتائج فارغ</p>
+            <ul class="memory-list" id="dailyLedgerList"></ul>
+          </div>
+        </section>
+
+        <section class="stage hidden" id="stageProfiles">
+          <p class="eyebrow">P8 · Hybrid</p>
+          <h1 class="hero-title">ملفات العميل.<br /><em>محلي · سحابة · تلقائي.</em></h1>
+          <p class="lede">اختر كيف يعمل كل دور: محلي رخيص، سحابة للجودة، أو تلقائي حسب التوفر وسقف التكلفة.</p>
+          <div class="platform-panel">
+            <div class="profile-grid" id="profileGrid">
+              <button type="button" class="profile-card" data-profile="local">
+                <strong>Local</strong>
+                <p>Ollama فقط — تكلفة هامشية ≈ 0</p>
+              </button>
+              <button type="button" class="profile-card" data-profile="cloud">
+                <strong>Cloud</strong>
+                <p>مراجعة ثقيلة عبر المفتاح السحابي</p>
+              </button>
+              <button type="button" class="profile-card" data-profile="auto">
+                <strong>Auto</strong>
+                <p>محلي للراوتر؛ سحابة عند الحاجة والجودة</p>
+              </button>
+            </div>
+            <div class="meta-row">
+              <div class="field">
+                <label for="costCap">سقف تكلفة تقديري (USD / يوم)</label>
+                <input id="costCap" type="number" min="0" step="0.5" value="2" />
+              </div>
+              <div class="field">
+                <label for="profileNote">ملاحظة</label>
+                <input id="profileNote" type="text" placeholder="اختياري" />
+              </div>
+            </div>
+            <div class="actions">
+              <button type="button" class="btn primary" id="btnSaveProfile">حفظ الملف</button>
+            </div>
+            <p class="lede-sm" id="profileStatus">—</p>
+          </div>
+        </section>
+
+        <section class="stage hidden" id="stageMemory">
+          <p class="eyebrow">P9 · Memory</p>
+          <h1 class="hero-title">ذاكرة المشروع.<br /><em>دروس قابلة للاسترجاع.</em></h1>
+          <p class="lede">ملاحظات قصيرة لكل عميل/مشروع تُحقَن لاحقاً في التوصيف والمراجعة.</p>
+          <div class="platform-panel">
+            <div class="ops-form">
+              <div class="field">
+                <label for="memKey">المفتاح</label>
+                <input id="memKey" type="text" placeholder="مثال: maw3ed / desktop-prefs" />
+              </div>
+              <div class="field" style="grid-column: span 1">
+                <label for="memValue">الملاحظة</label>
+                <input id="memValue" type="text" placeholder="ما يجب تذكّره في المهام القادمة" />
+              </div>
+              <button type="button" class="btn primary" id="btnMemAdd">حفظ</button>
+            </div>
+            <ul class="memory-list" id="memoryList"></ul>
+          </div>
+        </section>
+
+        <section class="stage hidden" id="stageRollback">
+          <p class="eyebrow">P10 · Hardened implement</p>
+          <h1 class="hero-title">دفتر التراجع.<br /><em>قبل لمس كود العميل.</em></h1>
+          <p class="lede">كل كتابة Level-3 تُسجَّل بمسار ونسخة سابقة لاسترجاع آمن.</p>
+          <div class="platform-panel">
+            <p class="rollback-empty" id="rollbackEmpty">لا إدخالات بعد — تظهر بعد تنفيذ بموافقة GO.</p>
+            <table class="ops-table hidden" id="rollbackTable">
+              <thead>
+                <tr>
+                  <th>الوقت</th>
+                  <th>الملف</th>
+                  <th>الإجراء</th>
+                  <th></th>
+                </tr>
+              </thead>
+              <tbody id="rollbackBody"></tbody>
+            </table>
+          </div>
+        </section>
+
+        <section class="stage hidden" id="stageRun">
+          <p class="eyebrow">التشغيل</p>
+          <h1 class="hero-title">المهمة جاهزة.<br /><em>اختر الوضع.</em></h1>
+          <p class="lede" id="runSummary">—</p>
+
+          <div class="run-grid" id="runGrid">
+            <button
+              type="button"
+              class="run-opt primary-opt"
+              data-mode="agency"
+              data-for="operational,architecture,implement"
+            >
+              <strong id="primaryRunLabel">تشغيل المهمة</strong>
+              <span id="primaryRunHint">يحترم route من task.ts</span>
+            </button>
+            <button
+              type="button"
+              class="run-opt warn"
+              data-mode="implement"
+              data-for="architecture,implement"
+            >
+              <strong>تنفيذ Level-3</strong>
+              <span>يتطلب تأكيد GO</span>
+            </button>
+            <button
+              type="button"
+              class="run-opt"
+              data-mode="smoke"
+              data-for="operational,architecture,implement"
+            >
+              <strong>Smoke</strong>
+              <span>فحوصات بدون نماذج</span>
+            </button>
+            <button type="button" class="run-opt muted" data-mode="legacy" data-for="architecture">
+              <strong>Legacy swarm</strong>
+              <span>AGENCY_MODE=0</span>
+            </button>
+          </div>
+
+          <div class="actions">
+            <button type="button" class="btn ghost" id="btnBack">← تعديل المهمة</button>
+            <button type="button" class="btn danger" id="btnStop" disabled>إيقاف</button>
+          </div>
+
+          <div class="term-wrap">
+            <div class="term-chrome">
+              <span class="term-dots" aria-hidden="true"><i></i><i></i><i></i></span>
+              <span class="term-title">UpNexa · Sam-Harness · Live Console</span>
+              <span id="runState" class="term-state">idle</span>
+            </div>
+            <div class="term-banner">
+              ================================================================
+              &nbsp;&nbsp;Hybrid Local + Cloud&nbsp;|&nbsp;LangGraph&nbsp;|&nbsp;Delivery OS
+              ================================================================
+            </div>
+            <pre id="log" class="term-body" aria-live="polite"></pre>
+          </div>
+        </section>
+
+        <section class="stage hidden" id="stageDone">
+          <p class="eyebrow" id="doneEyebrow">التقرير</p>
+          <h1 class="hero-title" id="doneTitle">تم التنفيذ.</h1>
+          <p class="lede" id="doneMeta">—</p>
+
+          <article class="report-card" id="reportCard">
+            <header class="report-head">
+              <span class="report-badge" id="reportBadge">RESULT</span>
+              <div class="quality-badges" id="qualityBadges" aria-label="بوابات الجودة">
+                <span class="q-badge muted" id="badgeAudit">audit —</span>
+                <span class="q-badge muted" id="badgeGoal">goal —</span>
+              </div>
+              <h2 id="reportHeadline">—</h2>
+            </header>
+            <ul class="report-bullets" id="reportBullets"></ul>
+            <div class="report-next">
+              <h3>الخطوات التالية</h3>
+              <ul id="reportNext"></ul>
+            </div>
+
+            <section class="artifact-panel" id="artifactPanel">
+              <div class="artifact-panel-head">
+                <h3>التقارير والمخرجات</h3>
+                <p class="lede-sm" id="artifactPackMeta">افتح التقرير داخل الواجهة أو في النظام.</p>
+              </div>
+              <div class="artifact-grid" id="artifactGrid"></div>
+            </section>
+
+            <details class="report-raw">
+              <summary>تفاصيل تقنية / ملخص خام</summary>
+              <pre id="doneSummary" class="done-summary"></pre>
+              <p class="artifacts" id="doneArtifacts"></p>
+            </details>
+          </article>
+
+          <div class="actions">
+            <button type="button" class="btn primary" id="btnNewTask">مهمة جديدة</button>
+            <button type="button" class="btn ghost" id="btnRerun">إعادة محاولة (بعد فشل)</button>
+            <button type="button" class="btn ghost" id="btnViewLog">عرض التيرمنال</button>
+            <button type="button" class="btn ghost" id="btnOpenPackFolder">فتح مجلد الحزمة</button>
+          </div>
+        </section>
+
+        <div class="viewer-overlay hidden" id="artifactViewer" role="dialog" aria-modal="true">
+          <div class="viewer-sheet">
+            <header class="viewer-head">
+              <div>
+                <p class="viewer-kicker">معاينة التقرير</p>
+                <h2 id="viewerTitle">—</h2>
+                <p class="viewer-path mono" id="viewerPath">—</p>
+              </div>
+              <div class="viewer-actions">
+                <button type="button" class="btn ghost tiny" id="btnViewerOsOpen">فتح في النظام</button>
+                <button type="button" class="btn ghost tiny" id="btnViewerFolder">المجلد</button>
+                <button type="button" class="btn tiny" id="btnViewerClose">إغلاق</button>
+              </div>
+            </header>
+            <pre class="viewer-body" id="viewerBody"></pre>
+          </div>
+        </div>
+      </main>
+    </div>
+
+    <footer class="foot">
+      <span>محلي على 127.0.0.1 · controlplane-session.md</span>
+      <a href="/api/session" target="_blank" rel="noreferrer">session JSON</a>
+    </footer>
+    <script src="/app.js" type="module"></script>
+  </body>
+</html>
