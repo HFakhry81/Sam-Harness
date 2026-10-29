@@ -1,7 +1,7 @@
 {
   "name": "Sam-Harness",
   "version": "1.0.0",
-  "description": "",
+  "description": "Hybrid AI agency — Control Plane, LangGraph review, Windows desktop operator",
   "main": "index.js",
   "scripts": {
     "test": "echo \"Error: no test specified\" && exit 1",

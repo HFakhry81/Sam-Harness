@@ -8,7 +8,7 @@ node_modules/
 .tmp-*.json
 *.bak
 
-# Root runtime / session only (packs under docs/Sam-Harness no.X stay tracked)
+# Root runtime only — archived packs live under docs/Sam-Harness no.X
 /controlplane-session.json
 /controlplane-session.md
 /daily-ops.json
