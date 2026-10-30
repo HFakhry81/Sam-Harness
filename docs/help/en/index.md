@@ -22,6 +22,7 @@ Anything promised in roadmaps but not shipped is marked **planned / not yet impl
 | 5) Specialty & capability limits | [`specialty-capabilities`](specialty-capabilities.md) |
 | 6) Machine control & desktop tools | [`desktop-control`](desktop-control.md) |
 | 7) Customize workflow & team (table + Phase 9 visual editor) | [`customize`](customize.md) |
+| Quick reply / web research (before agency) | [`quick-path`](quick-path.md) |
 | Install | [`install`](install.md) |
 | Security / approvals / audit | [`security`](security.md) |
 | Cost | [`cost`](cost.md) |

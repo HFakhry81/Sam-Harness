@@ -12,6 +12,7 @@ export type HelpTopicId =
   | "specialty-capabilities"
   | "desktop-control"
   | "customize"
+  | "quick-path"
   | "install"
   | "security"
   | "cost"
@@ -114,6 +115,36 @@ export const HELP_TOPICS: HelpTopicMeta[] = [
     summaryAr: "UIA/PowerShell، الصدفة، صندوق الملفات، البريد، المجدول — وما يعمل على كل نظام.",
     summaryEn: "UIA/PowerShell, shell, FS sandbox, email, scheduler — and what works per OS.",
     keywords: ["desktop", "uia", "powershell", "screenshot", "smtp", "daily-ops", "ubuntu", "macos"],
+  },
+  {
+    id: "quick-path",
+    order: 75,
+    aliases: [
+      "quick",
+      "quickreply",
+      "web-search",
+      "smalltalk",
+      "سريع",
+      "رد سريع",
+      "بحث ويب",
+    ],
+    titleAr: "مسار الرد السريع والويب",
+    titleEn: "Quick reply & web path",
+    summaryAr:
+      "تصنيف النية قبل الوكالة: تحية/سؤال بسيط → نموذج محلي، بحث ويب → ملخص مع مصادر، المهام → الوكالة.",
+    summaryEn:
+      "Intent before agency: greeting/simple → local model, web research → summary with sources, tasks → agency.",
+    keywords: [
+      "quick",
+      "web",
+      "search",
+      "greeting",
+      "smalltalk",
+      "duckduckgo",
+      "سريع",
+      "ويب",
+      "تحية",
+    ],
   },
   {
     id: "customize",

@@ -22,6 +22,7 @@
 | ٥) التخصص وحدود القدرات | [`specialty-capabilities`](specialty-capabilities.md) |
 | ٦) التحكم بالجهاز وأدوات سطح المكتب | [`desktop-control`](desktop-control.md) |
 | ٧) تعديل سير العمل والفريق (جدول + محرّر رسومي مرحلة 9) | [`customize`](customize.md) |
+| رد سريع / بحث ويب (قبل الوكالة) | [`quick-path`](quick-path.md) |
 | تثبيت | [`install`](install.md) |
 | أمان / موافقات / تدقيق | [`security`](security.md) |
 | تكلفة | [`cost`](cost.md) |

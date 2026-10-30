@@ -198,6 +198,30 @@ async function main() {
     return;
   }
 
+  // Lightweight quick / web path before the full agency pipeline (unless forced).
+  const forceAgency =
+    String(process.env.FORCE_AGENCY || "").trim() === "1" || argv.includes("--force-agency");
+  if (!implementOnly && !forceAgency) {
+    const { tryRunQuickPath } = await import("./src/lib/quickPath/index.js");
+    const quick = await tryRunQuickPath({
+      prompt: task,
+      cwd: process.cwd(),
+      forceAgency: false,
+    });
+    if (quick?.result.ok) {
+      const { result } = quick;
+      ok(
+        "Quick path",
+        `${result.replyPath} · ${result.intent} · ${result.durationMs}ms · ${result.model || "n/a"}`
+      );
+      console.log(`\n${result.reply}\n`);
+      return;
+    }
+    if (quick && !quick.result.ok) {
+      warn("Quick path", quick.result.error || "failed — continuing to agency");
+    }
+  }
+
   const layout = ensureOutputHome();
   cleanOutputTemp();
   const runId = beginCostRun(process.env.SAM_HARNESS_RUN_ID);

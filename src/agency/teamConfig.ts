@@ -71,6 +71,7 @@ const PROTECTED_DISABLE = new Set(["ceo_router", "strategist", "auditor", "imple
 /** Hard-coded defaults that preserve pre-Phase-8 behaviour. */
 export const DEFAULT_ROLE_MODELS: Record<string, TeamRoleModels> = {
   ceo_router: { local: "qwen2.5-coder:1.5b", cloud: "gemma4:cloud", free: null },
+  quick: { local: "qwen2.5:1.5b", cloud: "gemma4:cloud", free: null },
   intake: { local: "qwen2.5-coder:1.5b", cloud: "gemma4:cloud", free: null },
   evidence: { local: "qwen2.5-coder:1.5b", cloud: "gemma4:cloud", free: null },
   strategist: { local: "qwen2.5-coder:1.5b", cloud: "gemma4:cloud", free: null },
@@ -154,6 +155,21 @@ function builtinFromAgencyRoles(): TeamRoleConfig[] {
     stage: "implement",
     order: 95,
     outputs: ["level3 writes"],
+  });
+  roles.push({
+    id: "quick",
+    title: "Quick Reply",
+    mission:
+      "Lightweight local replies for greetings, simple questions, and web-research summaries. Not part of the agency pipeline.",
+    enabled: true,
+    builtin: true,
+    prefersCloud: false,
+    models: { ...DEFAULT_ROLE_MODELS.quick },
+    temperature: 0.4,
+    numPredict: 256,
+    stage: "none",
+    order: 1,
+    outputs: ["quick_reply"],
   });
   return roles;
 }
@@ -304,6 +320,24 @@ export function validateTeamConfig(raw: unknown): TeamValidationResult {
 
 function normalizeConfig(raw: TeamConfig): TeamConfig {
   const roles = raw.roles.map((r) => applyEnvModelOverrides({ ...r, models: { ...r.models } }));
+  // Ensure builtin quick reply role exists (older team.json files).
+  if (!roles.some((r) => r.id === "quick")) {
+    roles.push({
+      id: "quick",
+      title: "Quick Reply",
+      mission:
+        "Lightweight local replies for greetings, simple questions, and web-research summaries.",
+      enabled: true,
+      builtin: true,
+      prefersCloud: false,
+      models: { ...DEFAULT_ROLE_MODELS.quick },
+      temperature: 0.4,
+      numPredict: 256,
+      stage: "none",
+      order: 1,
+      outputs: ["quick_reply"],
+    });
+  }
   // Apply CEO_MODEL as default local for roles that still use the coder default when CEO_MODEL set
   const ceo = String(process.env.CEO_MODEL || "").trim();
   if (ceo) {
