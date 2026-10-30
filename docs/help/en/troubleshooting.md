@@ -36,6 +36,7 @@ bash Tools/sam-harness-manager.sh --action health
 | Migrations / DB oddities | `pnpm run migrate` or manager `repair` |
 | Need a snapshot | Manager `backup` / `restore` (DB + config + `.env`) |
 | PowerShell `ParserError` / missing `}` on Windows 5.1 | `.ps1` must be UTF-8 **with BOM** (repo commits BOM). Re-pull; do not re-save as UTF-8 without BOM in Notepad “UTF-8”. Use `Tools\Sam-Harness-Manager.cmd` |
+| `Cannot overwrite variable HOME` / `VariableNotWritable` | Do not assign `$home`/`$HOME`/`$args`/other automatic vars in `.ps1` — use `$outputHome`, `$installerArgs`, etc. |
 | `bash` fails on Windows (`execvpe(/bin/bash)`) | WSL stub with no distro — use the `.cmd`/`.ps1` manager, or install Git for Windows (Git Bash) |
 
 Manager logs: `SAM_OUTPUT_HOME/logs/manager-*.log` (fallback `Tools/logs/`). View via menu **view-logs**.

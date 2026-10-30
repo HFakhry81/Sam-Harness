@@ -68,17 +68,37 @@ jobs:
             }
             Write-Host "OK parse $($f.FullName)"
           }
-          # Smoke run via powershell.exe 5.1 (Arabic strings must not ParserError)
-          & $ps51 -NoProfile -ExecutionPolicy Bypass -File Tools\Sam-Harness-Manager.ps1 -Action health -Lang ar -NonInteractive
-          $ec = $LASTEXITCODE
-          Write-Host "health (ar) exit=$ec"
-          if ($ec -gt 1) { throw "Unexpected health exit $ec" }
-          # .cmd wrapper path (double-click equivalent)
+          function Invoke-SamManager51 {
+            param([string[]]$ManagerArgs, [string]$Label)
+            $log = Join-Path $env:RUNNER_TEMP ("sam-tools-" + $Label + ".log")
+            $p = Start-Process -FilePath $ps51 -ArgumentList (@('-NoProfile','-ExecutionPolicy','Bypass','-File','Tools\Sam-Harness-Manager.ps1') + $ManagerArgs) -Wait -PassThru -NoNewWindow -RedirectStandardOutput $log -RedirectStandardError "$log.err"
+            $stdout = ''
+            $stderr = ''
+            if (Test-Path $log) { $stdout = Get-Content -LiteralPath $log -Raw -ErrorAction SilentlyContinue }
+            if (Test-Path "$log.err") { $stderr = Get-Content -LiteralPath "$log.err" -Raw -ErrorAction SilentlyContinue }
+            $all = "$stdout`n$stderr"
+            Write-Host "---- $Label exit=$($p.ExitCode) ----"
+            Write-Host $all
+            if ($all -match 'VariableNotWritable|Cannot overwrite variable|ParserError') {
+              throw "$Label hit PowerShell engine error"
+            }
+            if ($p.ExitCode -ne 0) { throw "$Label exit $($p.ExitCode)" }
+            if ($all -notmatch '\[OK\]') { throw "$Label produced no [OK] markers" }
+            return $all
+          }
+          # End-to-end under Windows PowerShell 5.1 (Arabic + English)
+          Invoke-SamManager51 -Label 'health-ar' -ManagerArgs @('-Action','health','-Lang','ar','-NonInteractive') | Out-Null
+          Invoke-SamManager51 -Label 'help-en' -ManagerArgs @('-Action','help','-Lang','en','-NonInteractive') | Out-Null
+          # .cmd wrapper path (double-click equivalent → powershell.exe 5.1)
           $env:SAM_TOOLS_NOPAUSE = '1'
-          cmd /c "Tools\Sam-Harness-Manager.cmd -Action doctor -Lang en -NonInteractive"
-          $ec2 = $LASTEXITCODE
-          Write-Host "cmd doctor exit=$ec2"
-          if ($ec2 -gt 1) { throw "Unexpected cmd doctor exit $ec2" }
+          $cmdLog = Join-Path $env:RUNNER_TEMP 'sam-tools-cmd-doctor.log'
+          cmd /c "Tools\Sam-Harness-Manager.cmd -Action doctor -Lang en -NonInteractive > `"$cmdLog`" 2>&1"
+          $ecCmd = $LASTEXITCODE
+          $cmdOut = Get-Content -LiteralPath $cmdLog -Raw -ErrorAction SilentlyContinue
+          Write-Host "---- cmd-doctor exit=$ecCmd ----"
+          Write-Host $cmdOut
+          if ($cmdOut -match 'VariableNotWritable|Cannot overwrite variable|ParserError') { throw 'cmd doctor hit PowerShell engine error' }
+          if ($ecCmd -ne 0) { throw "cmd doctor exit $ecCmd" }
 
       - name: Smoke (offline gates)
         run: pnpm run smoke

@@ -168,10 +168,12 @@ function Invoke-ActionInstall {
     Write-SamFail "scripts/install/install.ps1 missing"
     return 1
   }
-  $args = @()
-  if ($NonInteractive) { $args += "-NonInteractive" }
-  Write-SamInfo "→ $installer $($args -join ' ')"
-  & powershell -NoProfile -ExecutionPolicy Bypass -File $installer @args
+  $installerArgs = @()
+  if ($NonInteractive) { $installerArgs += "-NonInteractive" }
+  Write-SamInfo "→ $installer $($installerArgs -join ' ')"
+  $ps51 = Join-Path $env:SystemRoot "System32\WindowsPowerShell\v1.0\powershell.exe"
+  if (-not (Test-Path -LiteralPath $ps51)) { $ps51 = "powershell" }
+  & $ps51 -NoProfile -ExecutionPolicy Bypass -File $installer @installerArgs
   $ec = [int]$LASTEXITCODE
   if ($ec -eq 0) { Write-SamOk (T -Ar "التثبيت اكتمل" -En "Install finished") }
   else { Write-SamFail "install.ps1 exit $ec" }
@@ -360,11 +362,11 @@ function Invoke-ActionHelp {
 
 function Invoke-ActionBackup {
   Write-SamStep (T -Ar "نسخ احتياطي لقاعدة البيانات والإعدادات" -En "Backup DB + config + .env")
-  $home = Ensure-SamOutputHomeDirs -ProjectRoot $ProjectRoot
+  $outputHome = Ensure-SamOutputHomeDirs -ProjectRoot $ProjectRoot
   $stamp = Get-Date -Format "yyyyMMdd-HHmmss"
   $dest = $BackupPath
   if (-not $dest) {
-    $dest = Join-Path $home "exports\sam-harness-backup-$stamp.zip"
+    $dest = Join-Path $outputHome "exports\sam-harness-backup-$stamp.zip"
   }
   $destDir = Split-Path -Parent $dest
   if (-not (Test-Path -LiteralPath $destDir)) {
@@ -388,7 +390,7 @@ function Invoke-ActionBackup {
     Get-ChildItem (Join-Path $ProjectRoot "config") -Filter "*.json" -ErrorAction SilentlyContinue |
       ForEach-Object { Copy-Item $_.FullName (Join-Path $cfg $_.Name) -Force }
 
-    $stateDir = Join-Path $home "state"
+    $stateDir = Join-Path $outputHome "state"
     if (Test-Path -LiteralPath $stateDir) {
       $dbStage = Join-Path $stage "state"
       New-Item -ItemType Directory -Path $dbStage -Force | Out-Null
@@ -426,7 +428,7 @@ function Invoke-ActionRestore {
     Write-SamFail (T -Ar "ملف النسخة مفقود" -En "Backup zip missing")
     return 1
   }
-  $home = Ensure-SamOutputHomeDirs -ProjectRoot $ProjectRoot
+  $outputHome = Ensure-SamOutputHomeDirs -ProjectRoot $ProjectRoot
   $stage = Join-Path $env:TEMP ("sam-harness-restore-" + [guid]::NewGuid().ToString("n"))
   New-Item -ItemType Directory -Path $stage -Force | Out-Null
   try {
@@ -448,7 +450,7 @@ function Invoke-ActionRestore {
     }
     $stateSrc = Join-Path $stage "state"
     if (Test-Path -LiteralPath $stateSrc) {
-      $stateDst = Join-Path $home "state"
+      $stateDst = Join-Path $outputHome "state"
       if (-not (Test-Path $stateDst)) { New-Item -ItemType Directory -Path $stateDst -Force | Out-Null }
       Copy-Item (Join-Path $stateSrc "*") $stateDst -Recurse -Force
       Write-SamOk "Restored state/ DB files"
@@ -482,9 +484,11 @@ function Invoke-ActionUninstall {
   Write-SamStep (T -Ar "إلغاء التثبيت عبر scripts/install/uninstall.ps1" -En "Uninstall via scripts/install/uninstall.ps1")
   $u = Join-Path $ProjectRoot "scripts\install\uninstall.ps1"
   if (-not (Test-Path -LiteralPath $u)) { Write-SamFail "uninstall.ps1 missing"; return 1 }
-  $args = @()
-  if ($NonInteractive) { $args += "-NonInteractive" }
-  & powershell -NoProfile -ExecutionPolicy Bypass -File $u @args
+  $uninstallArgs = @()
+  if ($NonInteractive) { $uninstallArgs += "-NonInteractive" }
+  $ps51 = Join-Path $env:SystemRoot "System32\WindowsPowerShell\v1.0\powershell.exe"
+  if (-not (Test-Path -LiteralPath $ps51)) { $ps51 = "powershell" }
+  & $ps51 -NoProfile -ExecutionPolicy Bypass -File $u @uninstallArgs
   $ec = [int]$LASTEXITCODE
   if ($ec -eq 0) { Write-SamOk "uninstall finished" } else { Write-SamFail "uninstall exit $ec" }
   return $ec
@@ -493,8 +497,8 @@ function Invoke-ActionUninstall {
 function Invoke-ActionViewLogs {
   Write-SamStep (T -Ar "عرض أحدث السجلات" -En "View recent logs")
   $dirs = @()
-  $home = Get-SamOutputHome -ProjectRoot $ProjectRoot
-  $dirs += (Join-Path $home "logs")
+  $outputHome = Get-SamOutputHome -ProjectRoot $ProjectRoot
+  $dirs += (Join-Path $outputHome "logs")
   $dirs += (Join-Path $ProjectRoot "Tools\logs")
   $found = @()
   foreach ($d in $dirs) {
@@ -525,8 +529,8 @@ function Invoke-ActionCleanupLogs {
   Write-SamStep (T -Ar "تنظيف السجلات الأقدم من 14 يوماً" -En "Cleanup logs older than 14 days")
   $cutoff = (Get-Date).AddDays(-14)
   $dirs = @()
-  $home = Get-SamOutputHome -ProjectRoot $ProjectRoot
-  $dirs += (Join-Path $home "logs")
+  $outputHome = Get-SamOutputHome -ProjectRoot $ProjectRoot
+  $dirs += (Join-Path $outputHome "logs")
   $dirs += (Join-Path $ProjectRoot "Tools\logs")
   $removed = 0
   foreach ($d in $dirs) {

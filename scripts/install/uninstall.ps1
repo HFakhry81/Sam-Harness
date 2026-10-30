@@ -48,16 +48,16 @@ if ($RemoveEnv) {
 }
 
 if ($PurgeData) {
-  $home = Join-Path $env:USERPROFILE "Documents\Sam-Harness"
-  if (Test-Path $home) {
+  $outputHome = Join-Path $env:USERPROFILE "Documents\Sam-Harness"
+  if (Test-Path $outputHome) {
     if (-not $NonInteractive) {
-      $c = Read-Host "  Delete $home ? [y/N]"
+      $c = Read-Host "  Delete $outputHome ? [y/N]"
       if ($c -notmatch '^(y|yes)$') { $PurgeData = $false }
     }
   }
-  if ($PurgeData -and (Test-Path $home)) {
-    Remove-Item -LiteralPath $home -Recurse -Force
-    Write-Ok "Removed $home"
+  if ($PurgeData -and (Test-Path $outputHome)) {
+    Remove-Item -LiteralPath $outputHome -Recurse -Force
+    Write-Ok "Removed $outputHome"
   }
 }
 

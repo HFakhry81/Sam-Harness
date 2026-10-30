@@ -158,6 +158,76 @@ describe("Tools manager", () => {
     expect(manager).toContain("القائمة الرئيسية");
   });
 
+  it("PowerShell scripts do not assign to automatic variables (HOME/Args/Host/…)", () => {
+    // Windows PowerShell treats these as read-only or reserved (case-insensitive).
+    const autos = [
+      "HOME",
+      "Host",
+      "PID",
+      "PSScriptRoot",
+      "PSCommandPath",
+      "MyInvocation",
+      "PSVersionTable",
+      "true",
+      "false",
+      "null",
+      "PWD",
+      "IsWindows",
+      "IsLinux",
+      "IsMacOS",
+      "ShellId",
+      "PSEdition",
+      "PSCulture",
+      "PSUICulture",
+      "ConsoleFileName",
+      "ExecutionContext",
+      "PSBoundParameters",
+      "Args",
+      "Input",
+      "Profile",
+      "stackTrace",
+      "Sender",
+      "Event",
+      "EventArgs",
+      "EventSubscriber",
+      "PSItem",
+    ];
+    const autoSet = new Set(autos.map((a) => a.toLowerCase()));
+    const offenders: string[] = [];
+    // Match: $Home = / ${Home} = / $args += / $PID++
+    const assignRe =
+      /(^|[^`])\$\{?([A-Za-z_][A-Za-z0-9_]*)\}?\s*(?:\+\+|--|\+=|-=|\*=|\/=|%=|=)/gm;
+    // Parameter declaration: ]$Home or [string]$Args (not Mandatory = $true)
+    const paramDeclRe =
+      /\]\s*\$([A-Za-z_][A-Za-z0-9_]*)\b|\[[A-Za-z\[\],\s]+\]\s*\$([A-Za-z_][A-Za-z0-9_]*)\b/g;
+
+    for (const f of listPs1Files()) {
+      const text = readUtf8(f);
+      for (const m of text.matchAll(assignRe)) {
+        const name = m[2];
+        if (!name || !autoSet.has(name.toLowerCase())) continue;
+        const line = text.slice(0, m.index ?? 0).split(/\r?\n/).length;
+        offenders.push(`${path.relative(root, f)}:${line}: $${name} assignment`);
+      }
+      for (const m of text.matchAll(paramDeclRe)) {
+        const name = m[1] || m[2];
+        if (!name || !autoSet.has(name.toLowerCase())) continue;
+        if (/^(true|false|null)$/i.test(name)) continue;
+        const line = text.slice(0, m.index ?? 0).split(/\r?\n/).length;
+        offenders.push(
+          `${path.relative(root, f)}:${line}: param/decl uses automatic name $${name}`
+        );
+      }
+    }
+    expect(offenders, offenders.join("\n")).toEqual([]);
+    const common = readUtf8(path.join(tools, "lib", "SamHarness.Common.ps1"));
+    expect(common).toMatch(/\$outputHome\s*=/);
+    expect(common).not.toMatch(/\$home\s*=/i);
+    const manager = readUtf8(path.join(tools, "Sam-Harness-Manager.ps1"));
+    expect(manager).not.toMatch(/\$args\s*=/i);
+    expect(manager).toMatch(/\$installerArgs\s*=/);
+  });
+
   it("bash manager references every manifest action", () => {
     const sh = readUtf8(path.join(tools, "sam-harness-manager.sh"));
     const actions = readManifest().filter((a) => a !== "exit");

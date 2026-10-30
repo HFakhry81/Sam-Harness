@@ -43,8 +43,8 @@ function Get-SamOutputHome {
 
 function Get-SamLogsDir {
   param([string]$ProjectRoot)
-  $home = Get-SamOutputHome -ProjectRoot $ProjectRoot
-  $dir = Join-Path $home "logs"
+  $outputHome = Get-SamOutputHome -ProjectRoot $ProjectRoot
+  $dir = Join-Path $outputHome "logs"
   if (-not (Test-Path -LiteralPath $dir)) {
     $fallback = Join-Path $ProjectRoot "Tools\logs"
     if (-not (Test-Path -LiteralPath $fallback)) {
@@ -245,20 +245,20 @@ function Ensure-SamEnvFile {
 
 function Ensure-SamOutputHomeDirs {
   param([string]$ProjectRoot)
-  $home = Get-SamOutputHome -ProjectRoot $ProjectRoot
+  $outputHome = Get-SamOutputHome -ProjectRoot $ProjectRoot
   $subs = @("reports", "documents", "exports", "runs", "memory", "temp", "state", "logs")
-  if (-not (Test-Path -LiteralPath $home)) {
-    New-Item -ItemType Directory -Path $home -Force | Out-Null
+  if (-not (Test-Path -LiteralPath $outputHome)) {
+    New-Item -ItemType Directory -Path $outputHome -Force | Out-Null
   }
   foreach ($s in $subs) {
-    $p = Join-Path $home $s
+    $p = Join-Path $outputHome $s
     if (-not (Test-Path -LiteralPath $p)) {
       New-Item -ItemType Directory -Path $p -Force | Out-Null
     }
   }
-  if (-not $env:SAM_OUTPUT_HOME) { $env:SAM_OUTPUT_HOME = $home }
-  Write-SamOk ("SAM_OUTPUT_HOME → $home")
-  return $home
+  if (-not $env:SAM_OUTPUT_HOME) { $env:SAM_OUTPUT_HOME = $outputHome }
+  Write-SamOk ("SAM_OUTPUT_HOME → $outputHome")
+  return $outputHome
 }
 
 function Get-SamManifestActions {
