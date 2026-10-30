@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Shared helpers for Sam-Harness Tools (bash — Ubuntu/macOS).
+# Shared helpers for Sam-Harness Tools (bash - Ubuntu/macOS).
 # shellcheck shell=bash
 
 SAM_HARNESS_LANG="en"
@@ -10,7 +10,7 @@ SAM_HARNESS_OK=0
 SAM_HARNESS_WARN=0
 SAM_HARNESS_FAIL=0
 
-# Colors (ANSI) — disable when not a TTY
+# Colors (ANSI) - disable when not a TTY
 if [[ -t 1 && -z "${NO_COLOR:-}" ]]; then
   C_RESET=$'\033[0m'
   C_GREEN=$'\033[32m'
@@ -111,7 +111,7 @@ sam_init_logging() {
   SAM_HARNESS_OK=0
   SAM_HARNESS_WARN=0
   SAM_HARNESS_FAIL=0
-  printf 'Sam-Harness Manager log · %s · %s\n' "$action" "$(date -u +%Y-%m-%dT%H:%M:%SZ)" >"$SAM_HARNESS_LOG_FILE"
+  printf 'Sam-Harness Manager log | %s | %s\n' "$action" "$(date -u +%Y-%m-%dT%H:%M:%SZ)" >"$SAM_HARNESS_LOG_FILE"
   printf '%s\n' "$SAM_HARNESS_LOG_FILE"
 }
 
@@ -120,7 +120,7 @@ sam_banner() {
   echo ""
   echo -e "  ${C_DCYAN}================================================================${C_RESET}"
   echo -e "   ${C_WHITE}Sam-Harness Manager${C_RESET}"
-  echo -e "   ${C_GRAY}Control Plane · Hybrid Agency · Phases 0-9${C_RESET}"
+  echo -e "   ${C_GRAY}Control Plane | Hybrid Agency | Phases 0-9${C_RESET}"
   if [[ -n "$sub" ]]; then
     echo -e "   ${C_CYAN}${sub}${C_RESET}"
   fi
@@ -219,5 +219,5 @@ sam_ensure_output_home() {
   home="$(sam_output_home)"
   mkdir -p "$home"/{reports,documents,exports,runs,memory,temp,state,logs}
   export SAM_OUTPUT_HOME="$home"
-  sam_ok "SAM_OUTPUT_HOME → $home"
+  sam_ok "SAM_OUTPUT_HOME -> $home"
 }

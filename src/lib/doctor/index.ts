@@ -59,7 +59,7 @@ function checkNode(env: NodeJS.ProcessEnv): DoctorCheck {
       id: "node",
       title: "Node.js",
       severity: "fail",
-      detail: `${ver} — need >= 20`,
+      detail: `${ver} - need >= 20`,
     };
   }
   return {
@@ -91,7 +91,7 @@ function checkPnpm(): DoctorCheck {
       id: "pnpm",
       title: "pnpm (packageManager)",
       severity: "warn",
-      detail: "packageManager field missing — use Corepack pnpm@11+",
+      detail: "packageManager field missing - use Corepack pnpm@11+",
     };
   } catch (e: any) {
     return {
@@ -119,7 +119,7 @@ function checkEnvFile(cwd: string): DoctorCheck {
       id: "env",
       title: ".env",
       severity: "warn",
-      detail: "missing — copy from .env.example (install script can create it)",
+      detail: "missing - copy from .env.example (install script can create it)",
     };
   }
   return {
@@ -146,7 +146,7 @@ function checkOutputHome(env: NodeJS.ProcessEnv): DoctorCheck {
         id: "output_home",
         title: "SAM_OUTPUT_HOME",
         severity: "warn",
-        detail: `${home} (parent missing — install will create)`,
+        detail: `${home} (parent missing - install will create)`,
       };
     }
     try {
@@ -156,14 +156,14 @@ function checkOutputHome(env: NodeJS.ProcessEnv): DoctorCheck {
         id: "output_home",
         title: "SAM_OUTPUT_HOME",
         severity: "fail",
-        detail: `${home} — parent not writable`,
+        detail: `${home} - parent not writable`,
       };
     }
     return {
       id: "output_home",
       title: "SAM_OUTPUT_HOME",
       severity: "ok",
-      detail: `${home} → reports/documents/runs/…`,
+      detail: `${home} -> reports/documents/runs/...`,
     };
   } catch (e: any) {
     return {
@@ -209,7 +209,7 @@ function checkNodeModules(cwd: string): DoctorCheck {
     id: "deps",
     title: "node_modules",
     severity: "warn",
-    detail: "missing — run pnpm install (or install script)",
+    detail: "missing - run pnpm install (or install script)",
   };
 }
 
@@ -222,7 +222,7 @@ function checkTaskSeed(cwd: string): DoctorCheck {
       id: "task",
       title: "task.ts",
       severity: "warn",
-      detail: "missing — seed from templates/task.seed.ts",
+      detail: "missing - seed from templates/task.seed.ts",
     };
   }
   return {
@@ -238,7 +238,7 @@ function checkPlatform(): DoctorCheck {
     id: "platform",
     title: "Platform",
     severity: "ok",
-    detail: `${process.platform} ${os.arch()} · home=${os.homedir()}`,
+    detail: `${process.platform} ${os.arch()} | home=${os.homedir()}`,
   };
 }
 
@@ -250,7 +250,7 @@ function checkHelpDocs(cwd: string): DoctorCheck {
         id: "help",
         title: "Help docs",
         severity: "ok",
-        detail: `${result.topics.length} topics × ar/en`,
+        detail: `${result.topics.length} topics x ar/en`,
       };
     }
     return {
@@ -282,7 +282,7 @@ function checkTeamConfig(cwd: string): DoctorCheck {
         id: "team",
         title: "Team config",
         severity: "warn",
-        detail: `config/team.json missing — using defaults (${cfg.roles.length} roles)`,
+        detail: `config/team.json missing - using defaults (${cfg.roles.length} roles)`,
       };
     }
     const raw = JSON.parse(fs.readFileSync(file, "utf-8"));
@@ -303,7 +303,7 @@ function checkTeamConfig(cwd: string): DoctorCheck {
       id: "team",
       title: "Team config",
       severity: "ok",
-      detail: `${summary.enabledCount}/${summary.roleCount} roles · pipeline ${summary.downstreamOrder.join("→")}`,
+      detail: `${summary.enabledCount}/${summary.roleCount} roles | pipeline ${summary.downstreamOrder.join("->")}`,
     };
   } catch (e: any) {
     return {
@@ -327,7 +327,7 @@ function checkRouting(cwd: string): DoctorCheck {
       id: "routing",
       title: "Per-role routing",
       severity: "ok",
-      detail: `hybrid=${profile.mode} cap=$${profile.costCapUsd} · ${sample}`,
+      detail: `hybrid=${profile.mode} cap=$${profile.costCapUsd} | ${sample}`,
     };
   } catch (e: any) {
     return {
@@ -352,7 +352,7 @@ function checkDesktopBackend(): DoctorCheck {
           id: "desktop",
           title: "Desktop backend (Linux)",
           severity: "warn",
-          detail: `session=${caps.session} · missing ${missing.join(", ")} — sudo apt install wmctrl xdotool scrot python3-pyatspi`,
+          detail: `session=${caps.session} | missing ${missing.join(", ")} - sudo apt install wmctrl xdotool scrot python3-pyatspi`,
         };
       }
       return {
@@ -376,7 +376,7 @@ function checkDesktopBackend(): DoctorCheck {
         id: "desktop",
         title: "Desktop backend (macOS)",
         severity: "ok",
-        detail: `osascript + screencapture · Accessibility permission may be required`,
+        detail: `osascript + screencapture | Accessibility permission may be required`,
       };
     }
     return {
@@ -435,7 +435,7 @@ export function runDoctor(opts: DoctorOptions = {}): DoctorReport {
         id: "ollama",
         title: "Ollama (optional)",
         severity: "ok",
-        detail: "not probed (offline doctor) — expected at http://127.0.0.1:11434",
+        detail: "not probed (offline doctor) - expected at http://127.0.0.1:11434",
       });
     }
 
@@ -460,7 +460,7 @@ export function runDoctor(opts: DoctorOptions = {}): DoctorReport {
 
 export function formatDoctorReport(report: DoctorReport): string {
   const lines = [
-    `Sam-Harness doctor · ${report.ok ? "OK" : "ISSUES"} · ${report.platform} · Node ${report.node}`,
+    `Sam-Harness doctor | ${report.ok ? "OK" : "ISSUES"} | ${report.platform} | Node ${report.node}`,
     `Checked: ${report.checkedAt}`,
     "",
   ];

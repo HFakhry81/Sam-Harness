@@ -79,7 +79,7 @@ function Initialize-SamLogging {
   $script:SamHarnessOk = 0
   $script:SamHarnessWarn = 0
   $script:SamHarnessFail = 0
-  "Sam-Harness Manager log · $ActionName · $(Get-Date -Format o)" |
+  "Sam-Harness Manager log | $ActionName | $(Get-Date -Format o)" |
     Set-Content -LiteralPath $script:SamHarnessLogFile -Encoding UTF8
   return $script:SamHarnessLogFile
 }
@@ -107,7 +107,7 @@ function Write-SamBanner {
   Write-Host ""
   Write-Host "  ================================================================" -ForegroundColor DarkCyan
   Write-Host "   Sam-Harness Manager" -ForegroundColor White
-  Write-Host "   Control Plane · Hybrid Agency · Phases 0-9" -ForegroundColor Gray
+  Write-Host "   Control Plane | Hybrid Agency | Phases 0-9" -ForegroundColor Gray
   if ($Subtitle) {
     Write-Host ("   " + $Subtitle) -ForegroundColor Cyan
   }
@@ -343,7 +343,7 @@ function Ensure-SamOutputHomeDirs {
     }
   }
   if (-not $env:SAM_OUTPUT_HOME) { $env:SAM_OUTPUT_HOME = $outputHome }
-  Write-SamOk ("SAM_OUTPUT_HOME → $outputHome")
+  Write-SamOk ("SAM_OUTPUT_HOME -> $outputHome")
   return $outputHome
 }
 

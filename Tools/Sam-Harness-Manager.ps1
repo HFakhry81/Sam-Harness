@@ -57,7 +57,7 @@ function Show-SamMenu {
     @{ N = "5";  Id = "build-check";    En = "Build/check (typecheck + tests + doctor)" },
     @{ N = "6";  Id = "start-ui";       En = "Start Control Plane UI" },
     @{ N = "7";  Id = "pull-models";    En = "Pull Ollama models (from team.json)" },
-    @{ N = "8";  Id = "doctor";         En = "Doctor — health check" },
+    @{ N = "8";  Id = "doctor";         En = "Doctor - health check" },
     @{ N = "9";  Id = "help";           En = "Help (pnpm help)" },
     @{ N = "10"; Id = "backup";         En = "Backup (DB + config + .env)" },
     @{ N = "11"; Id = "restore";        En = "Restore from backup" },
@@ -145,7 +145,7 @@ function Invoke-ActionInstall {
   }
 
   if (-not $isRepo) {
-    Write-SamWarn ("Current folder is not Sam-Harness — attempting clone")
+    Write-SamWarn ("Current folder is not Sam-Harness - attempting clone")
     if (-not (Test-SamCommand "git")) {
       Write-SamFail "git missing"
       return 1
@@ -153,7 +153,7 @@ function Invoke-ActionInstall {
     $parent = Split-Path -Parent $ProjectRoot
     $target = Join-Path $parent "Sam-Harness"
     if (-not (Test-Path -LiteralPath $target)) {
-      Write-SamInfo "git clone $CloneUrl → $target"
+      Write-SamInfo "git clone $CloneUrl -> $target"
       $cloneEc = Invoke-SamNative -FilePath "git" -ArgumentList @("clone", $CloneUrl, $target)
       if ($cloneEc -ne 0) { Write-SamFail "git clone failed"; return $cloneEc }
     }
@@ -169,7 +169,7 @@ function Invoke-ActionInstall {
   }
   $installerArgs = @("-NoProfile", "-ExecutionPolicy", "Bypass", "-File", $installer)
   if ($NonInteractive) { $installerArgs += "-NonInteractive" }
-  Write-SamInfo "→ $installer"
+  Write-SamInfo "-> $installer"
   $ps51 = Join-Path $env:SystemRoot "System32\WindowsPowerShell\v1.0\powershell.exe"
   if (-not (Test-Path -LiteralPath $ps51)) { $ps51 = "powershell" }
   $ec = Invoke-SamNative -FilePath $ps51 -ArgumentList $installerArgs
@@ -182,7 +182,7 @@ function Invoke-ActionSetupPrereqs {
   Write-SamStep ("Check Git / Node / pnpm / Ollama")
 
   if (-not (Test-SamCommand "git")) {
-    Write-SamWarn "Git missing — trying winget"
+    Write-SamWarn "Git missing - trying winget"
     if (Test-SamCommand "winget") {
       [void](Invoke-SamNative -FilePath "winget" -ArgumentList @("install", "-e", "--id", "Git.Git", "--accept-package-agreements", "--accept-source-agreements"))
       $env:Path = [System.Environment]::GetEnvironmentVariable("Path", "Machine") + ";" +
@@ -195,7 +195,7 @@ function Invoke-ActionSetupPrereqs {
   } else { Write-SamFail "Git not in PATH" }
 
   if (-not (Test-SamCommand "node")) {
-    Write-SamWarn "Node missing — trying winget OpenJS.NodeJS.LTS"
+    Write-SamWarn "Node missing - trying winget OpenJS.NodeJS.LTS"
     if (Test-SamCommand "winget") {
       [void](Invoke-SamNative -FilePath "winget" -ArgumentList @("install", "-e", "--id", "OpenJS.NodeJS.LTS", "--accept-package-agreements", "--accept-source-agreements"))
       $env:Path = [System.Environment]::GetEnvironmentVariable("Path", "Machine") + ";" +
@@ -213,7 +213,7 @@ function Invoke-ActionSetupPrereqs {
     [void](Invoke-SamNative -FilePath "corepack" -ArgumentList @("enable") -Quiet)
     $prep = Invoke-SamNative -FilePath "corepack" -ArgumentList @("prepare", "pnpm@$pnpmVer", "--activate")
     if ($prep -ne 0) {
-      Write-SamWarn "corepack prepare failed — npm i -g pnpm"
+      Write-SamWarn "corepack prepare failed - npm i -g pnpm"
       [void](Invoke-SamNative -FilePath "npm" -ArgumentList @("install", "-g", "pnpm"))
     }
   }
@@ -225,7 +225,7 @@ function Invoke-ActionSetupPrereqs {
   if (Test-SamCommand "ollama") {
     Write-SamOk "Ollama CLI found"
   } else {
-    Write-SamWarn ("Ollama not found — https://ollama.com/download or winget install Ollama.Ollama")
+    Write-SamWarn ("Ollama not found - https://ollama.com/download or winget install Ollama.Ollama")
   }
 
   Write-SamStep ".env + SAM_OUTPUT_HOME"
@@ -246,7 +246,7 @@ function Invoke-ActionSetupPrereqs {
 function Invoke-ActionInstallDeps {
   Write-SamStep "pnpm install"
   if (-not (Test-SamCommand "pnpm")) {
-    Write-SamFail ("pnpm missing — run setup-prereqs first")
+    Write-SamFail ("pnpm missing - run setup-prereqs first")
     return 1
   }
   $ec = Invoke-SamNative -FilePath "pnpm" -ArgumentList @("install")
@@ -261,7 +261,7 @@ function Invoke-ActionUpdate {
   $dirtyCap = Invoke-SamNativeCapture -FilePath "git" -ArgumentList @("status", "--porcelain")
   $dirty = @($dirtyCap.Lines | Where-Object { $_.Trim() -ne "" })
   if ($dirty.Count -gt 0) {
-    Write-SamFail ("Dirty working tree — refusing update. Commit or stash first.")
+    Write-SamFail ("Dirty working tree - refusing update. Commit or stash first.")
     Write-SamInfo ($dirty -join "`n")
     return 1
   }
@@ -271,14 +271,14 @@ function Invoke-ActionUpdate {
   $branch = ($branchCap.Text).Trim()
   Write-SamInfo "branch=$branch"
   if ($branch -eq "HEAD") {
-    Write-SamFail ("detached HEAD — refusing pull")
+    Write-SamFail ("detached HEAD - refusing pull")
     return 1
   }
 
   Write-SamStep "git pull --ff-only origin $branch"
   $pullEc = Invoke-SamNative -FilePath "git" -ArgumentList @("pull", "--ff-only", "origin", $branch)
   if ($pullEc -ne 0) {
-    Write-SamWarn "ff-only failed — trying git pull --ff-only"
+    Write-SamWarn "ff-only failed - trying git pull --ff-only"
     $pullEc = Invoke-SamNative -FilePath "git" -ArgumentList @("pull", "--ff-only")
     if ($pullEc -ne 0) {
       Write-SamFail "git pull failed"
@@ -421,7 +421,7 @@ function Invoke-ActionBackup {
     if (Test-Path -LiteralPath $dest) { Remove-Item -LiteralPath $dest -Force }
     Add-Type -AssemblyName System.IO.Compression.FileSystem
     [System.IO.Compression.ZipFile]::CreateFromDirectory($stage, $dest)
-    Write-SamOk "Backup → $dest"
+    Write-SamOk "Backup -> $dest"
     return 0
   } catch {
     Write-SamFail $_.Exception.Message
@@ -586,7 +586,7 @@ function Invoke-ActionHealth {
   return $ec
 }
 
-# —— entry ——
+# -- entry --
 $exitCode = 0
 if ($Action) {
   $exitCode = ConvertTo-SamExitCode (Invoke-SamAction -Id $Action.Trim().ToLowerInvariant())

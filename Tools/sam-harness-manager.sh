@@ -63,7 +63,7 @@ show_menu() {
     "5|build-check|Build/check (typecheck + tests + doctor)"
     "6|start-ui|Start Control Plane UI"
     "7|pull-models|Pull Ollama models (from team.json)"
-    "8|doctor|Doctor — health check"
+    "8|doctor|Doctor - health check"
     "9|help|Help (pnpm help)"
     "10|backup|Backup (DB + config + .env)"
     "11|restore|Restore from backup"
@@ -120,7 +120,7 @@ action_install() {
     is_repo=1
   fi
   if [[ "$is_repo" -eq 0 ]]; then
-    sam_warn "Current folder is not Sam-Harness — attempting clone"
+    sam_warn "Current folder is not Sam-Harness - attempting clone"
     if ! command -v git >/dev/null 2>&1; then
       sam_fail "git missing"; return 1
     fi
@@ -128,7 +128,7 @@ action_install() {
     parent="$(dirname "$PROJECT_ROOT")"
     target="$parent/Sam-Harness"
     if [[ ! -d "$target" ]]; then
-      sam_info "git clone $CLONE_URL → $target"
+      sam_info "git clone $CLONE_URL -> $target"
       git clone "$CLONE_URL" "$target"
     fi
     PROJECT_ROOT="$target"
@@ -141,7 +141,7 @@ action_install() {
   fi
   local args=()
   if [[ "$NONINTERACTIVE" -eq 1 ]]; then args+=(--non-interactive); fi
-  sam_info "→ bash $installer ${args[*]:-}"
+  sam_info "-> bash $installer ${args[*]:-}"
   bash "$installer" "${args[@]+"${args[@]}"}"
   local ec=$?
   if [[ $ec -eq 0 ]]; then sam_ok "Install finished"; else sam_fail "install.sh exit $ec"; fi
@@ -162,7 +162,7 @@ action_setup_prereqs() {
   if command -v git >/dev/null 2>&1; then sam_ok "$(git --version)"; else sam_fail "Git not in PATH"; fi
 
   if ! command -v node >/dev/null 2>&1; then
-    sam_warn "Node missing — install Node 20+ LTS"
+    sam_warn "Node missing - install Node 20+ LTS"
     if command -v brew >/dev/null 2>&1; then
       brew install node@22 || true
     fi
@@ -177,7 +177,7 @@ action_setup_prereqs() {
     corepack prepare "pnpm@${pnpm_ver}" --activate >/dev/null 2>&1 || true
   fi
   if ! command -v pnpm >/dev/null 2>&1; then
-    sam_warn "pnpm missing — npm install -g pnpm"
+    sam_warn "pnpm missing - npm install -g pnpm"
     npm install -g pnpm
   fi
   if command -v pnpm >/dev/null 2>&1; then sam_ok "pnpm $(pnpm -v)"; else sam_fail "pnpm missing"; return 1; fi
@@ -185,7 +185,7 @@ action_setup_prereqs() {
   if command -v ollama >/dev/null 2>&1; then
     sam_ok "Ollama CLI found"
   else
-    sam_warn "Ollama not found — https://ollama.com/download"
+    sam_warn "Ollama not found - https://ollama.com/download"
   fi
 
   sam_step ".env + SAM_OUTPUT_HOME"
@@ -204,7 +204,7 @@ action_setup_prereqs() {
 action_install_deps() {
   sam_step "pnpm install"
   if ! command -v pnpm >/dev/null 2>&1; then
-    sam_fail "pnpm missing — run setup-prereqs first"
+    sam_fail "pnpm missing - run setup-prereqs first"
     return 1
   fi
   pnpm install
@@ -220,7 +220,7 @@ action_update() {
   local dirty
   dirty="$(git status --porcelain || true)"
   if [[ -n "$dirty" ]]; then
-    sam_fail "Dirty working tree — refusing update. Commit or stash first."
+    sam_fail "Dirty working tree - refusing update. Commit or stash first."
     sam_info "$dirty"
     return 1
   fi
@@ -230,13 +230,13 @@ action_update() {
   branch="$(git rev-parse --abbrev-ref HEAD)"
   sam_info "branch=$branch"
   if [[ "$branch" == "HEAD" ]]; then
-    sam_fail "detached HEAD — refusing pull"
+    sam_fail "detached HEAD - refusing pull"
     return 1
   fi
 
   sam_step "git pull --ff-only origin $branch"
   if ! git pull --ff-only "origin" "$branch"; then
-    sam_warn "ff-only origin failed — trying git pull --ff-only"
+    sam_warn "ff-only origin failed - trying git pull --ff-only"
     if ! git pull --ff-only; then
       sam_fail "git pull failed"
       return 1
@@ -350,7 +350,7 @@ action_backup() {
     dest="${dest%.zip}.tar.gz"
   fi
   rm -rf "$stage"
-  sam_ok "Backup → $dest"
+  sam_ok "Backup -> $dest"
   return 0
 }
 
@@ -479,7 +479,7 @@ action_health() {
       sam_warn "Control Plane not reachable at $url (start-ui)"
     fi
   else
-    sam_warn "curl missing — skipped /healthz"
+    sam_warn "curl missing - skipped /healthz"
   fi
   return $ec
 }
@@ -517,7 +517,7 @@ invoke_action() {
   return $code
 }
 
-# —— entry ——
+# -- entry --
 if [[ -n "$ACTION" ]]; then
   id="$(echo "$ACTION" | tr '[:upper:]' '[:lower:]')"
   invoke_action "$id"
