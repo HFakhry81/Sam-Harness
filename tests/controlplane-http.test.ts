@@ -109,4 +109,34 @@ describe("Control Plane HTTP auth", () => {
     const setCookie = res.headers.get("set-cookie") || "";
     expect(setCookie).toMatch(/sh_session=/);
   });
+
+  it("GET /api/locale is public and Arabic-first", async () => {
+    const res = await fetch(`http://127.0.0.1:${PORT}/api/locale`);
+    expect(res.status).toBe(200);
+    const body = await res.json();
+    expect(body.ok).toBe(true);
+    expect(body.locale).toBe("ar");
+    expect(body.dir).toBe("rtl");
+    expect(body.messages?.["nav.compose"]).toBeTruthy();
+  });
+
+  it("POST /api/locale switches to English without auth", async () => {
+    const res = await fetch(`http://127.0.0.1:${PORT}/api/locale`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ locale: "en" }),
+    });
+    expect(res.status).toBe(200);
+    const body = await res.json();
+    expect(body.ok).toBe(true);
+    expect(body.locale).toBe("en");
+    expect(body.dir).toBe("ltr");
+    expect(body.messages?.["nav.compose"]).toBe("Task");
+    // restore Arabic for other tests / process default
+    await fetch(`http://127.0.0.1:${PORT}/api/locale`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ locale: "ar" }),
+    });
+  });
 });

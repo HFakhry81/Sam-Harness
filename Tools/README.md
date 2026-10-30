@@ -1,5 +1,13 @@
 # Tools — Windows setup for Sam-Harness
 
+Prefer the **one-click installer** when possible:
+
+```bat
+..\scripts\install\install.cmd
+```
+
+See `docs/PHASE7_ARABIC_INSTALL.md`. Scripts below remain for step-by-step / legacy use.
+
 Scripts for a **fresh Windows PC**. Run from this folder or via `SamHarness.bat`.
 
 | Script | Purpose |

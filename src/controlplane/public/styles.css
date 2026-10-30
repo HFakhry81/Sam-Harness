@@ -183,7 +183,7 @@ body {
 }
 
 .rail {
-  border-left: 1px solid var(--line);
+  border-inline-start: 1px solid var(--line);
   padding: 1.1rem 1rem 1.6rem;
   background: rgba(0, 0, 0, 0.22);
   overflow: auto;
@@ -1261,4 +1261,49 @@ body {
 #costUsageStatus {
   margin-top: 0.35rem;
   color: var(--amber);
+}
+
+/* —— Phase 7: locale switch + LTR overrides —— */
+.locale-switch {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.4rem;
+  color: var(--muted);
+  font-size: 0.75rem;
+}
+
+.locale-switch select {
+  font: inherit;
+  font-size: 0.78rem;
+  color: var(--text);
+  background: var(--bg2);
+  border: 1px solid var(--line);
+  border-radius: var(--radius-sm);
+  padding: 0.28rem 0.45rem;
+  cursor: pointer;
+}
+
+html[dir="ltr"] .top-meta,
+html[dir="ltr"] .term-body,
+html[dir="ltr"] .viewer-body,
+html[dir="ltr"] .mono {
+  text-align: left;
+}
+
+html[dir="ltr"] body {
+  letter-spacing: 0;
+}
+
+html[dir="ltr"] .hero-title,
+html[dir="ltr"] .brand-name,
+html[dir="ltr"] .report-head h2 {
+  text-align: start;
+}
+
+/* Prefer logical alignment helpers for mixed content */
+.text-start {
+  text-align: start;
+}
+.margin-inline-start {
+  margin-inline-start: 0.5rem;
 }

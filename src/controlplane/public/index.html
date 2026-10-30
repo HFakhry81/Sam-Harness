@@ -3,7 +3,7 @@
   <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
-    <title>Sam-Harness — Control Plane</title>
+    <title data-i18n="app.title">Sam-Harness — لوحة التحكم</title>
     <link rel="preconnect" href="https://fonts.googleapis.com" />
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
     <link
@@ -17,14 +17,14 @@
 
     <div id="loginGate" class="login-gate" hidden>
       <div class="login-card">
-        <p class="eyebrow">Owner auth</p>
-        <h1 class="hero-title">Sam-Harness</h1>
-        <p class="lede">أدخل توكن المالك لفتح لوحة التحكم. يُولَّد تلقائياً في <code>.controlplane-token</code> أو عبر <code>CONTROL_PLANE_TOKEN</code>.</p>
-        <label class="field-label" for="loginToken">Owner token</label>
-        <input id="loginToken" class="composer login-token" type="password" autocomplete="current-password" placeholder="الصق التوكن هنا" />
+        <p class="eyebrow" data-i18n="login.eyebrow">مصادقة المالك</p>
+        <h1 class="hero-title" data-i18n="login.title">Sam-Harness</h1>
+        <p class="lede" data-i18n="login.lede">أدخل توكن المالك لفتح لوحة التحكم. يُولَّد تلقائياً في .controlplane-token أو عبر CONTROL_PLANE_TOKEN.</p>
+        <label class="field-label" for="loginToken" data-i18n="login.tokenLabel">توكن المالك</label>
+        <input id="loginToken" class="composer login-token" type="password" autocomplete="current-password" data-i18n-placeholder="login.placeholder" placeholder="الصق التوكن هنا" />
         <p class="login-error" id="loginError" hidden></p>
         <div class="actions">
-          <button type="button" class="btn primary" id="btnLogin">دخول</button>
+          <button type="button" class="btn primary" id="btnLogin" data-i18n="login.submit">دخول</button>
         </div>
       </div>
     </div>
@@ -34,65 +34,73 @@
       <div class="brand">
         <span class="brand-mark">SH</span>
         <div>
-          <p class="brand-name">Sam-Harness</p>
-          <p class="brand-sub">Control Plane · Hybrid Agency</p>
+          <p class="brand-name" data-i18n="brand.name">Sam-Harness</p>
+          <p class="brand-sub" data-i18n="brand.sub">لوحة التحكم · وكالة هجينة</p>
         </div>
       </div>
       <div class="top-actions">
-        <button type="button" class="btn ghost tiny" id="btnNewTaskTop">مهمة جديدة</button>
-        <button type="button" class="btn ghost tiny" id="btnLogout" title="تسجيل الخروج">خروج</button>
+        <label class="locale-switch" for="localeSelect">
+          <span class="locale-label" data-i18n="nav.locale">اللغة</span>
+          <select id="localeSelect" aria-label="Language">
+            <option value="ar">العربية</option>
+            <option value="en">English</option>
+          </select>
+        </label>
+        <button type="button" class="btn ghost tiny" id="btnNewTaskTop" data-i18n="top.newTask">مهمة جديدة</button>
+        <button type="button" class="btn ghost tiny" id="btnLogout" data-i18n="top.logout" data-i18n-title="top.logout" title="خروج">خروج</button>
         <div class="top-meta" id="healthMeta">…</div>
       </div>
     </header>
 
     <nav class="platform-nav" id="platformNav" aria-label="أقسام المنصة">
-      <button type="button" class="active" data-view="compose">المهمة</button>
-      <button type="button" data-view="daily">المهام اليومية</button>
-      <button type="button" data-view="profiles">الهجين</button>
-      <button type="button" data-view="memory">الذاكرة</button>
-      <button type="button" data-view="timeline">التشغيلات</button>
-      <button type="button" data-view="rollback">Rollback</button>
+      <button type="button" class="active" data-view="compose" data-i18n="nav.compose">المهمة</button>
+      <button type="button" data-view="daily" data-i18n="nav.daily">المهام اليومية</button>
+      <button type="button" data-view="profiles" data-i18n="nav.profiles">الهجين</button>
+      <button type="button" data-view="memory" data-i18n="nav.memory">الذاكرة</button>
+      <button type="button" data-view="timeline" data-i18n="nav.timeline">التشغيلات</button>
+      <button type="button" data-view="rollback" data-i18n="nav.rollback">التراجع</button>
     </nav>
 
     <div class="layout">
       <aside class="rail" id="sessionRail">
         <div class="rail-head">
-          <strong>جلسة اليوم</strong>
-          <button type="button" class="linkish" id="btnClearSession">تفريغ</button>
+          <strong data-i18n="session.title">جلسة اليوم</strong>
+          <button type="button" class="linkish" id="btnClearSession" data-i18n="session.clear">تفريغ</button>
         </div>
-        <p class="rail-sub" id="sessionMeta">لا مهام بعد</p>
+        <p class="rail-sub" id="sessionMeta" data-i18n="session.empty">لا مهام بعد</p>
         <ol class="session-list" id="sessionList"></ol>
       </aside>
 
       <main class="shell">
         <section class="stage" id="stageCompose">
-          <p class="eyebrow">المهمة</p>
-          <h1 class="hero-title">اكتب مهمتك.<br /><em>الوكالة تبني وتنفّذ.</em></h1>
-          <p class="lede">
+          <p class="eyebrow" data-i18n="compose.eyebrow">المهمة</p>
+          <h1 class="hero-title"><span data-i18n="compose.hero">اكتب مهمتك.</span><br /><em data-i18n="compose.heroEm">الوكالة تبني وتنفّذ.</em></h1>
+          <p class="lede" data-i18n="compose.lede">
             مهمة → مواصفة → تشغيل → تقرير → مهمة تالية. مشغّل متعدد المسارات أو تحليل مستودع — بدون إعادة تشغيل.
           </p>
 
-          <label class="field-label" for="prompt">ماذا تريد من الوكالة؟</label>
+          <label class="field-label" for="prompt" data-i18n="compose.promptLabel">ماذا تريد من الوكالة؟</label>
           <textarea
             id="prompt"
             class="composer"
             rows="8"
+            data-i18n-placeholder="compose.promptPlaceholder"
             placeholder="مثال: اعمل ملف Excel على سطح المكتب… أو حلّل Maw3ed وأخرج حزمة تقارير…"
             autofocus
           ></textarea>
 
           <div class="meta-row">
             <div class="field">
-              <label for="title">عنوان مختصر (اختياري)</label>
-              <input id="title" type="text" placeholder="يُستنتج تلقائياً إن تُرك فارغاً" />
+              <label for="title" data-i18n="compose.titleLabel">عنوان مختصر (اختياري)</label>
+              <input id="title" type="text" data-i18n-placeholder="compose.titlePlaceholder" placeholder="يُستنتج تلقائياً إن تُرك فارغاً" />
             </div>
             <div class="field">
-              <label for="route">المسار</label>
+              <label for="route" data-i18n="compose.routeLabel">المسار</label>
               <select id="route">
-                <option value="auto">تلقائي ذكي</option>
-                <option value="architecture">تحليل / تقارير</option>
-                <option value="operational">مهام سطح المكتب</option>
-                <option value="implement">تنفيذ (يتطلب GO لاحقاً)</option>
+                <option value="auto" data-i18n="compose.route.auto">تلقائي ذكي</option>
+                <option value="architecture" data-i18n="compose.route.architecture">تحليل / تقارير</option>
+                <option value="operational" data-i18n="compose.route.operational">مهام سطح المكتب</option>
+                <option value="implement" data-i18n="compose.route.implement">تنفيذ (يتطلب GO لاحقاً)</option>
               </select>
             </div>
           </div>
@@ -134,9 +142,9 @@
           </label>
 
           <div class="actions">
-            <button type="button" class="btn ghost" id="btnPreview">معاينة Spec</button>
-            <button type="button" class="btn ghost" id="btnSave">احفظ Task</button>
-            <button type="button" class="btn primary" id="btnSaveRun">احفظ وشغّل</button>
+            <button type="button" class="btn ghost" id="btnPreview" data-i18n="compose.preview">معاينة Spec</button>
+            <button type="button" class="btn ghost" id="btnSave" data-i18n="compose.save">احفظ Task</button>
+            <button type="button" class="btn primary" id="btnSaveRun" data-i18n="compose.saveRun">احفظ وشغّل</button>
           </div>
 
           <section class="clarify hidden" id="clarifyBox">
@@ -428,7 +436,7 @@
     </div>
 
     <footer class="foot">
-      <span>محلي على 127.0.0.1 · مصادقة مالك · sandbox جذور صريحة · سقف تكلفة مفروض</span>
+      <span data-i18n="footer.note">محلي على 127.0.0.1 · مصادقة مالك · sandbox جذور صريحة · سقف تكلفة مفروض</span>
       <a href="#" id="footerSessionLink">session JSON</a>
     </footer>
     </div><!-- #appShell -->

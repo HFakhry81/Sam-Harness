@@ -44,6 +44,12 @@ import {
   appendTimeline,
 } from "../lib/durableRuns.js";
 import {
+  getLocalePayload,
+  loadLocaleConfig,
+  parseAppLocale,
+  getMessages,
+} from "../lib/i18n/index.js";
+import {
   initTracing,
   getMetrics,
   createLogger,
@@ -780,6 +786,8 @@ const PUBLIC_API = new Set([
   "/api/logout",
   "/healthz",
   "/api/healthz",
+  "/api/locale",
+  "/api/i18n",
 ]);
 
 const server = http.createServer(async (req, res) => {
@@ -843,6 +851,43 @@ const server = http.createServer(async (req, res) => {
         "Set-Cookie": clearSessionCookieHeader(),
       });
       res.end(JSON.stringify({ ok: true }));
+      return;
+    }
+
+    // —— Public locale / i18n (Phase 7) — before auth so login UI can localize ——
+    if (method === "GET" && p === "/api/locale") {
+      sendJson(res, 200, { ok: true, ...getLocalePayload() });
+      return;
+    }
+    if (method === "GET" && p === "/api/i18n") {
+      const loc = parseAppLocale(url.searchParams.get("locale") || undefined);
+      sendJson(res, 200, {
+        ok: true,
+        locale: loc,
+        messages: getMessages(loc),
+        config: loadLocaleConfig(),
+      });
+      return;
+    }
+    if (method === "POST" && p === "/api/locale") {
+      // Session-scoped UI preference via response; persists when client writes .env separately.
+      // Auth not required for read; write still goes through normal auth below if we move it —
+      // keep POST public only for flipping UI language in-memory for this process via env.
+      const raw = await readBody(req);
+      let body: { locale?: string; numerals?: string } = {};
+      try {
+        body = JSON.parse(raw || "{}");
+      } catch {
+        sendJson(res, 400, { ok: false, error: "Invalid JSON" });
+        return;
+      }
+      const loc = parseAppLocale(body.locale, loadLocaleConfig().locale);
+      process.env.SAM_LOCALE = loc;
+      process.env.SAM_UI_LOCALE = loc;
+      if (body.numerals === "eastern" || body.numerals === "western") {
+        process.env.SAM_NUMERALS = body.numerals;
+      }
+      sendJson(res, 200, { ok: true, ...getLocalePayload() });
       return;
     }
 

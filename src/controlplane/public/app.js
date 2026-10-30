@@ -4,6 +4,98 @@ const $ = (id) => document.getElementById(id);
 let csrfToken = sessionStorage.getItem("sh_csrf") || "";
 let authed = false;
 
+/** Phase 7 — Arabic-first i18n (messages from /api/locale; English fallback). */
+let uiLocale = "ar";
+let uiMessages = {};
+let uiDir = "rtl";
+
+function t(key, vars) {
+  let raw = uiMessages[key];
+  if (raw == null || raw === "") raw = key;
+  if (!vars) return raw;
+  return String(raw).replace(/\$\{(\w+)\}/g, (_, k) =>
+    vars[k] !== undefined ? String(vars[k]) : ""
+  );
+}
+
+function applyDocumentDir(locale, dir) {
+  const html = document.documentElement;
+  html.lang = locale === "ar" ? "ar-EG" : "en";
+  html.dir = dir || (locale === "ar" ? "rtl" : "ltr");
+  document.body?.setAttribute("data-locale", locale);
+}
+
+function applyI18nDom() {
+  document.querySelectorAll("[data-i18n]").forEach((el) => {
+    const key = el.getAttribute("data-i18n");
+    if (!key) return;
+    const val = t(key);
+    if (val && val !== key) el.textContent = val;
+  });
+  document.querySelectorAll("[data-i18n-html]").forEach((el) => {
+    const key = el.getAttribute("data-i18n-html");
+    if (!key) return;
+    const val = t(key);
+    if (val && val !== key) el.innerHTML = val;
+  });
+  document.querySelectorAll("[data-i18n-placeholder]").forEach((el) => {
+    const key = el.getAttribute("data-i18n-placeholder");
+    if (!key) return;
+    const val = t(key);
+    if (val && val !== key) el.setAttribute("placeholder", val);
+  });
+  document.querySelectorAll("[data-i18n-title]").forEach((el) => {
+    const key = el.getAttribute("data-i18n-title");
+    if (!key) return;
+    const val = t(key);
+    if (val && val !== key) el.setAttribute("title", val);
+  });
+  const titleKey = document.querySelector("title[data-i18n], title");
+  if (document.querySelector("title")) {
+    document.title = t("app.title");
+  }
+  void titleKey;
+  const sel = $("localeSelect");
+  if (sel && sel.value !== uiLocale) sel.value = uiLocale;
+}
+
+async function loadLocale() {
+  try {
+    const res = await fetch("/api/locale", { credentials: "same-origin" });
+    const data = await res.json();
+    if (!data?.ok && !data?.locale) return;
+    uiLocale = data.locale || "ar";
+    uiDir = data.dir || (uiLocale === "ar" ? "rtl" : "ltr");
+    uiMessages = data.messages || {};
+    applyDocumentDir(uiLocale, uiDir);
+    applyI18nDom();
+  } catch {
+    /* keep Arabic defaults baked into HTML */
+  }
+}
+
+async function setLocale(locale) {
+  const res = await fetch("/api/locale", {
+    method: "POST",
+    credentials: "same-origin",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ locale }),
+  });
+  const data = await res.json().catch(() => ({}));
+  if (!res.ok) throw new Error(data.error || "locale switch failed");
+  uiLocale = data.locale || locale;
+  uiDir = data.dir || (uiLocale === "ar" ? "rtl" : "ltr");
+  uiMessages = data.messages || {};
+  try {
+    localStorage.setItem("sh_locale", uiLocale);
+  } catch {
+    /* ignore */
+  }
+  applyDocumentDir(uiLocale, uiDir);
+  applyI18nDom();
+  return data;
+}
+
 async function api(url, options = {}) {
   const opts = { credentials: "same-origin", ...options };
   const headers = new Headers(opts.headers || {});
@@ -19,7 +111,7 @@ async function api(url, options = {}) {
   if (res.status === 401 || res.status === 403) {
     const data = await res.clone().json().catch(() => ({}));
     if (data.authRequired || res.status === 401) {
-      showLogin(data.error || "يلزم تسجيل الدخول");
+      showLogin(data.error || t("login.required"));
     }
   }
   return res;
@@ -55,7 +147,7 @@ async function doLogin(token) {
   });
   const data = await res.json().catch(() => ({}));
   if (!res.ok || !data.ok) {
-    throw new Error(data.error || "فشل الدخول");
+    throw new Error(data.error || t("login.failed"));
   }
   csrfToken = data.csrfToken || "";
   sessionStorage.setItem("sh_csrf", csrfToken);
@@ -144,15 +236,29 @@ let pendingQuestions = [];
 let artifactCache = { items: [], packDir: null };
 let viewerRelPath = null;
 
-const KIND_LABEL = {
-  report: "تقرير",
-  plan: "خطة",
-  evidence: "أدلة",
-  delivery: "تسليم",
-  pack: "حزمة",
-  log: "سجل",
-  other: "ملف",
-};
+function kindLabel(kind) {
+  const key = `kind.${kind}`;
+  const translated = t(key);
+  if (translated && translated !== key) return translated;
+  const fallback = {
+    report: "تقرير",
+    plan: "خطة",
+    evidence: "أدلة",
+    delivery: "تسليم",
+    pack: "حزمة",
+    log: "سجل",
+    other: "ملف",
+  };
+  return fallback[kind] || kind || t("kind.other");
+}
+const KIND_LABEL = new Proxy(
+  {},
+  {
+    get(_t, prop) {
+      return kindLabel(String(prop));
+    },
+  }
+);
 
 function formatBytes(n) {
   if (!n && n !== 0) return "";
@@ -1426,6 +1532,28 @@ async function bootApp() {
 }
 
 async function boot() {
+  // Prefer last UI locale choice, then server / env default (Arabic-first).
+  try {
+    const saved = localStorage.getItem("sh_locale");
+    if (saved === "ar" || saved === "en") {
+      await setLocale(saved).catch(() => loadLocale());
+    } else {
+      await loadLocale();
+    }
+  } catch {
+    await loadLocale();
+  }
+  const localeSel = $("localeSelect");
+  if (localeSel && !localeSel.dataset.bound) {
+    localeSel.dataset.bound = "1";
+    localeSel.addEventListener("change", async () => {
+      try {
+        await setLocale(localeSel.value);
+      } catch (e) {
+        alert(e?.message || String(e));
+      }
+    });
+  }
   showLogin();
   const ok = await ensureAuth();
   if (ok) await bootApp();

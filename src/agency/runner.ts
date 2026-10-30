@@ -28,6 +28,7 @@ import {
   isSamHarnessSelfGoal,
 } from "./goalFidelity.js";
 import { learningContextBlock } from "../controlplane/projectMemory.js";
+import { withLanguageDirective } from "../lib/i18n/index.js";
 import type { AgencyRunResult, Engagement } from "./types.js";
 
 function clip(text: string, max = 6000): string {
@@ -37,9 +38,12 @@ function clip(text: string, max = 6000): string {
 
 async function invoke(
   model: ReturnType<typeof makeCeoModel>,
-  prompt: string
+  prompt: string,
+  userText?: string
 ): Promise<string> {
-  const res = await model.invoke(prompt);
+  const res = await model.invoke(
+    withLanguageDirective(prompt, { locale: "auto", userText })
+  );
   return String(res.content || "");
 }
 
@@ -249,7 +253,8 @@ ${clip(review.strategy, 8000)}
 EVIDENCE:
 ${clip(evidence.summaryMarkdown, 4000)}
 BRIEF:
-${clip(brief, 4000)}`
+${clip(brief, 4000)}`,
+      task
     );
     fs.writeFileSync("execution-plan.md", layeredBlueprint, "utf-8");
     ok("Architect", "execution-plan.md");
