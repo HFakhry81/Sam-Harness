@@ -3,6 +3,8 @@
 !.env.example
 .controlplane-token
 workspace-roots.json
+mcp.json
+.mcp.json
 cost-ledger.json
 node_modules/
 *.log

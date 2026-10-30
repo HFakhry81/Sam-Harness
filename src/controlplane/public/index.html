@@ -166,7 +166,7 @@
                 <input id="dailyPrompt" type="text" placeholder="مثال: انسخ تقرير اليوم إلى Desktop\Archive" />
               </div>
               <div class="field">
-                <label for="dailyCron">جدولة (محلية)</label>
+                <label for="dailyCron">جدولة (محلية · cron)</label>
                 <select id="dailyCron">
                   <option value="manual">يدوي فقط</option>
                   <option value="daily-09">يومياً 09:00</option>
@@ -176,12 +176,14 @@
               </div>
               <button type="button" class="btn primary" id="btnDailyAdd">إضافة</button>
             </div>
+            <p class="lede-sm" id="dailySchedulerHint">المجدول يعمل داخل Control Plane ويبقى في daily-ops.json بعد إعادة التشغيل. السجل تحت Documents/Sam-Harness/runs/daily-ops/.</p>
             <table class="ops-table">
               <thead>
                 <tr>
                   <th>المهمة</th>
                   <th>الجدول</th>
                   <th>الحالة</th>
+                  <th>التشغيل التالي</th>
                   <th>آخر نتيجة</th>
                   <th></th>
                 </tr>

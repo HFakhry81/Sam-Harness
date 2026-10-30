@@ -26,7 +26,7 @@
 | Delivery / tickets | ✅ P3 | لوحة حية + إشعارات |
 | Safe tool use | ✅ P4 جزئي | سياسات أدق + موافقات متعددة المستويات |
 | Desktop / daily ops | ⚠️ L1 محدود | مشغّل يومي قوي ضمن allowlist |
-| Email / calendar / results | ❌ | موصلات + سجل نتائج |
+| Email / calendar / results | ✅ إيميل (SMTP/Resend/dry-run) · تقويم لاحقاً | موصلات أوسع + تقويم |
 | Control plane UI | ✅ P5 + UI refresh | صقل بصري + أقسام المنصة |
 | Multi-client hybrid | ✅ P8 أساسي | بروفايل local/cloud/auto + سقف تكلفة |
 | Self-serve install | ⚠️ bat + pnpm | حزمة محمولة أوضح |
@@ -41,11 +41,11 @@
 | **P3** | Delivery OS | تذاكر + DoD + Go/No-Go | ✅ |
 | **P4** | Safe execution | مصفوفة صلاحيات + safeExecute + مسارات/شل | ✅ |
 | **P5** | Control plane | واجهة compose→task.ts→run + سجل حي | ✅ (+ تصميم أنيق) |
-| **P6** | Daily Ops Agent | جداول مهام يومية + سجل نتائج في UI/API | ✅ أساسي |
-| **P7** | Comms connectors | مسودات إيميل/إشعار + بوابة موافقة (stub إرسال) | ✅ أساسي |
+| **P6** | Daily Ops Agent | جداول cron ثابتة + مجدول داخل Control Plane + سجل تحت `runs/daily-ops/` | ✅ Phase 2 |
+| **P7** | Comms connectors | مسودات + موافقة مالك؛ SMTP (nodemailer) / Resend / dry-run | ✅ Phase 2 |
 | **P8** | Hybrid client profiles | بروفايل `local` / `cloud` / `auto` + سقف تكلفة **مفروض** (Phase 1 ledger) | ✅ مفروض |
 | **P9** | Evals + memory | eval:task-spec + ذاكرة مشروع في UI | ✅ أساسي / روبريكات أوسع لاحقاً |
-| **P10** | Hardened implement | rollback journal بعد Level-3 (مسار تدقيق) | ✅ أساسي / snapshots لاحقاً |
+| **P10** | Hardened implement | Level-3 عام عبر `level3-plan.json` + git branch/rollback + journal | ✅ Phase 2 |
 | **P0b** | Production hardening | عزل حزم الذات، evals انحدار، حقن ذاكرة، منع تلوث الهدف | ✅ أساسي — `pnpm run smoke:prod-gates` |
 
 ## Design principles
@@ -67,15 +67,16 @@
   - Intent/entities/risk/success_criteria + confidence gate + clarify UI
   - Executor prefers Spec plan; verifier checks success_criteria
   - Golden evals: `pnpm run eval:task-spec` (target ≥95%)
-- [x] P6 Daily Ops — `daily-ops.json` + `/api/daily-ops*` + UI tab
-- [x] P7 Comms stubs — `comms-drafts.json` + approval-gated send stub
+- [x] P6 Daily Ops — persistent cron schedules + in-process scheduler + `/api/daily-ops*` + UI enable/disable/run
+- [x] P7 Comms — `comms-drafts.json` + approval gate + SMTP/Resend/dry-run (`emailProvider.ts`)
 - [x] P8 Hybrid profile — `hybrid-profile.json` + UI cards + **runtime cost-cap ledger** (`cost-ledger.json`)
 - [x] Phase 1 security — Control Plane owner token/session + CSRF; filesystem sandbox via `WORKSPACE_ROOTS`
+- [x] Phase 2 gaps — MCP client (`mcp.json`), `run_node_sandbox`, generic Level-3, git snapshots
 - [x] P9 Memory — `project-memory.json` + UI (+ existing task-spec evals)
-- [x] P10 Rollback journal — `rollback-journal.json` wired from Level-3
+- [x] P10 Rollback journal — file backups + git-snapshot entries from Level-3
 
-**Test-ready today:** Control Plane (مهمة / يومي / هجين / ذاكرة / rollback) + agency packs.  
-**Next hardening:** scheduler tick for due jobs, real SMTP/notify, binary rollback snapshots, broader review evals.
+**Test-ready today:** Control Plane + agency packs + `pnpm test` + `smoke:mcp` / `smoke:sandbox`.  
+**Next (Phase 3):** SQLite persistence, checkpointer, multi-client workspaces, OTel.
 
 ## Success metrics (منافسة حقيقية)
 - تكلفة توكن لكل تقرير ناجح → أقرب ما يكون للصفر عبر المحلي.

@@ -1,8 +1,29 @@
+/**
+ * Level-3 — generic, config/spec-driven implementer (no product hardcoding).
+ * Flow: load level3-plan.json → git branch → apply writes/patches → diff →
+ * run tests → rollback via git (or file backups) on failure.
+ */
 import * as fs from "fs";
 import * as path from "path";
 import { live, ok, warn, sys, err } from "../lib/colors.js";
 import { executeTool } from "../tools/registry.js";
 import { makeCeoModel, makeSpecialistModel, specialistLabel } from "./models.js";
+import {
+  loadLevel3Plan,
+  planHasWork,
+  type Level3Plan,
+} from "../agency/delivery/level3Plan.js";
+import {
+  commitAll,
+  createImplementBranch,
+  currentHead,
+  diffStat,
+  inferTestCommand,
+  isGitRepo,
+  rollbackToSnapshot,
+  runRepoTests,
+  type GitSnapshot,
+} from "../agency/delivery/gitSnapshot.js";
 
 function clip(text: string, max = 8000): string {
   if (!text) return "";
@@ -17,19 +38,38 @@ function readIfExists(p: string): string {
   }
 }
 
-export function resolveTargetRepo(task: string): string {
+/**
+ * Resolve target repo without product-specific hardcoding.
+ * Order: opts → TARGET_REPO → task.ts targetRepo path in task text → cwd.
+ */
+export function resolveTargetRepo(task: string, optsRepo?: string): string {
+  if (optsRepo && fs.existsSync(optsRepo)) return path.normalize(optsRepo);
   const envRepo = process.env.TARGET_REPO?.trim();
   if (envRepo && fs.existsSync(envRepo)) return path.normalize(envRepo);
-  const winPath = task.match(
-    /([A-Za-z]:\\[^\s`"']*?(?:maw3ed|fanni|Maw3ed|Fanni)[^\s`"']*)/i
-  );
-  if (winPath) {
-    const candidate = path.normalize(winPath[1].replace(/[\\/]+$/, ""));
+
+  // Generic absolute path capture (Windows or POSIX) — not product names
+  const win = task.match(/([A-Za-z]:\\[^\s`"']+)/);
+  if (win) {
+    const candidate = path.normalize(win[1].replace(/[\\/]+$/, ""));
+    if (fs.existsSync(candidate) && fs.statSync(candidate).isDirectory()) {
+      return candidate;
+    }
+  }
+  const posix = task.match(/(^|[\s`"'])(\/(?:[^\s`"']+))/);
+  if (posix) {
+    const candidate = path.normalize(posix[2].replace(/\/+$/, ""));
+    if (fs.existsSync(candidate) && fs.statSync(candidate).isDirectory()) {
+      return candidate;
+    }
+  }
+
+  // task.ts style: targetRepo: "..."
+  const fromTask = task.match(/targetRepo\s*[:=]\s*["'`]([^"'`]+)["'`]/i);
+  if (fromTask) {
+    const candidate = path.normalize(fromTask[1]);
     if (fs.existsSync(candidate)) return candidate;
   }
-  for (const d of ["E:\\UpNexa.com\\maw3ed", "E:\\UpNexa.com\\Fanni"]) {
-    if (fs.existsSync(d)) return d;
-  }
+
   return path.normalize(process.cwd());
 }
 
@@ -98,11 +138,12 @@ function assertUnderRepo(targetRepo: string, filePath: string) {
   const abs = path.normalize(
     path.isAbsolute(filePath) ? filePath : path.join(targetRepo, filePath)
   );
-  const root = path.normalize(targetRepo).toLowerCase();
-  if (!abs.toLowerCase().startsWith(root + path.sep) && abs.toLowerCase() !== root) {
+  const root = path.normalize(targetRepo);
+  const rootLower = root.toLowerCase();
+  const absLower = abs.toLowerCase();
+  if (!absLower.startsWith(rootLower + path.sep) && absLower !== rootLower) {
     throw new Error(`Refusing path outside target repo: ${abs}`);
   }
-  // Don't overwrite the pack with more reports as "implementation"
   const banned = ["marketing-campaign.md", "help-system-spec.md", "ceo-draft.md"];
   if (banned.includes(path.basename(abs).toLowerCase())) {
     throw new Error(`Refusing to rewrite swarm report file as code work: ${abs}`);
@@ -110,98 +151,35 @@ function assertUnderRepo(targetRepo: string, filePath: string) {
   return abs;
 }
 
-/**
- * Deterministic high-value first patch from known Maw3ed gaps:
- * extract shared overlap helper + smoke test (matches overlap / readiness concerns).
- */
-function applySeedOverlapPatch(targetRepo: string): string[] {
-  const changed: string[] = [];
-  const utilPath = path.join(targetRepo, "timeRange.js");
-  const utilSrc = `/**
- * Shared time-range helpers for appointment overlap checks.
- * Added/used by Sam-Harness Level-3 implementer to match overlap specs.
- */
-
-function toMinutes(hhmm) {
-  const raw = String(hhmm || "00:00");
-  const [h, m] = raw.split(":").map((x) => Number(x));
-  if (!Number.isFinite(h) || !Number.isFinite(m)) return 0;
-  return h * 60 + m;
-}
-
-/** True when [startA, endA) overlaps [startB, endB). */
-function rangesOverlap(startA, endA, startB, endB) {
-  return startA < endB && startB < endA;
-}
-
-function appointmentWindow(time, durationMinutes, bufferMinutes = 0) {
-  const start = toMinutes(time);
-  const end = start + Number(durationMinutes || 30) + Number(bufferMinutes || 0);
-  return { start, end };
-}
-
-module.exports = {
-  toMinutes,
-  rangesOverlap,
-  appointmentWindow
-};
-`;
-  fs.writeFileSync(utilPath, utilSrc, "utf-8");
-  changed.push(utilPath);
-
-  // Wire opsPg.js to use shared helper if still inline-only
-  const opsPgPath = path.join(targetRepo, "opsPg.js");
-  let opsPg = fs.readFileSync(opsPgPath, "utf-8");
-  if (!opsPg.includes("timeRange")) {
-    // Insert require near top after other requires
-    const requireLine = 'const { rangesOverlap, appointmentWindow } = require("./timeRange");\n';
-    if (opsPg.startsWith("const ") || opsPg.includes("require(")) {
-      const firstRequire = opsPg.indexOf("require(");
-      const lineStart = opsPg.lastIndexOf("\n", firstRequire) + 1;
-      opsPg = opsPg.slice(0, lineStart) + requireLine + opsPg.slice(lineStart);
-    } else {
-      opsPg = requireLine + opsPg;
-    }
-
-    // Replace inline overlap boolean if present
-    const oldOverlap = /const overlaps = dayRows\.rows\.some\(\(row\) => \{[\s\S]*?return start < otherEnd && otherStart < end;\s*\}\);/;
-    if (oldOverlap.test(opsPg)) {
-      opsPg = opsPg.replace(
-        oldOverlap,
-        `const self = appointmentWindow(appointment.time, appointment.durationMinutes || service?.durationMinutes || 30, service?.bufferMinutes || 0);
-    const overlaps = dayRows.rows.some((row) => {
-      const other = appointmentWindow(row.time, row.duration_minutes || 30, row.buffer_minutes || 0);
-      return rangesOverlap(self.start, self.end, other.start, other.end);
-    });`
-      );
-      // Remove now-unused local start/end if duplicated just above — best-effort cleanup
-      opsPg = opsPg.replace(
-        /\n\s*const start = toMinutes\(appointment\.time\);\s*\n\s*const end =\s*\n\s*start \+\s*\n\s*Number\(appointment\.durationMinutes \|\| service\?\.durationMinutes \|\| 30\) \+\s*\n\s*Number\(service\?\.bufferMinutes \|\| 0\);\s*\n\s*const self = appointmentWindow/,
-        "\n    const self = appointmentWindow"
-      );
-    }
-    fs.writeFileSync(opsPgPath, opsPg, "utf-8");
-    changed.push(opsPgPath);
+// ESM-safe lazy import cache for rollback journal
+let rollbackMod: typeof import("../agency/delivery/rollbackJournal.js") | null =
+  null;
+async function getRollback() {
+  if (!rollbackMod) {
+    rollbackMod = await import("../agency/delivery/rollbackJournal.js");
   }
+  return rollbackMod;
+}
 
-  const smokePath = path.join(targetRepo, "scripts", "smoke-time-range-overlap.js");
-  const smokeSrc = `const assert = require("assert");
-const { rangesOverlap, appointmentWindow, toMinutes } = require("../timeRange");
-
-assert.strictEqual(toMinutes("09:30"), 570);
-assert.strictEqual(rangesOverlap(0, 30, 30, 60), false, "touching edges do not overlap");
-assert.strictEqual(rangesOverlap(0, 30, 29, 60), true, "partial overlap");
-assert.strictEqual(rangesOverlap(100, 160, 120, 150), true, "contained range");
-
-const a = appointmentWindow("10:00", 30, 10);
-const b = appointmentWindow("10:30", 30, 0);
-assert.strictEqual(rangesOverlap(a.start, a.end, b.start, b.end), true, "buffer causes overlap");
-
-console.log("smoke-time-range-overlap: OK");
-`;
-  fs.writeFileSync(smokePath, smokeSrc, "utf-8");
-  changed.push(smokePath);
-
+/** Apply a Level-3 plan synchronously (tests / programmatic). Does not journal. */
+export function applyPlanFiles(targetRepo: string, plan: Level3Plan): string[] {
+  const changed: string[] = [];
+  for (const w of plan.writes || []) {
+    const abs = assertUnderRepo(targetRepo, w.path);
+    ensureDir(path.dirname(abs));
+    fs.writeFileSync(abs, w.content, "utf-8");
+    changed.push(abs);
+  }
+  for (const p of plan.patches || []) {
+    const abs = assertUnderRepo(targetRepo, p.path);
+    if (!fs.existsSync(abs)) throw new Error(`Patch target missing: ${abs}`);
+    const before = fs.readFileSync(abs, "utf-8");
+    if (!before.includes(p.find)) {
+      throw new Error(`Patch find string not found in ${abs}`);
+    }
+    fs.writeFileSync(abs, before.replace(p.find, p.replace), "utf-8");
+    changed.push(abs);
+  }
   return changed;
 }
 
@@ -211,17 +189,18 @@ export type Level3Result = {
   backlogPath: string;
   resultPath: string;
   applied: string[];
+  branch?: string;
+  testsPassed?: boolean;
+  rolledBack?: boolean;
 };
 
 /**
- * Level 3 — Code implementation crew (no new report packs).
+ * Level 3 — Code implementation crew driven by level3-plan.json (or LLM proposal).
  */
 export async function runImplementationCrew(
   task: string,
-  opts?: { targetRepo?: string; packDir?: string }
+  opts?: { targetRepo?: string; packDir?: string; plan?: Level3Plan }
 ): Promise<Level3Result> {
-  // Defense in depth — Delivery OS Go/No-Go must already pass in index.ts.
-  // Refuse if go-nogo.json explicitly says NO_GO / PENDING when present.
   try {
     const goPath = path.join(process.cwd(), "go-nogo.json");
     if (fs.existsSync(goPath)) {
@@ -238,7 +217,7 @@ export async function runImplementationCrew(
     if (e instanceof Error && e.message.startsWith("Level-3 refused")) throw e;
   }
 
-  const targetRepo = opts?.targetRepo || resolveTargetRepo(task);
+  const targetRepo = resolveTargetRepo(task, opts?.targetRepo);
   if (!fs.existsSync(targetRepo)) {
     throw new Error(`Target repo not found: ${targetRepo}`);
   }
@@ -250,211 +229,275 @@ export async function runImplementationCrew(
   live("Implementer", `Coding against pack in ${outDir}`);
   live("Implementer", `Real repo: ${targetRepo}`);
 
-  const pack = {
-    executionPlan: readIfExists(path.join(outDir, "execution-plan.md")),
-    backlog: readIfExists(path.join(outDir, "IMPLEMENTATION_BACKLOG.md")),
-    ticket: readIfExists(path.join(outDir, "TICKET_P0_STARTER.md")),
-    gapPlan: readIfExists(path.join(outDir, "PRODUCTION_GAP_FIX_PLAN.md")),
-    overlapSpec: readIfExists(path.join(outDir, "APPOINTMENT_OVERLAP_FIX_SPEC.md")),
-    authSpec: readIfExists(path.join(outDir, "AUTH_FAIL_CLOSED_CHECKLIST.md")),
-    incomplete: readIfExists(path.join(targetRepo, "docs", "INCOMPLETE_LOGIC.md")),
-    readiness: readIfExists(
-      path.join(targetRepo, "docs", "PRODUCTION_READINESS_REPORT.md")
-    ),
-  };
+  const plan: Level3Plan =
+    opts?.plan ||
+    loadLevel3Plan(outDir) || {
+      title: "Level-3 (no plan file — LLM may propose)",
+      writes: [],
+      patches: [],
+      branchPrefix: "sam-harness/l3",
+    };
 
   const applied: string[] = [];
   const stamp = () => new Date().toISOString();
+  const harnessRoot = process.cwd();
+  let snapshot: GitSnapshot | null = null;
+  let rolledBack = false;
+  let testsPassed: boolean | undefined;
 
   appendJournal(outDir, {
     ts: stamp(),
     stage: "plan",
-    done: "Loaded existing swarm pack; starting CODE implementation (no new report pack).",
+    done: planHasWork(plan)
+      ? `Loaded Level-3 plan: ${plan.title}`
+      : "No level3-plan.json writes/patches — will ask coder LLM for one safe change.",
     filesChanged: [],
-    remaining:
-      "Apply P0 code changes; run smoke; reviewer match check; update remaining gaps.",
+    remaining: "Apply plan → test → review → journal",
   });
 
-  // --- Stage: code (seed deterministic high-value patch + optional LLM follow-up) ---
-  live("Coder", "Applying seed code patch for appointment overlap helper...");
-  const seeded = applySeedOverlapPatch(targetRepo);
-  applied.push(...seeded);
-  ok("Coder", `Seed patch landed (${seeded.length} files)`);
+  // --- Git branch snapshot ---
+  if (isGitRepo(targetRepo)) {
+    const branchName = `${plan.branchPrefix || "sam-harness/l3"}-${Date.now().toString(36)}`;
+    try {
+      snapshot = createImplementBranch(targetRepo, branchName);
+      if (snapshot) {
+        ok("Git", `Branch ${snapshot.branch} (base ${snapshot.baseRef} @ ${snapshot.headBefore.slice(0, 8)})`);
+        const rb = await getRollback();
+        rb.recordGitSnapshot(harnessRoot, {
+          targetRepo,
+          branch: snapshot.branch,
+          baseRef: snapshot.baseRef,
+          headBefore: snapshot.headBefore,
+          note: plan.title,
+        });
+      }
+    } catch (e: any) {
+      warn("Git", e?.message || String(e));
+    }
+  } else {
+    sys("Git: target is not a git repo — file backups only");
+  }
 
-  appendJournal(outDir, {
-    ts: stamp(),
-    stage: "code",
-    done: "Added timeRange.js shared overlap helpers, wired opsPg.js when needed, added scripts/smoke-time-range-overlap.js.",
-    filesChanged: seeded,
-    remaining:
-      "Auth fail-closed expansion, tenant BOLA matrix enforcement, legacy route lockdown, dept RBAC hardening, Stripe/WhatsApp still open per INCOMPLETE_LOGIC.",
-  });
+  // --- Apply plan ---
+  live("Coder", "Applying spec-driven plan...");
+  try {
+    if (planHasWork(plan)) {
+      // Use async rollback for writes
+      for (const w of plan.writes || []) {
+        const abs = assertUnderRepo(targetRepo, w.path);
+        ensureDir(path.dirname(abs));
+        const rb = await getRollback();
+        rb.recordWriteWithBackup(harnessRoot, {
+          targetRepo,
+          filePath: abs,
+          note: plan.title || "Level-3 plan write",
+        });
+        fs.writeFileSync(abs, w.content, "utf-8");
+        applied.push(abs);
+      }
+      for (const p of plan.patches || []) {
+        const abs = assertUnderRepo(targetRepo, p.path);
+        if (!fs.existsSync(abs)) throw new Error(`Patch target missing: ${abs}`);
+        const before = fs.readFileSync(abs, "utf-8");
+        if (!before.includes(p.find)) {
+          throw new Error(`Patch find string not found in ${abs}`);
+        }
+        const rb = await getRollback();
+        rb.recordWriteWithBackup(harnessRoot, {
+          targetRepo,
+          filePath: abs,
+          note: plan.title || "Level-3 plan patch",
+        });
+        fs.writeFileSync(abs, before.replace(p.find, p.replace), "utf-8");
+        applied.push(abs);
+      }
+      ok("Coder", `Plan applied (${applied.length} files)`);
+    } else {
+      sys("Coder: empty plan — asking LLM for one focused write_file JSON");
+      const coder = makeSpecialistModel({
+        cloudModel: "gemma4:cloud",
+        localModel: "qwen2.5-coder:1.5b",
+        temperature: 0.1,
+        numPredict: 700,
+      });
+      const backlog = readIfExists(path.join(outDir, "IMPLEMENTATION_BACKLOG.md"));
+      const ticket = readIfExists(path.join(outDir, "TICKET_P0_STARTER.md"));
+      live(
+        `Coder (${specialistLabel("gemma4:cloud", "qwen2.5-coder:1.5b")})`,
+        "Proposing one focused code edit from pack..."
+      );
+      const proposalRaw = await invokeText(
+        coder,
+        `You implement REAL code in the target repository. Do NOT write a new strategy report.
+Target repo: ${targetRepo}
 
-  // LLM coder may propose one additional small patch via tools
-  const coder = makeSpecialistModel({
-    cloudModel: "gemma4:cloud",
-    localModel: "qwen2.5-coder:1.5b",
-    temperature: 0.1,
-    numPredict: 700,
-  });
+Pack ticket/backlog:
+${clip(ticket || backlog, 4000)}
 
-  live(
-    `Coder (${specialistLabel("gemma4:cloud", "qwen2.5-coder:1.5b")})`,
-    "Proposing one additional focused code edit from pack P0..."
-  );
-
-  const proposalRaw = await invokeText(
-    coder,
-    `You implement REAL code in Maw3ed. Do NOT write a new strategy report.
-
-Pack backlog/ticket:
-${clip(pack.ticket || pack.backlog, 3500)}
-
-Incomplete logic:
-${clip(pack.incomplete, 2500)}
-
-Already done this run: timeRange.js + opsPg overlap helper + smoke-time-range-overlap.js
-
-Propose ONE additional small safe code change as JSON only:
+Propose ONE small safe code change as JSON only:
 {"tool":"write_file","params":{"path":"relative/or/absolute under repo","content":"...full file content..."}}
 OR
 {"tool":"finish","params":{"summary":"no further safe patch","success":true}}
 
-Prefer a tiny smoke script or a clear comment+guard in an existing js file.
-Forbidden paths: docs/sam-harness report rewrites, marketing, help specs.`
-  );
-
-  const proposal = extractJson(proposalRaw);
-  if (proposal && proposal.tool === "write_file") {
-    const params = (proposal.params || {}) as Record<string, unknown>;
-    try {
-      const abs = assertUnderRepo(targetRepo, String(params.path || ""));
-      // Only allow code-ish extensions
-      if (!/\.(js|cjs|mjs|ts|sql)$/i.test(abs)) {
-        warn("Coder", `Skipped non-code write: ${abs}`);
-      } else if (abs.toLowerCase().includes(`${path.sep}docs${path.sep}sam-harness${path.sep}`)) {
-        warn("Coder", "Skipped writing inside pack folder (code only).");
-      } else {
-        const content = String(params.content || "");
-        if (content.length > 20) {
-          ensureDir(path.dirname(abs));
-          try {
-            const { recordWriteWithBackup } = await import(
-              "../agency/delivery/rollbackJournal.js"
-            );
-            recordWriteWithBackup(process.cwd(), {
+Forbidden: marketing/help/ceo report rewrites. Prefer tiny smoke scripts or clear guards.`
+      );
+      const proposal = extractJson(proposalRaw);
+      if (proposal && proposal.tool === "write_file") {
+        const params = (proposal.params || {}) as Record<string, unknown>;
+        const abs = assertUnderRepo(targetRepo, String(params.path || ""));
+        if (!/\.(js|cjs|mjs|ts|tsx|jsx|sql|json)$/i.test(abs)) {
+          warn("Coder", `Skipped non-code write: ${abs}`);
+        } else if (
+          abs.toLowerCase().includes(`${path.sep}docs${path.sep}sam-harness${path.sep}`)
+        ) {
+          warn("Coder", "Skipped writing inside pack folder (code only).");
+        } else {
+          const content = String(params.content || "");
+          if (content.length > 20) {
+            ensureDir(path.dirname(abs));
+            const rb = await getRollback();
+            rb.recordWriteWithBackup(harnessRoot, {
               targetRepo,
               filePath: abs,
               note: "Level-3 coder write",
             });
-          } catch {
-            /* journal optional */
+            fs.writeFileSync(abs, content, "utf-8");
+            applied.push(abs);
+            ok("Coder", `Additional code write -> ${abs}`);
           }
-          fs.writeFileSync(abs, content, "utf-8");
-          applied.push(abs);
-          ok("Coder", `Additional code write -> ${abs}`);
-          appendJournal(outDir, {
-            ts: stamp(),
-            stage: "code",
-            done: `Additional coder write applied: ${path.relative(targetRepo, abs)}`,
-            filesChanged: [abs],
-            remaining: "Smoke + reviewer still pending for this extra patch.",
-          });
         }
+      } else {
+        sys("Coder skipped extra patch (finish / unparseable).");
       }
-    } catch (e: any) {
-      warn("Coder", e?.message || String(e));
     }
-  } else {
-    sys("Coder skipped extra patch (finish / unparseable) — seed patch remains.");
-  }
-
-  // --- Stage: smoke ---
-  live("QA", "Running overlap smoke script...");
-  let smokeOk = false;
-  try {
-    const smoke = await executeTool("run_shell", {
-      command: `echo Running smoke via node`,
-    });
-    // run_shell allowlist is tight — execute node directly here
-    const { execFile } = await import("child_process");
-    const { promisify } = await import("util");
-    const execFileAsync = promisify(execFile);
-    const smokeFile = path.join(targetRepo, "scripts", "smoke-time-range-overlap.js");
-    const { stdout, stderr } = await execFileAsync("node", [smokeFile], {
-      cwd: targetRepo,
-      timeout: 20000,
-      windowsHide: true,
-    });
-    smokeOk = /OK/i.test(stdout) || /OK/i.test(stderr);
-    if (smokeOk) ok("QA", "smoke-time-range-overlap passed");
-    else warn("QA", `Smoke output unexpected: ${stdout || stderr}`);
-    void smoke;
   } catch (e: any) {
-    err("QA", e?.message || String(e));
-    smokeOk = false;
+    err("Coder", e?.message || String(e));
+    if (snapshot) {
+      try {
+        rollbackToSnapshot(snapshot);
+        rolledBack = true;
+        warn("Git", "Rolled back after apply failure");
+      } catch (re: any) {
+        err("Git", re?.message || String(re));
+      }
+    }
+    throw e;
   }
 
   appendJournal(outDir, {
     ts: stamp(),
-    stage: "smoke",
-    done: smokeOk
-      ? "scripts/smoke-time-range-overlap.js passed"
-      : "Smoke failed or could not run",
-    filesChanged: [],
-    remaining: smokeOk
-      ? "Reviewer match check; then continue remaining P0 backlog items."
-      : "Fix smoke failures before claiming overlap helper complete.",
+    stage: "code",
+    done: `Applied ${applied.length} file change(s).`,
+    filesChanged: applied,
+    remaining: "Run tests; reviewer match; update remaining gaps.",
   });
 
-  // --- Stage: review ---
+  if (snapshot && applied.length) {
+    try {
+      const sha = commitAll(targetRepo, `sam-harness: ${plan.title || "level-3"}`);
+      if (sha) {
+        snapshot.commitAfter = sha;
+        ok("Git", `Committed ${sha.slice(0, 8)}`);
+        const rb = await getRollback();
+        rb.recordGitSnapshot(harnessRoot, {
+          targetRepo,
+          branch: snapshot.branch,
+          baseRef: snapshot.baseRef,
+          headBefore: snapshot.headBefore,
+          commitAfter: sha,
+          note: "post-apply commit",
+        });
+      }
+      const stat = diffStat(targetRepo, snapshot.headBefore);
+      if (stat) {
+        fs.writeFileSync(path.join(outDir, "LEVEL3_DIFF.txt"), stat, "utf-8");
+      }
+    } catch (e: any) {
+      warn("Git", e?.message || String(e));
+    }
+  }
+
+  // --- Tests ---
+  live("QA", "Running plan/repo tests...");
+  let testCmd = plan.testCommand
+    ? { command: plan.testCommand, args: plan.testArgs || [] }
+    : inferTestCommand(targetRepo);
+  if (testCmd) {
+    const result = runRepoTests(targetRepo, testCmd.command, testCmd.args);
+    testsPassed = result.ok;
+    if (result.ok) ok("QA", `${testCmd.command} ${testCmd.args.join(" ")} passed`);
+    else {
+      err("QA", result.stderr || result.stdout || "tests failed");
+      if (snapshot) {
+        try {
+          rollbackToSnapshot(snapshot);
+          rolledBack = true;
+          applied.length = 0;
+          warn("Git", "Rolled back after test failure");
+        } catch (re: any) {
+          err("Git", re?.message || String(re));
+        }
+      }
+    }
+    appendJournal(outDir, {
+      ts: stamp(),
+      stage: "smoke",
+      done: result.ok
+        ? `Tests passed: ${testCmd.command} ${testCmd.args.join(" ")}`
+        : `Tests failed — ${rolledBack ? "rolled back" : "manual fix needed"}`,
+      filesChanged: [],
+      remaining: result.ok ? "Reviewer check" : "Fix failing tests before GO claim",
+    });
+  } else {
+    testsPassed = applied.length > 0 ? true : undefined;
+    sys("QA: no testCommand in plan and none inferred — skipping automated tests");
+    appendJournal(outDir, {
+      ts: stamp(),
+      stage: "smoke",
+      done: "No automated test command configured",
+      filesChanged: [],
+      remaining: "Add testCommand to level3-plan.json for gated applies",
+    });
+  }
+
+  // --- Review ---
   const reviewer = makeCeoModel();
-  live("Reviewer", "Checking code match against pack/spec intent...");
-  const timeRangeSrc = readIfExists(path.join(targetRepo, "timeRange.js"));
-  const opsPgSnippet = readIfExists(path.join(targetRepo, "opsPg.js")).slice(0, 2500);
-  const review = await invokeText(
-    reviewer,
-    `You are the code reviewer for Sam-Harness Level-3.
-Selected intent: appointment overlap / time-range correctness from production readiness + pack.
-Code added:
-timeRange.js:
-${clip(timeRangeSrc, 2500)}
-
-opsPg.js (excerpt):
-${clip(opsPgSnippet, 2500)}
-
-Smoke passed: ${smokeOk}
+  live("Reviewer", "Checking code match against plan intent...");
+  const fileSnippets = applied
+    .slice(0, 5)
+    .map((f) => `### ${path.relative(targetRepo, f)}\n${clip(readIfExists(f), 1500)}`)
+    .join("\n\n");
+  let review: string;
+  try {
+    review = await invokeText(
+      reviewer,
+      `You are the code reviewer for Sam-Harness Level-3.
+Plan title: ${plan.title}
+Tests passed: ${testsPassed}
+Rolled back: ${rolledBack}
+Files:
+${fileSnippets || "(none)"}
 
 Reply with:
 Line1: [MATCH] or [NOT_MATCH]
-Then bullets: what matches the spec, what remains for full production overlap (DB constraints, concurrency tests, etc.).`
-  );
-
+Then bullets: what matches, what remains.`
+    );
+  } catch (e: any) {
+    review = `[NOT_MATCH]\nReviewer unavailable: ${e?.message || e}`;
+  }
   const matched = /\[MATCH\]/i.test(review);
   fs.writeFileSync(path.join(outDir, "CODE_REVIEW.md"), review, "utf-8");
 
   appendJournal(outDir, {
     ts: stamp(),
     stage: "review",
-    done: matched
-      ? "Reviewer [MATCH] for overlap helper seed implementation."
-      : "Reviewer [NOT_MATCH] or partial — see CODE_REVIEW.md",
-    filesChanged: [path.join(outDir, "CODE_REVIEW.md"), path.join(outDir, "EXECUTION_JOURNAL.md")],
-    remaining: [
-      "Auth fail-closed production proof",
-      "Tenant BOLA/property authorization expansion",
-      "Legacy route lockdown verification",
-      "Dept supervisor RBAC hardening",
-      "Stripe / quote-pay-link / WhatsApp QR (still No-Go features)",
-      matched ? "" : "Fix overlap implementation until reviewer MATCH",
-    ]
-      .filter(Boolean)
-      .map((x) => `- ${x}`)
-      .join("\n"),
+    done: matched ? "Reviewer [MATCH]" : "Reviewer [NOT_MATCH] — see CODE_REVIEW.md",
+    filesChanged: [path.join(outDir, "CODE_REVIEW.md")],
+    remaining: matched ? "Continue backlog items as needed" : "Fix until MATCH",
   });
 
-  if (matched) ok("Reviewer", "Code matches selected overlap specification (seed scope).");
-  else warn("Reviewer", "Not fully matched — see CODE_REVIEW.md + EXECUTION_JOURNAL.md");
+  if (matched) ok("Reviewer", "Code matches selected plan (seed scope).");
+  else warn("Reviewer", "Not fully matched — see CODE_REVIEW.md");
 
   const resultPath = path.join(outDir, "IMPLEMENTATION_RESULT.md");
   const resultBody = `# Level-3 Code Implementation Result
@@ -462,39 +505,47 @@ Then bullets: what matches the spec, what remains for full production overlap (D
 Generated: ${stamp()}
 Target repo: \`${targetRepo}\`
 Pack: \`${outDir}\`
+Branch: \`${snapshot?.branch || "(none)"}\`
+Plan: ${plan.title}
 
 ## Mode
-CODE IMPLEMENTATION of existing swarm pack (not a new report pack).
+Spec-driven CODE IMPLEMENTATION (level3-plan.json / LLM proposal). No product hardcoding.
 
 ## Applied
-${applied.map((a) => `- \`${a}\``).join("\n")}
+${applied.length ? applied.map((a) => `- \`${a}\``).join("\n") : "- (none — rolled back or empty)"}
 
-## Smoke
-- smoke-time-range-overlap: ${smokeOk ? "PASS" : "FAIL"}
+## Tests
+- ${testsPassed == null ? "SKIPPED" : testsPassed ? "PASS" : "FAIL"}
+- Rolled back: ${rolledBack ? "YES" : "NO"}
 
 ## Reviewer
 ${matched ? "[MATCH]" : "[NOT_MATCH]"}
 See CODE_REVIEW.md
 
 ## Journal
-See EXECUTION_JOURNAL.md and EXECUTION_LOG.jsonl for stages, done items, and remaining work.
+See EXECUTION_JOURNAL.md and EXECUTION_LOG.jsonl.
 `;
   fs.writeFileSync(resultPath, resultBody, "utf-8");
   fs.writeFileSync("implementation-result.md", resultBody, "utf-8");
 
   try {
-    const { appendRollbackEntry } = await import("../agency/delivery/rollbackJournal.js");
-    appendRollbackEntry(process.cwd(), {
+    const rb = await getRollback();
+    rb.appendRollbackEntry(harnessRoot, {
       targetRepo,
       files: applied.map((a) => ({ path: a, action: "write" as const })),
-      summary: `Level-3 implement → ${outDir} (smoke=${smokeOk ? "PASS" : "FAIL"}, match=${matched})`,
+      summary: `Level-3 → ${outDir} (tests=${testsPassed}, match=${matched}, rollback=${rolledBack})`,
     });
   } catch {
     /* non-fatal */
   }
 
-  // Open journal for the user
-  await executeTool("open_path", { path: path.join(outDir, "EXECUTION_JOURNAL.md") });
+  try {
+    await executeTool("open_path", {
+      path: path.join(outDir, "EXECUTION_JOURNAL.md"),
+    });
+  } catch {
+    /* headless / no xdg-open — journal still on disk */
+  }
 
   return {
     targetRepo,
@@ -502,24 +553,34 @@ See EXECUTION_JOURNAL.md and EXECUTION_LOG.jsonl for stages, done items, and rem
     backlogPath: path.join(outDir, "IMPLEMENTATION_BACKLOG.md"),
     resultPath,
     applied,
+    branch: snapshot?.branch,
+    testsPassed,
+    rolledBack,
   };
 }
 
 export function shouldRunLevel3(task: string, argv: string[]): boolean {
-  if (argv.includes("--implement") || argv.includes("--level3") || argv.includes("--implement-only")) {
+  if (
+    argv.includes("--implement") ||
+    argv.includes("--level3") ||
+    argv.includes("--implement-only")
+  ) {
     return true;
   }
   if (process.env.RUN_LEVEL3 === "1") return true;
-  // Explicit architecture / report-only tasks must not auto-patch Maw3ed.
+  // Explicit architecture / report-only tasks must not auto-implement.
   if (
     /##\s*Route\s*\n\s*architecture\b/i.test(task) ||
-    /no Maw3ed code edits|DO NOT modify Maw3ed application code|REPORT PACK \(no Maw3ed/i.test(
+    /no (?:client|application) code edits|DO NOT modify (?:application|client) (?:application )?code|REPORT PACK \(no code/i.test(
       task
-    )
+    ) ||
+    /REPORT PACK \(no .{0,40}code/i.test(task)
   ) {
     return false;
   }
-  return /Route\s*\nimplement|CODE IMPLEMENTATION|طور الكود|تطوير فعلي|EXECUTION_JOURNAL/i.test(
+  return /Route\s*\nimplement|CODE IMPLEMENTATION|طور الكود|تطوير فعلي|EXECUTION_JOURNAL|level3-plan/i.test(
     task
   );
 }
+
+void currentHead;

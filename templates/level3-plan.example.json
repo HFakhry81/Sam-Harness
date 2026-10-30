@@ -1,0 +1,14 @@
+{
+  "title": "Example Level-3 change set",
+  "branchPrefix": "sam-harness/l3",
+  "writes": [
+    {
+      "path": "scripts/smoke-example.js",
+      "content": "console.log('smoke-example: OK');\n"
+    }
+  ],
+  "patches": [],
+  "testCommand": "node",
+  "testArgs": ["scripts/smoke-example.js"],
+  "notes": "Copy to the review pack as level3-plan.json. No product-specific hardcoding in harness source."
+}

@@ -1,5 +1,5 @@
 /**
- * P10 — Rollback journal for Level-3 file writes under target repos.
+ * P10 — Rollback journal for Level-3 file writes + git branch/commit snapshots.
  */
 import * as fs from "fs";
 import * as path from "path";
@@ -10,9 +10,13 @@ export type RollbackEntry = {
   at: string;
   targetRepo: string;
   filePath: string;
-  action: "write" | "restore";
+  action: "write" | "restore" | "git-snapshot";
   backupPath?: string;
   note?: string;
+  branch?: string;
+  baseRef?: string;
+  headBefore?: string;
+  commitAfter?: string;
 };
 
 export type RollbackStore = { entries: RollbackEntry[] };
@@ -123,6 +127,37 @@ export function restoreRollback(harnessRoot: string, id: string): RollbackEntry 
     note: `Restored from ${src.id}`,
   };
   store.entries.unshift(entry);
+  save(harnessRoot, store);
+  return entry;
+}
+
+/** Record a git branch/commit snapshot for Level-3 (survives in rollback-journal.json). */
+export function recordGitSnapshot(
+  harnessRoot: string,
+  opts: {
+    targetRepo: string;
+    branch: string;
+    baseRef: string;
+    headBefore: string;
+    commitAfter?: string;
+    note?: string;
+  }
+): RollbackEntry {
+  const entry: RollbackEntry = {
+    id: `rb-git-${crypto.randomBytes(4).toString("hex")}`,
+    at: new Date().toISOString(),
+    targetRepo: opts.targetRepo,
+    filePath: opts.targetRepo,
+    action: "git-snapshot",
+    branch: opts.branch,
+    baseRef: opts.baseRef,
+    headBefore: opts.headBefore,
+    commitAfter: opts.commitAfter,
+    note: opts.note,
+  };
+  const store = load(harnessRoot);
+  store.entries.unshift(entry);
+  if (store.entries.length > 200) store.entries.length = 200;
   save(harnessRoot, store);
   return entry;
 }

@@ -14,6 +14,8 @@ UI: http://127.0.0.1:8787/ (owner token required — see `.controlplane-token` o
 
 Filesystem tools use a **desktop-controller** sandbox: normal user environment (home, Desktop/Documents/Downloads, accessible drives) with a DENY list for OS/credential paths. Optional `WORKSPACE_ROOTS` restricts; `WORKSPACE_DENY` extends denies. Agent-generated packs/reports land under `~/Documents/Sam-Harness` (`SAM_OUTPUT_HOME`). Daily cloud cap defaults to **$0.50** (`$0` forbids cloud).
 
+**Phase 2:** generic Level-3 (`level3-plan.json`), MCP client (`mcp.json`), `run_node_sandbox`, real email (SMTP/Resend or dry-run), Daily Ops cron scheduler.
+
 ## Layout
 
 | Path | Role |
@@ -23,6 +25,7 @@ Filesystem tools use a **desktop-controller** sandbox: normal user environment (
 | `docs/` | Product docs + archived packs `Sam-Harness no.X` |
 | `Tools/` | Windows install / update / start scripts |
 | `templates/` | Seed `task.ts` for first run |
+| `mcp.example.json` | Example MCP server config (copy to `mcp.json`) |
 | `SamHarness.bat` | Main launcher menu |
 
 ## Checks
@@ -30,15 +33,17 @@ Filesystem tools use a **desktop-controller** sandbox: normal user environment (
 ```bat
 pnpm typecheck
 pnpm test
+pnpm run smoke
 pnpm run smoke:prod-gates
 ```
 
 ## Env
 
-Copy `.env.example` → `.env`. Never commit `.env`, `.controlplane-token`, or `cost-ledger.json`.
+Copy `.env.example` → `.env`. Never commit `.env`, `.controlplane-token`, `mcp.json` (if it has secrets), or `cost-ledger.json`.
 
 ## Docs
 
 - `docs/AGENCY_PLATFORM_ROADMAP.md`
 - `docs/PRODUCTION_HARDENING_P0.md`
 - `docs/AGENCY_OPS.md`
+- `docs/engagements/EXAMPLE-CLIENT.md`
