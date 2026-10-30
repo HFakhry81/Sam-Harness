@@ -25,7 +25,7 @@
 | Evidence / citations | ✅ P2 أساسي | Evals + رفض آلي للهلوسة |
 | Delivery / tickets | ✅ P3 | لوحة حية + إشعارات |
 | Safe tool use | ✅ P4 جزئي | سياسات أدق + موافقات متعددة المستويات |
-| Desktop / daily ops | ⚠️ L1 محدود | مشغّل يومي قوي ضمن allowlist |
+| Desktop / daily ops | ✅ Phase 4 UIA operator | توسيع Excel/Word COM + evals ≥20 |
 | Email / calendar / results | ✅ إيميل (SMTP/Resend/dry-run) · تقويم لاحقاً | موصلات أوسع + تقويم |
 | Control plane UI | ✅ P5 + UI refresh | صقل بصري + أقسام المنصة |
 | Multi-client hybrid | ✅ P8 أساسي | بروفايل local/cloud/auto + سقف تكلفة |
@@ -75,9 +75,10 @@
 - [x] P9 Memory — `project-memory.json` + UI (+ existing task-spec evals)
 - [x] P10 Rollback journal — file backups + git-snapshot entries from Level-3
 - [x] Phase 3 — SQLite (`node:sqlite`) + optional Postgres, LangGraph checkpointer, durable runs, tenant groundwork, pino/OTel/`/healthz`, timeline UI; `EMAIL_PROVIDER=smtp` default (see `docs/PHASE3_PRODUCTION_OPS.md`)
+- [x] Phase 4 — Windows desktop operator: UIA-first (`src/tools/desktop/`), verify-after-act, approvals, dry-run, kill switch, timeline screenshots; macOS/Linux stubs; Notepad CI on `windows-latest` (see `docs/PHASE4_DESKTOP_OPERATOR.md`)
 
-**Test-ready today:** Control Plane + agency packs + `pnpm test` + smokes + `/healthz`.  
-**Next (Phase 4+):** Windows desktop operator, near-zero cost routing, trust packs, Arabic-first distribution.
+**Test-ready today:** Control Plane + agency packs + `pnpm test` + smokes + `/healthz` + desktop mock + Windows Notepad integration.  
+**Next (Phase 5+):** Near-zero cost routing, trust packs, Arabic-first distribution.
 
 ## Success metrics (منافسة حقيقية)
 - تكلفة توكن لكل تقرير ناجح → أقرب ما يكون للصفر عبر المحلي.

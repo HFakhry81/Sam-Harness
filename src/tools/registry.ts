@@ -406,12 +406,23 @@ Available tools (ONE JSON — follow USER GOAL verbs; paths work on Windows/macO
 9) screenshot   { "filename":"capture.png" }  // ONLY if Goal asks
 10) run_node_sandbox { "code":"console.log(1+1)" }  // isolated Node REPL (timeout/memory; optional Docker)
 11) mcp_call    { "server":"name", "tool":"toolName", "arguments":{...} }  // from mcp.json
-12) finish       { "summary":"...", "success":true|false }
+12) Desktop operator (Windows UIA-first; macOS/Linux stubbed):
+    desktop_list_windows / desktop_focus_window / desktop_launch_app / desktop_close_window
+    desktop_uia_tree / desktop_uia_find / desktop_uia_invoke / desktop_uia_set_value
+    desktop_type_text / desktop_key / desktop_click / desktop_move_mouse
+    desktop_clipboard_get / desktop_clipboard_set / desktop_file_dialog
+    desktop_screenshot / desktop_verify
+    open_media { "path":"Videos/clip.mp4" }  // play with default app
+    ffmpeg { "args":["-i","in.mp4","-t","10","out.mp4"] }  // requires ffmpeg on PATH; approval if destructive
+13) finish       { "summary":"...", "success":true|false }
 
 Rules:
 - انقل/move → move_file. اعمل مجلد → mkdir. احذف → delete_path with confirm:true (role matrix + confirm; required outside agent workspace).
 - Agent-generated reports/docs default under Documents/Sam-Harness (SAM_OUTPUT_HOME): reports/, documents/, runs/.
 - تقرير/جرد ملفات Excel على محرك → run_shell Get-ChildItem أو list_dir ثم write_file تقرير نصي (.txt) — لا تستخدم write_excel.
+- Prefer desktop_uia_* over blind clicks when automating GUI apps; verify with desktop_verify.
+- Destructive/financial/sending desktop actions need approval (approved:true or APPROVE_DESKTOP=1).
+- Dry-run: dryRun:true or SAM_DESKTOP_DRY_RUN=1. Kill/pause: SAM_DESKTOP_PAUSED=1 or kill flag file.
 - Never delete without confirm:true. Never touch OS system folders, .ssh, browser profiles, or harness secrets.
 - MCP tools require mcp.json; sandboxed code never receives secret env vars.
 - Use real names from the Goal — do not copy catalog examples blindly.
@@ -466,6 +477,35 @@ export async function executeTool(
       );
     }
     return mcpCallTool(params, process.cwd());
+  }
+  // Phase 4 desktop operator tools
+  {
+    const { desktopToolToAction, runDesktopAction } = await import("./desktop/index.js");
+    const action = desktopToolToAction(name);
+    if (action) {
+      const result = await runDesktopAction({
+        action,
+        params,
+        dryRun: params.dryRun === true || params.dryRun === "true",
+        skipVerify: params.skipVerify === true || params.skipVerify === "true",
+        approved:
+          params.approved === true || params.approved === "true"
+            ? true
+            : typeof params.approved === "string"
+              ? params.approved
+              : undefined,
+        runId: typeof params.runId === "string" ? params.runId : undefined,
+        verify: Array.isArray(params.verify) ? (params.verify as any) : undefined,
+        verifyRetries:
+          params.verifyRetries != null ? Number(params.verifyRetries) : undefined,
+      });
+      return {
+        ok: result.ok,
+        tool: name,
+        message: result.message,
+        data: result,
+      };
+    }
   }
   const fn = TOOLS[name];
   if (!fn) {

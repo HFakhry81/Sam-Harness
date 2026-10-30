@@ -18,6 +18,8 @@ Filesystem tools use a **desktop-controller** sandbox: normal user environment (
 
 **Phase 3:** embedded SQLite persistence (optional `DATABASE_URL` Postgres), durable/resumable runs + LangGraph checkpointer, tenant isolation groundwork, pino + optional OpenTelemetry, run timeline UI, `/healthz`. Default `EMAIL_PROVIDER=smtp` (dry-run until SMTP_* set).
 
+**Phase 4:** Windows desktop operator — UI Automation (PowerShell/.NET) first with screenshot verify/vision fallback, window/input/clipboard/file-dialog tools, per-action approvals, dry-run, kill switch, run-timeline recording. macOS/Linux backends stubbed. See `docs/PHASE4_DESKTOP_OPERATOR.md`.
+
 ## Layout
 
 | Path | Role |
@@ -37,7 +39,10 @@ pnpm typecheck
 pnpm test
 pnpm run smoke
 pnpm run smoke:prod-gates
+pnpm run test:desktop:windows
 ```
+
+(`test:desktop:windows` is gated to Windows / CI `windows-latest` — drives Notepad via UIA.)
 
 ## Env
 
@@ -50,5 +55,6 @@ State defaults to SQLite under `SAM_OUTPUT_HOME/state/sam-harness.sqlite`. Set `
 - `docs/AGENCY_PLATFORM_ROADMAP.md`
 - `docs/PRODUCTION_HARDENING_P0.md`
 - `docs/PHASE3_PRODUCTION_OPS.md`
+- `docs/PHASE4_DESKTOP_OPERATOR.md`
 - `docs/AGENCY_OPS.md`
 - `docs/engagements/EXAMPLE-CLIENT.md`

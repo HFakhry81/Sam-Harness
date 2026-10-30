@@ -20,7 +20,26 @@ export type ToolName =
   | "mcp_call"
   | "finish"
   | "scan_evidence"
-  | "write_report";
+  | "write_report"
+  | "desktop_list_windows"
+  | "desktop_focus_window"
+  | "desktop_launch_app"
+  | "desktop_close_window"
+  | "desktop_uia_tree"
+  | "desktop_uia_find"
+  | "desktop_uia_invoke"
+  | "desktop_uia_set_value"
+  | "desktop_type_text"
+  | "desktop_key"
+  | "desktop_click"
+  | "desktop_move_mouse"
+  | "desktop_clipboard_get"
+  | "desktop_clipboard_set"
+  | "desktop_file_dialog"
+  | "desktop_screenshot"
+  | "desktop_verify"
+  | "open_media"
+  | "ffmpeg";
 
 export type CapabilityTier = "none" | "read" | "ops_safe" | "write_workspace" | "implement";
 
@@ -34,6 +53,29 @@ export type RoleCapabilities = {
 
 const READ_TOOLS: ToolName[] = ["list_dir", "read_file", "finish", "scan_evidence"];
 const REPORT_TOOLS: ToolName[] = [...READ_TOOLS, "write_report"];
+/** Phase 4 desktop operator tools (UIA / input / media) — still gated by approval matrix. */
+const DESKTOP_TOOLS: ToolName[] = [
+  "desktop_list_windows",
+  "desktop_focus_window",
+  "desktop_launch_app",
+  "desktop_close_window",
+  "desktop_uia_tree",
+  "desktop_uia_find",
+  "desktop_uia_invoke",
+  "desktop_uia_set_value",
+  "desktop_type_text",
+  "desktop_key",
+  "desktop_click",
+  "desktop_move_mouse",
+  "desktop_clipboard_get",
+  "desktop_clipboard_set",
+  "desktop_file_dialog",
+  "desktop_screenshot",
+  "desktop_verify",
+  "open_media",
+  "ffmpeg",
+];
+
 /** Desktop operator: create/edit/delete inside allowlisted roots (delete needs confirm:true) */
 const OPS_TOOLS: ToolName[] = [
   ...READ_TOOLS,
@@ -48,6 +90,7 @@ const OPS_TOOLS: ToolName[] = [
   "run_shell",
   "run_node_sandbox",
   "mcp_call",
+  ...DESKTOP_TOOLS,
 ];
 const WRITE_TOOLS: ToolName[] = [...OPS_TOOLS, "write_report"];
 
@@ -132,6 +175,9 @@ export const OPERATOR_CAPABILITIES: RoleCapabilities = {
     "Blocked: OS system folders (Windows/Program Files, /etc, /System, …)",
     "Shell: dir/type/echo/where/Get-* only",
     "run_node_sandbox + mcp_call gated by this matrix (and cost cap for cloud)",
+    "Desktop UIA/input: destructive/financial/sending actions need approval (APPROVE_DESKTOP=1 or UI)",
+    "Kill switch: SAM_DESKTOP_PAUSED / ~/.sam-harness-desktop-kill / Ctrl+Shift+Alt+K (Windows watcher)",
+    "Dry-run: SAM_DESKTOP_DRY_RUN=1 or dryRun:true — plan only, no side effects",
   ],
 };
 
