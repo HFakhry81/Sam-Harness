@@ -961,6 +961,66 @@ const server = http.createServer(async (req, res) => {
       return;
     }
 
+    // —— Desktop operator (Phase 4) ——
+    if (method === "GET" && p === "/api/desktop/status") {
+      const {
+        readKillSwitchState,
+        isDesktopDryRun,
+        getDesktopBackend,
+      } = await import("../tools/desktop/index.js");
+      const backend = getDesktopBackend();
+      sendJson(res, 200, {
+        ok: true,
+        platform: process.platform,
+        backend: { name: backend.name, platform: backend.platform },
+        dryRun: isDesktopDryRun(),
+        killSwitch: readKillSwitchState(),
+        approveDesktop: String(process.env.APPROVE_DESKTOP || "").trim() === "1",
+      });
+      return;
+    }
+    if (method === "POST" && p === "/api/desktop/pause") {
+      const body = JSON.parse((await readBody(req)) || "{}") as {
+        pause?: boolean;
+        kill?: boolean;
+        reason?: string;
+      };
+      const { pauseDesktop, resumeDesktop, killDesktop, readKillSwitchState } =
+        await import("../tools/desktop/index.js");
+      if (body.kill) killDesktop(body.reason || "api kill");
+      else if (body.pause === false) resumeDesktop();
+      else pauseDesktop(body.reason || "api pause");
+      sendJson(res, 200, { ok: true, killSwitch: readKillSwitchState() });
+      return;
+    }
+    if (method === "GET" && p === "/api/desktop/approvals") {
+      const { runsRepo, getDriver: gd } = await import("../lib/db/index.js");
+      const rows = runsRepo.listApprovals(gd(), getActiveTenantId());
+      sendJson(res, 200, {
+        ok: true,
+        approvals: rows.filter((r) => r.kind.startsWith("desktop:")),
+      });
+      return;
+    }
+    if (method === "POST" && p === "/api/desktop/approvals") {
+      const body = JSON.parse((await readBody(req)) || "{}") as {
+        id?: string;
+        approve?: boolean;
+      };
+      if (!body.id) {
+        sendJson(res, 400, { ok: false, error: "id required" });
+        return;
+      }
+      const { approveDesktopAction } = await import("../tools/desktop/index.js");
+      const record = approveDesktopAction(body.id, body.approve !== false);
+      if (!record) {
+        sendJson(res, 404, { ok: false, error: "approval not found" });
+        return;
+      }
+      sendJson(res, 200, { ok: true, approval: record });
+      return;
+    }
+
     if (method === "POST" && p === "/api/db/backup") {
       const pers = getPersistence();
       const result = backupSqlite(pers.driver, {

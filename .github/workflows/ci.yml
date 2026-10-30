@@ -2,9 +2,9 @@ name: CI
 
 on:
   push:
-    branches: [main]
+    branches: [main, staging]
   pull_request:
-    branches: [main]
+    branches: [main, staging]
 
 concurrency:
   group: ci-${{ github.workflow }}-${{ github.ref }}
@@ -47,3 +47,11 @@ jobs:
 
       - name: Production eval gates
         run: pnpm run smoke:prod-gates
+
+      # Phase 4 — real UI Automation against Notepad (windows-latest only)
+      - name: Desktop Windows integration (Notepad)
+        if: runner.os == 'Windows'
+        run: pnpm run test:desktop:windows
+        env:
+          APPROVE_DESKTOP: "1"
+          SAM_DESKTOP_RECORD_SHOTS: "0"

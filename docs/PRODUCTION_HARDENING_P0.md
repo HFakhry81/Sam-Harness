@@ -59,9 +59,14 @@ typecheck + Vitest + CI (ubuntu/windows) + smokes محمولة.
 4. pino + OTel اختياري + مقاييس + خط زمني في UI + `/healthz`.
 5. `EMAIL_PROVIDER=smtp` افتراضياً (dry-run حتى ضبط SMTP).
 
-### بعد Phase 3 (Phase 4+)
-- موافقة بشرية موسّعة على أفعال مدمرة (الحذف خارج مساحة الوكيل ما زال عبر confirm + مصفوفة الأدوار).
-- مشغّل سطح مكتب Windows، تكلفة شبه صفرية، بوابات ثقة، توزيع عربي.
+### Phase 4 — مشغّل سطح مكتب Windows ✅
+1. UI Automation أولاً (PowerShell/.NET) مع لقطات تحقق/vision fallback.
+2. نوافذ، لوحة مفاتيح/فأرة، حوارات ملفات، حافظة، `open_media` / `ffmpeg`.
+3. موافقة لكل فعل destructive/financial/sending؛ dry-run؛ kill switch؛ تسجيل timeline.
+4. اختبارات mock على كل OS + تكامل Notepad على `windows-latest`.
+
+### بعد Phase 4 (Phase 5+)
+- تكلفة شبه صفرية، بوابات ثقة قابلة للإثبات، توزيع عربي أولاً.
 
 ## قرارات المالك (مُثبَّتة في هذا الفرع)
 
