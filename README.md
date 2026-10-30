@@ -12,7 +12,7 @@ Hybrid AI agency for Windows: **Control Plane UI** + **LangGraph review** + **de
 
 UI: http://127.0.0.1:8787/ (owner token required — see `.controlplane-token` or `CONTROL_PLANE_TOKEN`)
 
-Filesystem tools are sandboxed to `process.cwd()` plus `WORKSPACE_ROOTS` / `workspace-roots.json` (deny-by-default). Daily cloud spend is enforced via `costCapUsd` in the Hybrid UI.
+Filesystem tools use a **desktop-controller** sandbox: normal user environment (home, Desktop/Documents/Downloads, accessible drives) with a DENY list for OS/credential paths. Optional `WORKSPACE_ROOTS` restricts; `WORKSPACE_DENY` extends denies. Agent-generated packs/reports land under `~/Documents/Sam-Harness` (`SAM_OUTPUT_HOME`). Daily cloud cap defaults to **$0.50** (`$0` forbids cloud).
 
 ## Layout
 

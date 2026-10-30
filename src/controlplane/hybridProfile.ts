@@ -18,9 +18,12 @@ export type HybridProfile = {
 
 const FILE = "hybrid-profile.json";
 
+/** Minimum practical non-zero daily cloud budget. $0 still means forbid cloud. */
+export const DEFAULT_COST_CAP_USD = 0.5;
+
 const DEFAULT: HybridProfile = {
   mode: "auto",
-  costCapUsd: 2,
+  costCapUsd: DEFAULT_COST_CAP_USD,
   updatedAt: new Date().toISOString(),
   roles: {
     ceo_router: "local",

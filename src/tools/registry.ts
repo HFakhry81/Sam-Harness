@@ -394,7 +394,7 @@ async function runShellTool(params: Record<string, unknown>): Promise<ToolResult
 }
 
 export const TOOL_CATALOG = `
-Available tools (ONE JSON — follow USER GOAL verbs; paths work on Windows/macOS/Linux allowlist):
+Available tools (ONE JSON — follow USER GOAL verbs; paths work on Windows/macOS/Linux user environment):
 1) move_file    { "source":"Desktop/file.xls", "destination":"D:/file.xls" }
 2) copy_file    { "source":"...", "destination":"..." }
 3) write_file   { "path":"Desktop/note.txt", "content":"..." }   // create or update
@@ -407,9 +407,10 @@ Available tools (ONE JSON — follow USER GOAL verbs; paths work on Windows/macO
 10) finish       { "summary":"...", "success":true|false }
 
 Rules:
-- انقل/move → move_file. اعمل مجلد → mkdir. احذف → delete_path with confirm:true.
+- انقل/move → move_file. اعمل مجلد → mkdir. احذف → delete_path with confirm:true (role matrix + confirm; required outside agent workspace).
+- Agent-generated reports/docs default under Documents/Sam-Harness (SAM_OUTPUT_HOME): reports/, documents/, runs/.
 - تقرير/جرد ملفات Excel على محرك → run_shell Get-ChildItem أو list_dir ثم write_file تقرير نصي (.txt) — لا تستخدم write_excel.
-- Never delete without confirm:true. Never touch OS system folders.
+- Never delete without confirm:true. Never touch OS system folders, .ssh, browser profiles, or harness secrets.
 - Use real names from the Goal — do not copy catalog examples blindly.
 `;
 

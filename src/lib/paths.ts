@@ -1,11 +1,14 @@
 /**
- * Explicit workspace-root sandbox for operator tools.
- * Deny-by-default: only cwd + WORKSPACE_ROOTS / workspace-roots.json.
- * Windows + POSIX paths; realpath/symlink escape checks.
+ * Desktop-controller filesystem sandbox.
+ * Default: allow normal user environment (home, user folders, accessible drives).
+ * Protected DENY list for OS / credentials / harness secrets.
+ * WORKSPACE_ROOTS (optional) restricts to an explicit allowlist.
+ * WORKSPACE_DENY extends the deny list.
  */
 import * as fs from "fs";
 import * as path from "path";
 import * as os from "os";
+import { getOutputHome } from "./outputHome.js";
 
 const CONFIG_FILE = "workspace-roots.json";
 
@@ -14,34 +17,63 @@ function homeDir(): string {
 }
 
 function desktopDir(): string {
-  const home = homeDir();
-  if (process.platform === "darwin") {
-    return path.join(home, "Desktop");
-  }
-  return path.join(home, "Desktop");
+  return path.join(homeDir(), "Desktop");
 }
 
-const DENY_PREFIXES = [
-  path.normalize("C:\\Windows"),
-  path.normalize("C:\\Program Files"),
-  path.normalize("C:\\Program Files (x86)"),
-  path.normalize("C:\\ProgramData"),
-  path.normalize("/etc"),
-  path.normalize("/bin"),
-  path.normalize("/sbin"),
-  path.normalize("/usr"),
-  path.normalize("/System"),
-  path.normalize("/Library"),
-  path.normalize("/private/etc"),
-  path.normalize("/boot"),
-  path.normalize("/dev"),
-  path.normalize("/proc"),
-  path.normalize("/sys"),
-  path.normalize("/root"),
-].map((p) => p.toLowerCase());
+/** Built-in sensitive / system locations — always denied. */
+function builtinDenyPrefixes(): string[] {
+  const home = homeDir();
+  const list = [
+    // Windows OS
+    "C:\\Windows",
+    "C:\\Program Files",
+    "C:\\Program Files (x86)",
+    "C:\\ProgramData",
+    "C:\\Recovery",
+    "C:\\$Recycle.Bin",
+    "C:\\System Volume Information",
+    // Unix / macOS critical
+    "/etc",
+    "/bin",
+    "/sbin",
+    "/usr",
+    "/System",
+    "/Library",
+    "/private/etc",
+    "/private/var/db",
+    "/boot",
+    "/dev",
+    "/proc",
+    "/sys",
+    "/root",
+    // Credential / secret stores (home-relative)
+    path.join(home, ".ssh"),
+    path.join(home, ".gnupg"),
+    path.join(home, ".aws"),
+    path.join(home, ".azure"),
+    path.join(home, ".config", "gcloud"),
+    path.join(home, ".config", "gh"),
+    path.join(home, ".docker"),
+    path.join(home, ".kube"),
+    path.join(home, ".netrc"),
+    path.join(home, ".npmrc"),
+    // Browser profiles / credential DBs
+    path.join(home, "AppData", "Local", "Google", "Chrome", "User Data"),
+    path.join(home, "AppData", "Local", "Microsoft", "Edge", "User Data"),
+    path.join(home, "AppData", "Roaming", "Mozilla", "Firefox", "Profiles"),
+    path.join(home, "Library", "Application Support", "Google", "Chrome"),
+    path.join(home, "Library", "Application Support", "Firefox", "Profiles"),
+    path.join(home, ".config", "google-chrome"),
+    path.join(home, ".mozilla", "firefox"),
+    path.join(home, "Library", "Keychains"),
+    path.join(home, "AppData", "Roaming", "Microsoft", "Credentials"),
+    path.join(home, "AppData", "Local", "Microsoft", "Credentials"),
+  ];
+  return list.map((p) => path.normalize(p).toLowerCase());
+}
 
 /**
- * Env allowlist split: prefer `;` and newlines (Windows-safe for `D:\...`).
+ * Env path list: prefer `;` and newlines (Windows-safe for `D:\...`).
  * Also accepts `path.delimiter` when no `;` is present.
  */
 export function parseWorkspaceRootsEnv(raw: string | undefined): string[] {
@@ -62,20 +94,28 @@ export function parseWorkspaceRootsEnv(raw: string | undefined): string[] {
   return [text];
 }
 
-function readConfigRoots(cwd: string): string[] {
+export const parseWorkspaceDenyEnv = parseWorkspaceRootsEnv;
+
+type WorkspaceConfig = {
+  roots?: unknown;
+  workspaceRoots?: unknown;
+  deny?: unknown;
+  workspaceDeny?: unknown;
+};
+
+function readWorkspaceConfig(cwd: string): WorkspaceConfig {
   const p = path.join(cwd, CONFIG_FILE);
   try {
-    if (!fs.existsSync(p)) return [];
-    const raw = JSON.parse(fs.readFileSync(p, "utf-8")) as {
-      roots?: unknown;
-      workspaceRoots?: unknown;
-    };
-    const list = raw.roots ?? raw.workspaceRoots;
-    if (!Array.isArray(list)) return [];
-    return list.map((x) => String(x).trim()).filter(Boolean);
+    if (!fs.existsSync(p)) return {};
+    return JSON.parse(fs.readFileSync(p, "utf-8")) as WorkspaceConfig;
   } catch {
-    return [];
+    return {};
   }
+}
+
+function configList(raw: unknown): string[] {
+  if (!Array.isArray(raw)) return [];
+  return raw.map((x) => String(x).trim()).filter(Boolean);
 }
 
 function normalizeRoot(raw: string): string {
@@ -89,23 +129,98 @@ function normalizeRoot(raw: string): string {
   return path.normalize(path.resolve(cleaned));
 }
 
+/** Existing Windows drive roots (A:\ … Z:\). */
+export function listWindowsDriveRoots(): string[] {
+  if (process.platform !== "win32") return [];
+  const drives: string[] = [];
+  for (let code = 65; code <= 90; code++) {
+    const root = `${String.fromCharCode(code)}:\\`;
+    try {
+      if (fs.existsSync(root)) drives.push(path.normalize(root));
+    } catch {
+      /* ignore */
+    }
+  }
+  return drives;
+}
+
 /**
- * Explicit allowlist roots. Always includes process.cwd().
- * Extra roots from WORKSPACE_ROOTS env and workspace-roots.json only.
- * Whole-drive D:\\ / E:\\ are NOT included unless explicitly configured.
+ * Default allowlist: normal user environment (desktop-controller style).
+ * When WORKSPACE_ROOTS / config.roots is set, that list *restricts* access
+ * (plus cwd + output home so the agent can still operate).
  */
 export function userRoots(cwd: string = process.cwd()): string[] {
-  const roots = [
+  const cfg = readWorkspaceConfig(cwd);
+  const explicit = [
+    ...parseWorkspaceRootsEnv(process.env.WORKSPACE_ROOTS),
+    ...configList(cfg.roots ?? cfg.workspaceRoots),
+  ].map(normalizeRoot);
+
+  const always = [
     normalizeRoot(cwd),
-    ...parseWorkspaceRootsEnv(process.env.WORKSPACE_ROOTS).map(normalizeRoot),
-    ...readConfigRoots(cwd).map(normalizeRoot),
+    normalizeRoot(getOutputHome()),
   ];
-  return [...new Set(roots)];
+
+  if (explicit.length) {
+    return [...new Set([...always, ...explicit])];
+  }
+
+  const home = homeDir();
+  const defaults = [
+    ...always,
+    normalizeRoot(home),
+    normalizeRoot(desktopDir()),
+    normalizeRoot(path.join(home, "Documents")),
+    normalizeRoot(path.join(home, "Downloads")),
+    normalizeRoot(path.join(home, "Desktop")),
+  ];
+
+  if (process.platform === "win32") {
+    defaults.push(...listWindowsDriveRoots());
+  } else {
+    defaults.push(
+      normalizeRoot("/tmp"),
+      normalizeRoot(path.join(home, "tmp")),
+      normalizeRoot("/home"),
+      normalizeRoot("/media"),
+      normalizeRoot("/mnt"),
+      normalizeRoot("/Volumes")
+    );
+  }
+
+  return [...new Set(defaults)];
+}
+
+/** Effective deny prefixes (builtin + WORKSPACE_DENY + config + harness secrets). */
+export function denyPrefixes(cwd: string = process.cwd()): string[] {
+  const cfg = readWorkspaceConfig(cwd);
+  const extra = [
+    ...parseWorkspaceDenyEnv(process.env.WORKSPACE_DENY),
+    ...configList(cfg.deny ?? cfg.workspaceDeny),
+  ].map((p) => normalizeRoot(p).toLowerCase());
+
+  const harnessSecrets = [
+    path.join(cwd, ".controlplane-token"),
+    path.join(cwd, ".env"),
+    path.join(cwd, "cost-ledger.json"),
+    path.join(cwd, "hybrid-profile.json"),
+  ].map((p) => path.normalize(p).toLowerCase());
+
+  return [...new Set([...builtinDenyPrefixes(), ...extra, ...harnessSecrets])];
 }
 
 /** Public allowlist roots for Control Plane Operator panel. */
 export function listAllowlistRoots(cwd: string = process.cwd()): string[] {
   return userRoots(cwd);
+}
+
+/** True when path is under the harness project cwd or the agent output home. */
+export function isAgentWorkspace(absPath: string, cwd: string = process.cwd()): boolean {
+  const lower = path.normalize(absPath).toLowerCase();
+  return (
+    isUnderRoot(lower, cwd) ||
+    isUnderRoot(lower, getOutputHome())
+  );
 }
 
 /** Resolve Desktop / ~ / relative / absolute paths into a normalized absolute path. */
@@ -143,8 +258,8 @@ export function resolveUserPath(rawPath: string): string {
   return path.normalize(path.resolve(process.cwd(), cleaned));
 }
 
-function isDenied(normalizedLower: string): boolean {
-  for (const deny of DENY_PREFIXES) {
+function isDenied(normalizedLower: string, cwd: string): boolean {
+  for (const deny of denyPrefixes(cwd)) {
     if (
       normalizedLower === deny ||
       normalizedLower.startsWith(deny + path.sep) ||
@@ -170,11 +285,9 @@ function isUnderRoot(candidateLower: string, root: string): boolean {
 
 /**
  * Resolve symlinks / .. escapes: realpath of existing path, or deepest existing ancestor.
- * Rejects when the real path escapes the allowlist even if the lexical path looked allowed.
  */
 export function resolveSandboxPath(absPath: string): string {
   const normalized = path.normalize(absPath);
-  // Reject embedded nulls / alternate streams tricks lightly
   if (normalized.includes("\0")) {
     throw new Error(`Path blocked by safety policy: null byte`);
   }
@@ -197,15 +310,16 @@ export function resolveSandboxPath(absPath: string): string {
     realBase = path.normalize(probe);
   }
 
-  const rebuilt = segments.length ? path.normalize(path.join(realBase, ...segments)) : path.normalize(realBase);
-  return rebuilt;
+  return segments.length
+    ? path.normalize(path.join(realBase, ...segments))
+    : path.normalize(realBase);
 }
 
 export function assertAllowedPath(absPath: string, cwd: string = process.cwd()): void {
   const normalized = path.normalize(absPath);
   const lower = normalized.toLowerCase();
 
-  if (isDenied(lower)) {
+  if (isDenied(lower, cwd)) {
     throw new Error(`Path blocked by safety policy: ${normalized}`);
   }
 
@@ -214,16 +328,14 @@ export function assertAllowedPath(absPath: string, cwd: string = process.cwd()):
     throw new Error(`Refusing to target home directory root directly: ${normalized}`);
   }
 
-  // Lexical allowlist check first
   const roots = userRoots(cwd);
   const lexicallyAllowed = roots.some((root) => isUnderRoot(lower, root));
   if (!lexicallyAllowed) {
     throw new Error(
-      `Path outside allowlist (workspace roots only — set WORKSPACE_ROOTS or workspace-roots.json). Got: ${normalized}`
+      `Path outside allowlist (user environment / WORKSPACE_ROOTS). Got: ${normalized}`
     );
   }
 
-  // Symlink / realpath escape check
   let real: string;
   try {
     real = resolveSandboxPath(normalized);
@@ -231,11 +343,10 @@ export function assertAllowedPath(absPath: string, cwd: string = process.cwd()):
     throw new Error(e?.message || `Path sandbox resolve failed: ${normalized}`);
   }
   const realLower = real.toLowerCase();
-  if (isDenied(realLower)) {
+  if (isDenied(realLower, cwd)) {
     throw new Error(`Path blocked by safety policy (realpath): ${real}`);
   }
   const reallyAllowed = roots.some((root) => {
-    // Compare against realpath of root when possible
     let rootReal = root;
     try {
       if (fs.existsSync(root)) rootReal = fs.realpathSync(root);
@@ -253,7 +364,6 @@ export function assertAllowedPath(absPath: string, cwd: string = process.cwd()):
 
 /**
  * Extract filesystem path-like tokens from a shell command and assert each.
- * Used by run_shell so commands cannot target paths outside the sandbox.
  */
 export function assertShellCommandPathsAllowed(
   command: string,
@@ -261,14 +371,12 @@ export function assertShellCommandPathsAllowed(
 ): void {
   const paths: string[] = [];
 
-  // Quoted paths
   const quoted = command.match(/["']([^"']+)["']/g) || [];
   for (const q of quoted) {
     const inner = q.slice(1, -1).trim();
     if (looksLikeFsPath(inner)) paths.push(inner);
   }
 
-  // Windows drives / UNC-ish / absolute posix
   const bare =
     command.match(/(?:^|[\s=])((?:[A-Za-z]:\\|\\\\|\/)[^\s&|<>"']+)/g) || [];
   for (const m of bare) {
@@ -276,7 +384,6 @@ export function assertShellCommandPathsAllowed(
     if (looksLikeFsPath(p)) paths.push(p);
   }
 
-  // type/dir first argument
   const typeDir = command.match(/^(?:type|dir)\s+(\S+)/i);
   if (typeDir?.[1] && looksLikeFsPath(typeDir[1].replace(/^["']|["']$/g, ""))) {
     paths.push(typeDir[1].replace(/^["']|["']$/g, ""));
@@ -284,7 +391,6 @@ export function assertShellCommandPathsAllowed(
 
   const unique = [...new Set(paths)];
   for (const raw of unique) {
-    // Skip pure switches / wildcards-only that are not rooted
     if (/^-\w/.test(raw)) continue;
     try {
       const abs = resolveUserPath(raw);

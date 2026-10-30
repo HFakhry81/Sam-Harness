@@ -104,7 +104,8 @@ goto :run_agency
 :run_ui
 echo   ^>^> Control Plane UI  http://127.0.0.1:8787/
 echo   ^>^> Auth: paste owner token from .controlplane-token ^(or CONTROL_PLANE_TOKEN^)
-echo   ^>^> Sandbox: set WORKSPACE_ROOTS or workspace-roots.json for extra folders
+echo   ^>^> Sandbox: user drives/home allowed; WORKSPACE_ROOTS restricts; WORKSPACE_DENY extends
+echo   ^>^> Outputs: %%USERPROFILE%%\Documents\Sam-Harness  ^(or SAM_OUTPUT_HOME^)
 call pnpm run ui
 set "EXIT_CODE=!ERRORLEVEL!"
 goto :after_run

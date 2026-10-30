@@ -13,6 +13,15 @@ import {
 } from "./src/agent/level3Implement.js";
 import { getTaskMarkdown, taskConfig } from "./task.js";
 import { useOllamaCloudNow } from "./src/agent/models.js";
+import {
+  beginOutputRun,
+  cleanOutputTemp,
+  endOutputRun,
+  ensureOutputHome,
+  getOutputHome,
+  mirrorRunArtifacts,
+} from "./src/lib/outputHome.js";
+import { beginCostRun, endCostRun } from "./src/lib/costLedger.js";
 
 /** Default ON — LangGraph agency runtime. Set AGENCY_MODE=0 for legacy linear swarm. */
 function useAgencyRuntime(): boolean {
@@ -156,6 +165,14 @@ async function main() {
   const task = loadTask();
   const implementOnly = argv.includes("--implement-only");
 
+  const layout = ensureOutputHome();
+  cleanOutputTemp();
+  const runId = beginCostRun(process.env.SAM_HARNESS_RUN_ID);
+  const outputRun = beginOutputRun(runId);
+  process.env.SAM_OUTPUT_HOME = getOutputHome();
+  sys(`Output home → ${layout.home}`);
+  sys(`Run dir → ${outputRun.runDir}`);
+
   if (useOllamaCloudNow()) {
     sys("OLLAMA_API_KEY loaded — Level-2 specialists will use Ollama Cloud");
   } else {
@@ -284,9 +301,20 @@ async function main() {
     }
   }
 
+  try {
+    mirrorRunArtifacts(process.cwd());
+  } catch {
+    /* ignore */
+  }
+  endCostRun();
+  endOutputRun();
+
   console.log(`\n${colors.bright}================================================================${colors.reset}`);
   console.log(
     `${colors.cyan} L2 outputs: ceo-draft / audit / execution-plan / help / marketing / final-report${colors.reset}`
+  );
+  console.log(
+    `${colors.cyan} Packs (self): ${layout.reports} · Run: ${outputRun.runDir}${colors.reset}`
   );
   console.log(
     `${colors.cyan} L3 outputs: <repo>/docs/sam-harness/* + implementation-result.md${colors.reset}`
@@ -299,5 +327,12 @@ async function main() {
 main().catch(async (e) => {
   console.error(`${colors.red}[Error] Fatal:${colors.reset}`, e);
   process.exitCode = 1;
+  try {
+    mirrorRunArtifacts(process.cwd());
+  } catch {
+    /* ignore */
+  }
+  endCostRun();
+  endOutputRun();
   await pauseIfNeeded();
 });

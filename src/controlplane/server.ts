@@ -21,6 +21,14 @@ import { readTaskSpec } from "./taskSpec.js";
 import { listAllowlistRoots } from "../lib/paths.js";
 import { beginCostRun, endCostRun, getCostBudget } from "../lib/costLedger.js";
 import {
+  beginOutputRun,
+  cleanOutputTemp,
+  endOutputRun,
+  ensureOutputHome,
+  getOutputHome,
+  mirrorRunArtifacts,
+} from "../lib/outputHome.js";
+import {
   loadSession,
   readExecutionArtifacts,
   resetSession,
@@ -278,7 +286,13 @@ function appendLog(text: string) {
 }
 
 async function finalizeRun(mode: RunMode, exitCode: number | null) {
+  try {
+    mirrorRunArtifacts(ROOT);
+  } catch {
+    /* non-fatal */
+  }
   endCostRun();
+  endOutputRun();
   const endedAt = new Date().toISOString();
   if (lastRun) {
     lastRun.running = false;
@@ -545,6 +559,7 @@ async function handleRun(req: http.IncomingMessage, res: http.ServerResponse) {
   }
 
   const runId = beginCostRun();
+  const outputRun = beginOutputRun(runId);
   const { cmd, args, env } = runArgsForMode(mode);
   runLogBuffer = "";
   smokePending = mode === "smoke" ? 2 : 0;
@@ -554,11 +569,25 @@ async function handleRun(req: http.IncomingMessage, res: http.ServerResponse) {
     running: true,
     phase: "running",
   };
-  broadcast("run", { type: "start", ...lastRun, cmd, args, phase: "running", runId, cost: budget });
+  broadcast("run", {
+    type: "start",
+    ...lastRun,
+    cmd,
+    args,
+    phase: "running",
+    runId,
+    cost: budget,
+    outputDir: outputRun.runDir,
+  });
 
   const child = spawn(cmd, args, {
     cwd: ROOT,
-    env: { ...(env || process.env), SAM_HARNESS_RUN_ID: runId },
+    env: {
+      ...(env || process.env),
+      SAM_HARNESS_RUN_ID: runId,
+      SAM_RUN_DIR: outputRun.runDir,
+      SAM_OUTPUT_HOME: getOutputHome(),
+    },
     shell: true,
   });
   activeChild = child;
@@ -770,9 +799,12 @@ const server = http.createServer(async (req, res) => {
     }
     if (method === "GET" && p === "/api/operator-context") {
       const spec = readTaskSpec(ROOT);
+      const layout = ensureOutputHome();
       sendJson(res, 200, {
         ok: true,
         allowlistRoots: listAllowlistRoots(),
+        outputHome: layout.home,
+        outputLayout: layout,
         workspaceMode: spec?.workspaceMode || (spec?.route === "operational" ? "operator" : "code"),
         taskRoots: spec?.roots || [],
         planSteps: spec?.planSteps || [],
@@ -1024,10 +1056,23 @@ server.listen(PORT, "127.0.0.1", () => {
     process.env.CONTROL_PLANE_TOKEN?.trim()
       ? "CONTROL_PLANE_TOKEN (env)"
       : `.controlplane-token (${OWNER_TOKEN.slice(0, 8)}…)`;
+  try {
+    const layout = ensureOutputHome();
+    cleanOutputTemp();
+    console.log(`[Control Plane] Output home → ${layout.home}`);
+  } catch (e: any) {
+    console.warn(`[Control Plane] Output home init failed: ${e?.message || e}`);
+  }
   console.log(`[Control Plane] Sam-Harness UI → ${url}`);
   console.log(`[Control Plane] Project root → ${ROOT}`);
   console.log(`[Control Plane] Auth required — owner token: ${tokenHint}`);
-  console.log(`[Control Plane] Workspace roots: ${listAllowlistRoots(ROOT).join(" | ")}`);
+  console.log(
+    `[Control Plane] Workspace roots (${listAllowlistRoots(ROOT).length}): ` +
+      listAllowlistRoots(ROOT)
+        .slice(0, 8)
+        .join(" | ") +
+      (listAllowlistRoots(ROOT).length > 8 ? " | …" : "")
+  );
   console.log(`[Control Plane] Session ${session.id} · ${session.entries.length} prior entries`);
   if (process.platform === "win32" && process.env.CONTROL_PLANE_NO_BROWSER !== "1") {
     spawn("cmd", ["/c", "start", "", url], { detached: true, stdio: "ignore" }).unref();
