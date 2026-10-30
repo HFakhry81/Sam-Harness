@@ -1,6 +1,6 @@
 #!/usr/bin/env tsx
 /**
- * `pnpm run doctor` — local health / diagnostics (no network).
+ * `pnpm run doctor` - local health / diagnostics (no network).
  */
 import { formatDoctorReport, runDoctor } from "../src/lib/doctor/index.js";
 

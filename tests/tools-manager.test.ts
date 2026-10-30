@@ -2,7 +2,8 @@
  * Tools manager — syntax + action-list consistency (Ubuntu + Windows CI).
  * No network.
  * - Skips bash-dependent cases when no usable bash (e.g. Windows WSL stub).
- * - Asserts UTF-8 BOM on .ps1 so Windows PowerShell 5.1 can parse Arabic.
+ * - Asserts UTF-8 BOM on .ps1 (Windows PowerShell 5.1).
+ * - Asserts Tools console scripts are English-only (no Arabic script).
  */
 import { spawnSync } from "node:child_process";
 import * as fs from "node:fs";
@@ -147,15 +148,48 @@ describe("Tools manager", () => {
     expect(actions.length).toBeGreaterThanOrEqual(17);
   });
 
-  it("PowerShell scripts use UTF-8 BOM (required for Windows PowerShell 5.1 + Arabic)", () => {
+  it("PowerShell scripts use UTF-8 BOM (Windows PowerShell 5.1)", () => {
     const files = listPs1Files();
     expect(files.length).toBeGreaterThanOrEqual(4);
     for (const f of files) {
       expect(hasUtf8Bom(f), `missing UTF-8 BOM: ${f}`).toBe(true);
     }
     const manager = readUtf8(path.join(tools, "Sam-Harness-Manager.ps1"));
-    expect(manager).toContain("مدير");
-    expect(manager).toContain("القائمة الرئيسية");
+    const common = readUtf8(path.join(tools, "lib", "SamHarness.Common.ps1"));
+    expect(common).toContain("Sam-Harness Manager");
+    expect(manager).toContain("Main menu");
+  });
+
+  it("Tools console scripts are English-only (no Arabic script)", () => {
+    const arabic = /[\u0600-\u06FF]/;
+    const paths: string[] = [
+      ...listPs1Files(),
+      path.join(tools, "sam-harness-manager.sh"),
+      path.join(tools, "lib", "sam-harness-common.sh"),
+      path.join(tools, "Sam-Harness-Manager.cmd"),
+      ...[
+        "01-setup-prereqs",
+        "02-install-deps",
+        "03-update",
+        "04-build-check",
+        "05-start-ui",
+        "06-pull-ollama-models",
+      ].flatMap((n) => [
+        path.join(tools, `${n}.bat`),
+        path.join(tools, `${n}.sh`),
+      ]),
+      path.join(root, "scripts", "install", "install.sh"),
+      path.join(root, "scripts", "install", "install.cmd"),
+    ];
+    for (const f of paths) {
+      if (!fs.existsSync(f)) continue;
+      const body = readUtf8(f);
+      expect(body, `Arabic found in ${path.relative(root, f)}`).not.toMatch(arabic);
+    }
+    // Lang toggle removed
+    const manager = readUtf8(path.join(tools, "Sam-Harness-Manager.ps1"));
+    expect(manager).not.toMatch(/toggle language|__toggle_lang__/i);
+    expect(manager).toMatch(/Ignored \(English-only console/i);
   });
 
   it("PowerShell scripts do not assign to automatic variables (HOME/Args/Host/…)", () => {
@@ -416,7 +450,8 @@ describe("Tools manager", () => {
         { encoding: "utf8", cwd: root, windowsHide: true }
       );
       expect(r.status).not.toBe(0);
-      expect(r.stdout + r.stderr).toMatch(/Dirty working tree|غير نظيفة/i);
+      expect(r.stdout + r.stderr).toMatch(/Dirty working tree/i);
+      expect(r.stdout + r.stderr).not.toMatch(/[\u0600-\u06FF]/);
     } finally {
       fs.rmSync(marker, { force: true });
     }

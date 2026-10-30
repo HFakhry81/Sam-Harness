@@ -1,10 +1,10 @@
 # Tools — Sam-Harness Manager
 
-مدخل موحّد لإعداد وتشغيل وصيانة Sam-Harness على Windows وUbuntu/macOS.
+Unified entry point for setup, run, and maintenance of Sam-Harness on Windows and Ubuntu/macOS.
 
-**Unified entry point** for setup, run, and maintenance of Sam-Harness on Windows and Ubuntu/macOS.
+**Console output is English-only** (Windows PowerShell 5.1-safe). App locale (`SAM_LOCALE=ar`) is separate and unchanged.
 
-## Quick start / البداية السريعة
+## Quick start
 
 | Platform | Command |
 | --- | --- |
@@ -13,20 +13,19 @@
 | **Ubuntu / macOS** | `bash Tools/sam-harness-manager.sh` |
 | **pnpm** | `pnpm run tools` (Unix) · `pnpm run tools:win` (Windows) |
 
-القائمة تفاعلية بالأرقام، مع تبديل عربي/إنجليزي (`L`).  
-Interactive numbered menu with Arabic/English toggle (`L`).
+Interactive numbered menu. `-Lang` / `--lang` are accepted but ignored (backward compatible).
 
-### Non-interactive / غير تفاعلي
+### Non-interactive
 
 ```bat
-Tools\Sam-Harness-Manager.cmd -Action update -Lang en -NonInteractive
+Tools\Sam-Harness-Manager.cmd -Action update -NonInteractive
 ```
 
 ```bash
-bash Tools/sam-harness-manager.sh --action update --lang en --non-interactive
+bash Tools/sam-harness-manager.sh --action update --non-interactive
 ```
 
-## Menu actions / إجراءات القائمة
+## Menu actions
 
 | # | Action id | Purpose |
 | --- | --- | --- |
@@ -50,7 +49,7 @@ bash Tools/sam-harness-manager.sh --action update --lang en --non-interactive
 
 Canonical ids: `Tools/lib/actions.manifest`.
 
-## Legacy numbered scripts / السكربتات القديمة
+## Legacy numbered scripts
 
 Still work as thin wrappers around the manager:
 
@@ -65,8 +64,6 @@ Still work as thin wrappers around the manager:
 
 ## One-click install (Phase 7)
 
-Prefer the installer when bootstrapping a blank machine:
-
 ```bat
 scripts\install\install.cmd
 ```
@@ -75,14 +72,14 @@ scripts\install\install.cmd
 bash scripts/install/install.sh
 ```
 
-The manager `install` action **delegates** to those scripts (no duplicated logic).
+The manager `install` action **delegates** to those scripts (no duplicated logic). Installer console messages are English-only; app locale prompts still default to `ar` for `SAM_LOCALE`.
 
 ## Output & logs
 
 - Default output home: `~/Documents/Sam-Harness` (`SAM_OUTPUT_HOME`)
 - Manager logs: `$SAM_OUTPUT_HOME/logs/manager-*.log` (fallback `Tools/logs/`)
 - Colored tags: `[OK]` green · `[WARN]` yellow · `[FAIL]` red · `[INFO]` cyan
-- Windows: `chcp 65001` UTF-8 for Arabic; bash: ANSI colors when TTY
+- Windows: `chcp 65001`; `.ps1` files use UTF-8 with BOM for PowerShell 5.1
 
 ## Requirements
 
@@ -90,7 +87,7 @@ The manager `install` action **delegates** to those scripts (no duplicated logic
 - pnpm pinned via `packageManager` (`pnpm@11.23.0`) + Corepack  
 - Git  
 - Ollama optional (local models from `config/team.json`)  
-- **Windows PowerShell 5.1** is supported (no pwsh 7 required). All `Tools/**/*.ps1` and `scripts/install/*.ps1` are committed as **UTF-8 with BOM** so PS 5.1 does not mangle Arabic strings. Launchers run `chcp 65001`.
+- **Windows PowerShell 5.1** supported (no pwsh 7 required)
 
 After setup: `pnpm run doctor` then `pnpm run ui` (or menu item 6).
 
