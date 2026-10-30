@@ -88,7 +88,10 @@ jobs:
               throw "$Label hit PowerShell engine error"
             }
             if ($p.ExitCode -ne 0) { throw "$Label exit $($p.ExitCode)" }
-            if ($all -notmatch '\[OK\]') { throw "$Label produced no [OK] markers" }
+            # Success proof: summary exit=0 and/or at least one [OK] (help used to only print [INFO])
+            if ($all -notmatch 'exit=0' -and $all -notmatch '\[OK\]') {
+              throw "$Label missing success markers (need exit=0 summary or [OK])"
+            }
             if ($all -match '\[FAIL\].*exit System\.Object') { throw "$Label leaked Object[] into exit summary" }
             return $all
           }

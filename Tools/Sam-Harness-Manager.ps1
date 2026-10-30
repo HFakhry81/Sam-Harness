@@ -370,6 +370,11 @@ function Invoke-ActionHelp {
   if (-not (Test-SamCommand "pnpm")) { Write-SamFail "pnpm missing"; return 1 }
   $ec = Invoke-SamNative -FilePath "pnpm" -ArgumentList @("run", "help")
   Write-SamInfo (T -Ar "مدير الأدوات: Tools\Sam-Harness-Manager.cmd" -En "Tools manager: Tools\Sam-Harness-Manager.cmd")
+  if ($ec -eq 0) {
+    Write-SamOk (T -Ar "المساعدة عُرضت" -En "Help displayed")
+  } else {
+    Write-SamFail "help exit $ec"
+  }
   return $ec
 }
 
@@ -523,6 +528,7 @@ function Invoke-ActionViewLogs {
   }
   if ($found.Count -eq 0) {
     Write-SamWarn (T -Ar "لا توجد ملفات سجل" -En "No log files found")
+    Write-SamOk (T -Ar "عرض السجلات اكتمل (فارغ)" -En "view-logs complete (empty)")
     return 0
   }
   $top = $found | Select-Object -First 8
