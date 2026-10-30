@@ -79,9 +79,10 @@
 - [x] Phase 5 — Near-zero cost: difficulty routing (`src/lib/cost/`), SQLite prompt cache, context compaction, near-cap local degradation tied to $0.50 daily ledger (see `docs/PHASE5_NEAR_ZERO_COST.md`)
 - [x] Phase 6 — Verifiable gates & trust: step acceptance gates, HITL approvals, hash-chained `audit_log`, evidence bundles, `/api/trust/*` + `pnpm run trust:*` (see `docs/PHASE6_GATES_TRUST.md`)
 - [x] Phase 7 — Arabic-first i18n (RTL UI, locale env, agent/report Arabic) + one-click install (Windows/macOS/Linux) + `pnpm run doctor` (see `docs/PHASE7_ARABIC_INSTALL.md`)
+- [x] Phase 8 — Per-role models (`config/team.json`), live hybrid `roles`+`prefersCloud` routing (cap wins), Linux/macOS desktop backends, team CRUD API/UI + pipeline reorder (see `docs/PHASE8_TEAM_DESKTOP.md`)
 
-**Test-ready today:** Control Plane + agency packs + `pnpm test` + smokes + `/healthz` + desktop mock + Windows Notepad integration + near-zero cost + gates/trust + Arabic/install/doctor unit tests.  
-**Next (Phase 8+):** wider connectors / packaging polish.
+**Test-ready today:** Control Plane + agency packs + `pnpm test` + smokes + `/healthz` + desktop mock + Windows Notepad + Linux/macOS command builders + near-zero cost + gates/trust + Arabic/install/doctor + Phase 8 team/routing.  
+**Next (Phase 9+):** wider connectors / packaging polish.
 
 ## Success metrics (منافسة حقيقية)
 - تكلفة توكن لكل تقرير ناجح → أقرب ما يكون للصفر عبر المحلي.

@@ -6,9 +6,14 @@
 2. Else `HYBRID_MODE` from env if set (`local` | `cloud` | `auto`)  
 3. Else hybrid profile from DB / `hybrid-profile.json`  
 4. Default: `auto`  
-5. Then `resolveModelRoute` using difficulty, API key, remaining budget, and `SAM_COST_NEAR_CAP_RATIO`
+5. Then `resolveModelRoute` using:
+   - **cost cap / near-cap (always wins)**
+   - per-role hybrid map (`profile.roles[role]`)
+   - difficulty + `prefersCloud` from team config
+   - API key + remaining budget
+   - per-role models from `config/team.json` / `SAM_ROLE_*`
 
-The hybrid profile stores a per-role map (`ceo_router`→local, specialists→auto) but `cloudAllowedForRole` is **defined and unused** by live routing — routing is global + difficulty.
+Effective snapshot: `GET /api/routing/effective` or doctor check **Per-role routing**.
 
 ## Providers & base URLs
 
@@ -29,17 +34,17 @@ Wiring: `ChatOllama` from `@langchain/ollama` in `makeCeoModel` / `makeSpecialis
 
 ## Tools registry
 
-`src/tools/registry.ts` executes tools after `assertToolAllowed`. Includes: filesystem, Excel, allowlisted shell, `run_node_sandbox`, MCP, and `desktop_*`.
+`src/tools/registry.ts` executes tools after `assertToolAllowed`. Includes: filesystem, Excel, allowlisted shell (cross-platform), `run_node_sandbox`, MCP, and `desktop_*`.
 
 ## OS differences in wiring
 
 | Component | Ubuntu/Linux | Windows | macOS |
 | --- | --- | --- | --- |
 | Local Ollama on 11434 | if installed | if installed | if installed |
-| UIA operator | **stub — not implemented** | PowerShell/.NET UIA | **stub — not implemented** |
-| Simple `screenshot` tool | no | yes (GDI) | no |
+| Desktop operator | xdotool/wmctrl/ydotool + screenshots | PowerShell/.NET UIA | osascript + screencapture |
+| Simple `screenshot` tool | yes (grim/scrot/gnome-screenshot) | yes (GDI) | yes (`screencapture`) |
 | `open_path` | `xdg-open` | `start` | `open` |
-| `run_shell` | allowlist is Windows/PowerShell-oriented — limited on Unix | yes within allowlist | limited like Linux |
+| `run_shell` | bash allowlist | PowerShell/`Get-*` | bash allowlist |
 | One-click install | `scripts/install/install.sh` | `install.ps1` / `.cmd` | `install.sh` |
 | Database | SQLite default; optional Postgres via `DATABASE_URL` | same | same |
 

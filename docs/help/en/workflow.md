@@ -20,7 +20,7 @@ From `AGENCY_ROLES` — eleven roles:
 | `implementer` | Implementer | `EXECUTION_JOURNAL.md` (after GO only) |
 | `operator` | Desktop Operator | desktop tool results (L1 operational path) |
 
-> **Honest note:** `prefersCloud` exists on the contract but is **not consulted** by live routing. Real tool ACL lives in `ROLE_CAPABILITIES` / `OPERATOR_CAPABILITIES`.
+> **Phase 8:** `prefersCloud` and the hybrid profile `roles` map are consulted by live routing (cost cap still wins). Per-role models and downstream step order come from `config/team.json`. Real tool ACL lives in `ROLE_CAPABILITIES` / `OPERATOR_CAPABILITIES` (custom roles may declare tools).
 
 The agency `help` role writes a help **spec artifact** after auditor approval — that is **not** the same as this in-product Help system (`docs/help` + CLI/API/UI).
 
@@ -38,7 +38,7 @@ flowchart TD
   IN --> EV[Evidence Scout]
   EV --> RG[LangGraph Review ≤5]
   RG -->|rejected after 5| FAIL[FAILED_AUDIT_GATE]
-  RG -->|APPROVED + goalPassed| DOWN[Architect → Help → Marketer → Verifier]
+  RG -->|APPROVED + goalPassed| DOWN[Downstream from team.json]
   DOWN --> DEL[Delivery board + go-nogo PENDING]
   DEL --> PACK[Archive Sam-Harness no.N]
   PACK --> L3Q{shouldRunLevel3 + GO?}

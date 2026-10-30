@@ -296,12 +296,35 @@ async function screenshotTool(params: Record<string, unknown>): Promise<ToolResu
     : resolveUserPath(path.join("Desktop", filename));
   assertAllowedPath(finalPath);
   ensureParentDir(finalPath);
+
+  // Phase 8: route through desktop backend on all OS (Windows GDI / Linux grim|scrot / macOS screencapture)
   if (process.platform !== "win32") {
-    return {
-      ok: false,
-      tool: "screenshot",
-      message: "screenshot tool currently supports Windows only",
-    };
+    try {
+      const { runDesktopAction } = await import("./desktop/index.js");
+      const result = await runDesktopAction({
+        action: "screenshot",
+        params: { path: finalPath },
+      });
+      if (!result.ok) {
+        return {
+          ok: false,
+          tool: "screenshot",
+          message: result.message || "screenshot failed",
+        };
+      }
+      return {
+        ok: true,
+        tool: "screenshot",
+        message: `Screenshot saved -> ${finalPath}`,
+        data: result.data,
+      };
+    } catch (e: any) {
+      return {
+        ok: false,
+        tool: "screenshot",
+        message: e?.message || String(e),
+      };
+    }
   }
 
   // Controlled PowerShell capture (no free-form shell from the model)
@@ -389,23 +412,73 @@ async function writeExcelTool(params: Record<string, unknown>): Promise<ToolResu
   };
 }
 
+/** Cross-platform allowlisted shell prefixes (same policy, OS-appropriate shells). */
+export function shellAllowlistPrefixes(platform: NodeJS.Platform = process.platform): string[] {
+  if (platform === "win32") {
+    return [
+      "dir ",
+      "type ",
+      "echo ",
+      "where ",
+      "powershell -noprofile -command get-",
+      "powershell.exe -noprofile -command get-",
+    ];
+  }
+  // Linux / macOS — bash-oriented read-only / listing helpers
+  return [
+    "ls ",
+    "echo ",
+    "pwd",
+    "which ",
+    "cat ",
+    "head ",
+    "tail ",
+    "file ",
+    "basename ",
+    "dirname ",
+    "realpath ",
+    "printenv ",
+    "uname ",
+    "df ",
+    "du ",
+    "find ",
+    "wc ",
+    "test ",
+    "[",
+  ];
+}
+
+export function isShellCommandAllowed(
+  command: string,
+  platform: NodeJS.Platform = process.platform
+): boolean {
+  const c = command.trim();
+  const lower = c.toLowerCase();
+  if (platform === "win32") {
+    return shellAllowlistPrefixes(platform).some((p) => lower.startsWith(p.toLowerCase()));
+  }
+  // Exact single-token safe commands
+  if (lower === "pwd" || lower === "ls" || lower === "uname" || lower === "df") return true;
+  // Block chaining / redirection / subshells
+  if (/[;&`|<>]/.test(c)) return false;
+  if (/\n|\r/.test(c)) return false;
+  return shellAllowlistPrefixes(platform).some((p) => {
+    const pl = p.toLowerCase();
+    return lower === pl.trim() || lower.startsWith(pl);
+  });
+}
+
 async function runShellTool(params: Record<string, unknown>): Promise<ToolResult> {
   const command = asString(params.command, "command").trim();
-  const allowedPrefixes = [
-    "dir ",
-    "type ",
-    "echo ",
-    "where ",
-    "powershell -noprofile -command get-",
-    "powershell.exe -noprofile -command get-",
-  ];
-  const okCmd = allowedPrefixes.some((p) => command.toLowerCase().startsWith(p.toLowerCase()));
-  if (!okCmd) {
+  if (!isShellCommandAllowed(command)) {
+    const hint =
+      process.platform === "win32"
+        ? "Allowed shell: dir, type, echo, where, powershell Get-* only."
+        : "Allowed shell: ls, echo, pwd, which, cat, head, tail, file, find (no pipes/redirs), uname, df, du, wc.";
     return {
       ok: false,
       tool: "run_shell",
-      message:
-        "Shell blocked. For screenshots use tool screenshot. Allowed shell: dir, type, echo, where, powershell Get-* only.",
+      message: `Shell blocked. For screenshots use tool screenshot. ${hint}`,
     };
   }
 
@@ -422,29 +495,51 @@ async function runShellTool(params: Record<string, unknown>): Promise<ToolResult
 
   let stdout = "";
   let stderr = "";
-  // Never pipe PowerShell through cmd.exe — `|` breaks (Select-Object runs in cmd).
-  if (/^powershell(\.exe)?\b/i.test(command)) {
-    const m = command.match(/-Command\s+([\s\S]+)$/i);
-    const psBody = (m?.[1] || command.replace(/^powershell(\.exe)?\s+/i, "")).trim();
-    const r = await execFileAsync(
-      "powershell.exe",
-      ["-NoProfile", "-Command", psBody],
-      {
-        windowsHide: true,
-        timeout: 60000,
-        maxBuffer: 1024 * 512,
+  try {
+    if (process.platform === "win32") {
+      // Never pipe PowerShell through cmd.exe — `|` breaks (Select-Object runs in cmd).
+      if (/^powershell(\.exe)?\b/i.test(command)) {
+        const m = command.match(/-Command\s+([\s\S]+)$/i);
+        const psBody = (m?.[1] || command.replace(/^powershell(\.exe)?\s+/i, "")).trim();
+        const r = await execFileAsync(
+          "powershell.exe",
+          ["-NoProfile", "-Command", psBody],
+          {
+            windowsHide: true,
+            timeout: 60000,
+            maxBuffer: 1024 * 512,
+          }
+        );
+        stdout = r.stdout;
+        stderr = r.stderr;
+      } else {
+        const r = await execFileAsync("cmd", ["/c", command], {
+          windowsHide: true,
+          timeout: 20000,
+          maxBuffer: 1024 * 256,
+        });
+        stdout = r.stdout;
+        stderr = r.stderr;
       }
-    );
-    stdout = r.stdout;
-    stderr = r.stderr;
-  } else {
-    const r = await execFileAsync("cmd", ["/c", command], {
-      windowsHide: true,
-      timeout: 20000,
-      maxBuffer: 1024 * 256,
-    });
-    stdout = r.stdout;
-    stderr = r.stderr;
+    } else {
+      // bash on Linux/macOS — allowlist already applied
+      const r = await execFileAsync("bash", ["-lc", command], {
+        timeout: 20000,
+        maxBuffer: 1024 * 256,
+      });
+      stdout = r.stdout;
+      stderr = r.stderr;
+    }
+  } catch (e: any) {
+    return {
+      ok: false,
+      tool: "run_shell",
+      message: e?.message || String(e),
+      data: {
+        stdout: String(e?.stdout || "").slice(0, 4000),
+        stderr: String(e?.stderr || "").slice(0, 1000),
+      },
+    };
   }
 
   return {
@@ -464,11 +559,12 @@ Available tools (ONE JSON — follow USER GOAL verbs; paths work on Windows/macO
 5) delete_path  { "path":"Desktop/old.txt", "confirm":true }  // dirs need recursive:true if not empty
 6) write_excel  { "path":"Desktop/report.xls", "a1":"..." }  // ONLY create new sheet — not for "report ABOUT excel files"
 7) open_path / list_dir / read_file
-8) run_shell    { "command":"powershell -NoProfile -Command Get-ChildItem D:\\\\ -Recurse -Include *.xls,*.xlsx,*.xlsm -File -ErrorAction SilentlyContinue | Select-Object -First 80 FullName" }
-9) screenshot   { "filename":"capture.png" }  // ONLY if Goal asks
+8) run_shell    Windows: { "command":"powershell -NoProfile -Command Get-ChildItem …" }
+                Linux/macOS: { "command":"ls Documents" } / cat / find (allowlisted; no pipes)
+9) screenshot   { "filename":"capture.png" }  // Windows GDI · Linux grim/scrot/gnome-screenshot · macOS screencapture
 10) run_node_sandbox { "code":"console.log(1+1)" }  // isolated Node REPL (timeout/memory; optional Docker)
 11) mcp_call    { "server":"name", "tool":"toolName", "arguments":{...} }  // from mcp.json
-12) Desktop operator (Windows UIA-first; macOS/Linux stubbed):
+12) Desktop operator (Windows UIA; Linux xdotool/wmctrl/ydotool; macOS osascript):
     desktop_list_windows / desktop_focus_window / desktop_launch_app / desktop_close_window
     desktop_uia_tree / desktop_uia_find / desktop_uia_invoke / desktop_uia_set_value
     desktop_type_text / desktop_key / desktop_click / desktop_move_mouse
@@ -481,9 +577,9 @@ Available tools (ONE JSON — follow USER GOAL verbs; paths work on Windows/macO
 Rules:
 - انقل/move → move_file. اعمل مجلد → mkdir. احذف → delete_path with confirm:true (role matrix + confirm; required outside agent workspace).
 - Agent-generated reports/docs default under Documents/Sam-Harness (SAM_OUTPUT_HOME): reports/, documents/, runs/.
-- تقرير/جرد ملفات Excel على محرك → run_shell Get-ChildItem أو list_dir ثم write_file تقرير نصي (.txt) — لا تستخدم write_excel.
+- تقرير/جرد ملفات Excel على محرك → run_shell Get-ChildItem (Windows) أو ls/find (Unix) ثم write_file تقرير نصي (.txt) — لا تستخدم write_excel.
 - Prefer desktop_uia_* over blind clicks when automating GUI apps; verify with desktop_verify.
-- Destructive/financial/sending desktop actions need approval (approved:true or APPROVE_DESKTOP=1).
+- Destructive/financial/sending desktop actions need approval (approved:true or APPROVE_DESKTOP=1). Sensitive apps still gated (Phase 6).
 - Dry-run: dryRun:true or SAM_DESKTOP_DRY_RUN=1. Kill/pause: SAM_DESKTOP_PAUSED=1 or kill flag file.
 - Never delete without confirm:true. Never touch OS system folders, .ssh, browser profiles, or harness secrets.
 - MCP tools require mcp.json; sandboxed code never receives secret env vars.

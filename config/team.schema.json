@@ -1,0 +1,85 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://sam-harness.local/schemas/team.json",
+  "title": "Sam-Harness Team Config",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["version", "roles", "pipeline"],
+  "properties": {
+    "version": { "type": "integer", "const": 1 },
+    "updatedAt": { "type": "string" },
+    "roles": {
+      "type": "array",
+      "minItems": 1,
+      "items": { "$ref": "#/$defs/role" }
+    },
+    "pipeline": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["downstreamOrder", "keepReviewLoop", "keepGoGate"],
+      "properties": {
+        "downstreamOrder": {
+          "type": "array",
+          "items": { "type": "string", "minLength": 1, "maxLength": 64 },
+          "description": "Ordered specialist steps after APPROVED (architect/help/marketer/custom). Review loop + GO gate stay fixed."
+        },
+        "keepReviewLoop": { "type": "boolean", "const": true },
+        "keepGoGate": { "type": "boolean", "const": true }
+      }
+    }
+  },
+  "$defs": {
+    "role": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "title", "enabled", "builtin", "prefersCloud", "models", "stage"],
+      "properties": {
+        "id": {
+          "type": "string",
+          "pattern": "^[a-z][a-z0-9_]{0,47}$"
+        },
+        "title": { "type": "string", "minLength": 1, "maxLength": 120 },
+        "mission": { "type": "string", "maxLength": 2000 },
+        "enabled": { "type": "boolean" },
+        "builtin": { "type": "boolean" },
+        "prefersCloud": { "type": "boolean" },
+        "models": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["local", "cloud"],
+          "properties": {
+            "local": { "type": "string", "minLength": 1, "maxLength": 120 },
+            "cloud": { "type": "string", "minLength": 1, "maxLength": 120 },
+            "free": { "type": ["string", "null"], "maxLength": 120 }
+          }
+        },
+        "prompt": { "type": "string", "maxLength": 8000 },
+        "tools": {
+          "type": "array",
+          "items": { "type": "string", "minLength": 1, "maxLength": 64 },
+          "maxItems": 64
+        },
+        "temperature": { "type": "number", "minimum": 0, "maximum": 2 },
+        "numPredict": { "type": "integer", "minimum": 64, "maximum": 8192 },
+        "order": { "type": "integer", "minimum": 0, "maximum": 10000 },
+        "stage": {
+          "type": "string",
+          "enum": [
+            "intake",
+            "evidence",
+            "review",
+            "downstream",
+            "implement",
+            "operator",
+            "none"
+          ]
+        },
+        "outputs": {
+          "type": "array",
+          "items": { "type": "string", "maxLength": 120 },
+          "maxItems": 20
+        }
+      }
+    }
+  }
+}

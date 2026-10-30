@@ -173,7 +173,7 @@ export const OPERATOR_CAPABILITIES: RoleCapabilities = {
     "Allowlisted roots: cwd, Desktop, Documents, Downloads, home (+ D:/E: on Windows)",
     "delete_path requires confirm:true; recursive:true for non-empty dirs",
     "Blocked: OS system folders (Windows/Program Files, /etc, /System, …)",
-    "Shell: dir/type/echo/where/Get-* only",
+    "Shell: Windows dir/type/echo/where/Get-*; Unix ls/cat/echo/find (allowlisted, no pipes)",
     "run_node_sandbox + mcp_call gated by this matrix (and cost cap for cloud)",
     "Desktop UIA/input: destructive/financial/sending actions need approval (APPROVE_DESKTOP=1 or UI)",
     "Kill switch: SAM_DESKTOP_PAUSED / ~/.sam-harness-desktop-kill / Ctrl+Shift+Alt+K (Windows watcher)",
