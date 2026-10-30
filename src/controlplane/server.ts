@@ -891,12 +891,20 @@ async function handleRun(req: http.IncomingMessage, res: http.ServerResponse) {
           runId: durable.id,
           forceAgency: false,
           networkApproved: body.networkApproved,
+          onEvent: (ev) => {
+            appendLog(`[quick-path] ${ev.type}: ${ev.message}\n`);
+          },
         });
         if (quick) {
           const { result } = quick;
+          if (result.searchFailureReason) {
+            appendLog(
+              `[quick-path] web search empty/failed: ${result.searchFailureReason}\n`
+            );
+          }
           appendLog(
             result.ok
-              ? `[quick-path] done in ${result.durationMs}ms via ${result.model || "?"}\n${result.reply}\n`
+              ? `[quick-path] done in ${result.durationMs}ms via ${result.model || (result.skippedModel ? "skipped-model" : "?")}\n${result.reply}\n`
               : `[quick-path] failed: ${result.error}\n`
           );
           const entry = await finalizeQuickRun({

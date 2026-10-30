@@ -28,12 +28,22 @@ export {
   runWebSearch,
   sourcesFromSearch,
   assertNetworkEgressAllowed,
+  filterUsablePages,
+  parseDuckDuckGoHtml,
+  parseDuckDuckGoLiteHtml,
+  parseBingHtml,
+  unwrapDuckRedirect,
+  MIN_USABLE_PAGE_CHARS,
   type WebSearchHit,
   type WebSearchResult,
   type WebSearchProviderId,
+  type WebSearchAttempt,
+  type WebSearchEvent,
 } from "./webSearch.js";
 export {
   tryRunQuickPath,
   replyPathLabel,
+  emptyWebSearchReply,
   type RunQuickPathInput,
+  type QuickPathEvent,
 } from "./runQuickPath.js";

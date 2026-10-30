@@ -34,6 +34,10 @@ Default: DuckDuckGo HTML (no API key). Optional via `.env`:
 
 Respects cost cap, `SAM_ALLOW_NETWORK_EGRESS`, optional `SAM_TRUST_REQUIRE_NETWORK_APPROVAL`, and the audit log. Usage is recorded in the cost ledger.
 
+If every provider returns no usable page text, the path **does not call the model** (no hallucinations). You get a short honest message in your language with the failure reason and a hint to use **Run as full agency task**. Summaries are grounded only in fetched page text and always list source URLs.
+
+Default free providers try in order: DuckDuckGo HTML (POST) → DuckDuckGo lite → Bing HTML → Wikipedia API. Live check: `pnpm run quick:smoke -- "ابحث على النت عن …"`.
+
 ## Force full agency
 
 In the Control Plane compose panel, check **Run as full agency task** (or set `FORCE_AGENCY=1` / `--force-agency` on the CLI). Session history shows a **Quick / Web / Agency** badge per run.

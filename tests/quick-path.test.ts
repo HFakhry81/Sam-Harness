@@ -14,6 +14,10 @@ import {
   tryRunQuickPath,
   resolveQuickModel,
   DEFAULT_QUICK_LOCAL_MODEL,
+  emptyWebSearchReply,
+  parseDuckDuckGoHtml,
+  unwrapDuckRedirect,
+  filterUsablePages,
 } from "../src/lib/quickPath/index.js";
 import type { QuickPathResult } from "../src/lib/quickPath/index.js";
 
@@ -148,6 +152,8 @@ describe("tryRunQuickPath", () => {
       baseUrl: "http://localhost:11434",
     }));
 
+    const pageText =
+      "Vitest is a blazing fast unit test framework powered by Vite. ".repeat(3);
     const webSearch = vi.fn(async () => ({
       provider: "duckduckgo" as const,
       query: "search the web for vitest",
@@ -163,8 +169,12 @@ describe("tryRunQuickPath", () => {
           title: "Vitest",
           url: "https://vitest.dev/",
           snippet: "Next generation testing",
-          text: "Vitest is a blazing fast unit test framework.",
+          text: pageText,
         },
+      ],
+      usable: true,
+      attempts: [
+        { provider: "duckduckgo" as const, ok: true, hitCount: 1, ms: 10 },
       ],
     }));
 
@@ -180,9 +190,77 @@ describe("tryRunQuickPath", () => {
     expect(out).not.toBeNull();
     expect(out!.result.replyPath).toBe("web");
     expect(out!.result.ok).toBe(true);
+    expect(out!.result.skippedModel).toBeFalsy();
     expect(webSearch).toHaveBeenCalled();
+    expect(invokeModel).toHaveBeenCalledTimes(1);
     expect(out!.result.sources?.[0]?.url).toBe("https://vitest.dev/");
     expect(out!.result.reply).toMatch(/vitest\.dev/i);
+    // Grounding: model prompt must include page evidence, not "no page text"
+    const promptArg = String(invokeModel.mock.calls[0][0].prompt || "");
+    expect(promptArg).toMatch(/Vitest is a blazing/);
+    expect(promptArg).not.toMatch(/no page text/i);
+  });
+
+  it("empty web results do NOT call the model", async () => {
+    const invokeModel = vi.fn(async () => ({
+      text: "HALLUCINATED last update 2023-09-15 by username",
+      model: "qwen2.5:1.5b",
+      cloud: false,
+      costUsd: 0,
+      baseUrl: "http://localhost:11434",
+    }));
+
+    const webSearch = vi.fn(async () => ({
+      provider: "duckduckgo" as const,
+      query: "ابحث على النت عن آخر أخبار Ollama",
+      hits: [],
+      pages: [],
+      usable: false,
+      attempts: [
+        {
+          provider: "duckduckgo" as const,
+          ok: false,
+          hitCount: 0,
+          ms: 50,
+          error: "DuckDuckGo HTML returned 0 results",
+        },
+        {
+          provider: "duckduckgo_lite" as const,
+          ok: false,
+          hitCount: 0,
+          ms: 40,
+          error: "DuckDuckGo lite returned 0 results",
+        },
+      ],
+      failureReason:
+        "duckduckgo: DuckDuckGo HTML returned 0 results; duckduckgo_lite: DuckDuckGo lite returned 0 results",
+    }));
+
+    const events: string[] = [];
+    const out = await tryRunQuickPath({
+      prompt: "ابحث على النت عن آخر أخبار Ollama",
+      cwd: tmp,
+      heuristicOnly: true,
+      invokeModel: invokeModel as any,
+      webSearch: webSearch as any,
+      networkApproved: true,
+      onEvent: (ev) => events.push(ev.type),
+    });
+
+    expect(out).not.toBeNull();
+    expect(out!.result.replyPath).toBe("web");
+    expect(out!.result.ok).toBe(true);
+    expect(out!.result.skippedModel).toBe(true);
+    expect(out!.result.model).toBeUndefined();
+    expect(invokeModel).not.toHaveBeenCalled();
+    expect(out!.result.sources).toEqual([]);
+    expect(out!.result.searchFailureReason).toMatch(/DuckDuckGo/i);
+    expect(out!.result.reply).toMatch(/لم أجد|لم ألخّص|تعذّر/i);
+    expect(out!.result.reply).toMatch(/وكالة|agency/i);
+    expect(out!.result.reply).not.toMatch(/2023-09-15|username|HALLUCINATED/i);
+    expect(events.some((t) => t.includes("empty") || t.includes("skip"))).toBe(
+      true
+    );
   });
 
   it("returns null so agency path is used for real tasks", async () => {
@@ -206,6 +284,47 @@ describe("tryRunQuickPath", () => {
       invokeModel: vi.fn() as any,
     });
     expect(out).toBeNull();
+  });
+});
+
+describe("web parse helpers", () => {
+  it("unwraps DuckDuckGo uddg redirects", () => {
+    const wrapped =
+      "https://duckduckgo.com/l/?uddg=" +
+      encodeURIComponent("https://ollama.com/blog") +
+      "&rut=abc";
+    expect(unwrapDuckRedirect(wrapped)).toBe("https://ollama.com/blog");
+  });
+
+  it("parses result__a anchors from DDG HTML", () => {
+    const html = `
+      <a class="result__a" href="https://duckduckgo.com/l/?uddg=${encodeURIComponent("https://example.com/a")}">Example A</a>
+      <a href="https://example.com/b" class="result__a">Example B</a>
+      <a class="result__snippet">Snippet A about the topic</a>
+    `;
+    const hits = parseDuckDuckGoHtml(html);
+    expect(hits.length).toBeGreaterThanOrEqual(1);
+    expect(hits[0].url).toMatch(/^https:\/\/example\.com\//);
+  });
+
+  it("filterUsablePages drops short bodies", () => {
+    expect(
+      filterUsablePages([
+        { title: "a", url: "https://a.test", snippet: "", text: "short" },
+        {
+          title: "b",
+          url: "https://b.test",
+          snippet: "",
+          text: "x".repeat(100),
+        },
+      ]).map((p) => p.url)
+    ).toEqual(["https://b.test"]);
+  });
+
+  it("emptyWebSearchReply is Arabic for ar locale", () => {
+    const msg = emptyWebSearchReply("ar", "0 results");
+    expect(msg).toMatch(/بحث الويب|لم ألخّص/);
+    expect(msg).toMatch(/0 results/);
   });
 });
 

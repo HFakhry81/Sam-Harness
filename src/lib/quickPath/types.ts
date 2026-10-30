@@ -38,4 +38,8 @@ export type QuickPathResult = {
   error?: string;
   costUsd?: number;
   cloud?: boolean;
+  /** Web path: search/fetch failure detail (no model called when set for empty search). */
+  searchFailureReason?: string;
+  /** True when web path skipped the LLM because there was no usable evidence. */
+  skippedModel?: boolean;
 };
