@@ -37,6 +37,7 @@
     "trust:policy": "tsx scripts/trust-cli.ts policy",
     "doctor": "tsx scripts/doctor.ts",
     "migrate": "tsx scripts/migrate.ts",
+    "quick:smoke": "tsx scripts/quick-smoke.ts",
     "help": "tsx scripts/help.ts",
     "help:export": "tsx scripts/help-export.ts",
     "tools": "bash Tools/sam-harness-manager.sh",

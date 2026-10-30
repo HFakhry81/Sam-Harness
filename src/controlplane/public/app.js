@@ -183,6 +183,9 @@ const els = {
   targetRepo: $("targetRepo"),
   packDir: $("packDir"),
   allowCode: $("allowCode"),
+  forceAgency: $("forceAgency"),
+  pathBadge: $("pathBadge"),
+  pathHint: $("pathHint"),
   allowCodeWrap: $("allowCodeWrap"),
   codeWorkspaceFields: $("codeWorkspaceFields"),
   operatorWorkspacePanel: $("operatorWorkspacePanel"),
@@ -984,12 +987,17 @@ async function compose(save, answers) {
   lastDraft = data.draft;
   lastFailed = false;
   syncWorkspacePanels(data.spec?.route || data.draft?.route, data.spec);
+  if (els.forceAgency?.checked) {
+    setPathBadge("agency", "forced");
+  } else if (data.replyPath) {
+    setPathBadge(data.replyPath, data.intentReason || data.intent || "");
+  }
   const rootsLine = (data.spec?.roots || []).join(" · ") || "—";
   const stepsLine = (data.spec?.planSteps || [])
     .map((s) => s.summary)
     .join(" → ");
   els.previewBody.textContent =
-    `mode=${data.spec?.workspaceMode || "?"}\nconfidence=${data.confidence}\nintent=${data.spec?.intent}\nroots=${rootsLine}\nsteps=${stepsLine || "—"}\n\n` +
+    `mode=${data.spec?.workspaceMode || "?"}\nconfidence=${data.confidence}\nintent=${data.spec?.intent}\nreplyPath=${data.replyPath || "?"}\nroots=${rootsLine}\nsteps=${stepsLine || "—"}\n\n` +
     (data.draft?.body || "");
   els.previewBox.hidden = false;
   els.previewBox.open = true;
@@ -1207,6 +1215,23 @@ async function loadArtifacts() {
   }
 }
 
+function pathLabel(path) {
+  const key = `compose.path.${path || "agency"}`;
+  return t(key) || (path === "quick" ? "Quick" : path === "web" ? "Web" : "Agency");
+}
+
+function setPathBadge(path, reason) {
+  const p = path || "agency";
+  if (els.pathBadge) {
+    els.pathBadge.dataset.path = p;
+    els.pathBadge.textContent = pathLabel(p);
+    els.pathBadge.title = reason || "";
+  }
+  if (els.pathHint && reason) {
+    els.pathHint.textContent = reason;
+  }
+}
+
 function showDone(entry) {
   lastEntry = entry;
   lastFailed = !entry.success;
@@ -1214,7 +1239,9 @@ function showDone(entry) {
   els.btnStop.disabled = true;
   els.runGrid?.classList.remove("is-busy");
   els.doneTitle.textContent = entry.success ? "تم بنجاح." : "لم تكتمل.";
-  els.doneMeta.textContent = `${entry.title} · ${entry.route} · ${entry.mode} · exit ${entry.exitCode}`;
+  const pathBit = entry.replyPath ? ` · ${pathLabel(entry.replyPath)}` : "";
+  els.doneMeta.textContent = `${entry.title} · ${entry.route} · ${entry.mode}${pathBit} · exit ${entry.exitCode}`;
+  if (entry.replyPath) setPathBadge(entry.replyPath);
   fillReport(entry);
   // Rerun only useful after failure (success task was cleared)
   els.btnRerun.style.display = entry.success ? "none" : "";
@@ -1242,6 +1269,8 @@ async function resetForNewTask() {
   els.title.value = "";
   els.route.value = "auto";
   els.allowCode.checked = false;
+  if (els.forceAgency) els.forceAgency.checked = false;
+  setPathBadge("agency", t("compose.pathHint") || "");
   els.previewBox.hidden = true;
   els.previewBody.textContent = "";
   setLog("");
@@ -1264,8 +1293,9 @@ function renderSession(session) {
   (session?.entries || []).forEach((e) => {
     const li = document.createElement("li");
     li.className = e.success ? "ok" : "fail";
-    li.innerHTML = `<div class="t">${escapeHtml(e.title)}</div>
-      <div class="m">${e.route} · ${e.mode} · exit ${e.exitCode}</div>`;
+    const path = e.replyPath || "agency";
+    li.innerHTML = `<div class="t">${escapeHtml(e.title)} <span class="path-chip" data-path="${escapeHtml(path)}">${escapeHtml(pathLabel(path))}</span></div>
+      <div class="m">${escapeHtml(e.route)} · ${escapeHtml(e.mode)} · exit ${e.exitCode}</div>`;
     li.title = e.report?.headline || e.summary || "";
     li.addEventListener("click", () => showDone(e));
     els.sessionList.appendChild(li);
@@ -1298,12 +1328,14 @@ async function runMode(mode) {
   busy = true;
   showStage("run");
 
+  const forceAgency = Boolean(els.forceAgency?.checked);
   const res = await api("/api/run", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({
       mode,
       confirmImplement: mode === "implement",
+      forceAgency,
     }),
   });
   const data = await res.json();
@@ -1330,6 +1362,12 @@ async function runMode(mode) {
         },
       });
     }
+    return;
+  }
+  if (data.replyPath) setPathBadge(data.replyPath);
+  if (data.quick && data.entry) {
+    // Synchronous quick/web completion (SSE also fires; showDone is idempotent enough)
+    showDone(data.entry);
     return;
   }
   els.runState.textContent = `running:${mode}`;
@@ -1447,6 +1485,15 @@ els.btnClearSession.addEventListener("click", async () => {
   const res = await api("/api/session/reset", { method: "POST" });
   const data = await res.json();
   if (data.session) renderSession(data.session);
+});
+
+els.forceAgency?.addEventListener("change", () => {
+  if (els.forceAgency.checked) {
+    setPathBadge("agency", t("compose.forceAgency") || "force agency");
+  } else {
+    // Re-preview to refresh predicted path
+    void compose(false).catch(() => setPathBadge("agency"));
+  }
 });
 
 document.querySelectorAll(".run-opt").forEach((btn) => {

@@ -122,6 +122,12 @@ import {
   retainOnFailure,
 } from "./taskLifecycle.js";
 import {
+  classifyIntentHeuristic,
+  tryRunQuickPath,
+  replyPathLabel,
+  type ReplyPath,
+} from "../lib/quickPath/index.js";
+import {
   addDailyJob,
   loadDailyOps,
   recordDailyResult,
@@ -280,6 +286,7 @@ async function handleCompose(req: http.IncomingMessage, res: http.ServerResponse
   // Always keep a recoverable draft (prompt must not vanish from the UI)
   persistComposeDraft(ROOT, draft, body.prompt || draft.spec.rawPrompt || "");
 
+  const predicted = classifyIntentHeuristic(body.prompt || draft.spec.rawPrompt || "");
   if (body.save === false || clarify) {
     sendJson(res, 200, {
       ok: true,
@@ -293,6 +300,9 @@ async function handleCompose(req: http.IncomingMessage, res: http.ServerResponse
       spec: draft.spec,
       clarify,
       draftPersisted: true,
+      replyPath: predicted.replyPath,
+      intent: predicted.intent,
+      intentReason: predicted.reason,
     });
     return;
   }
@@ -328,6 +338,9 @@ async function handleCompose(req: http.IncomingMessage, res: http.ServerResponse
       ready: true,
       spec: draft.spec,
       clarify: false,
+      replyPath: predicted.replyPath,
+      intent: predicted.intent,
+      intentReason: predicted.reason,
     });
   } catch (e: any) {
     sendJson(res, 400, {
@@ -338,6 +351,8 @@ async function handleCompose(req: http.IncomingMessage, res: http.ServerResponse
       ready: draft.ready,
       spec: draft.spec,
       clarify: true,
+      replyPath: predicted.replyPath,
+      intent: predicted.intent,
     });
   }
 }
@@ -517,6 +532,7 @@ async function finalizeRun(mode: RunMode, exitCode: number | null) {
     auditPassed,
     goalPassed,
     goalFidelityScore,
+    replyPath: "agency",
     report,
     taskLifecycle,
   };
@@ -559,10 +575,167 @@ async function finalizeRun(mode: RunMode, exitCode: number | null) {
   });
 }
 
+function extractPromptForQuickPath(draft: TaskDraft | null, metaRaw: string): string {
+  const fromSpec = draft?.spec?.rawPrompt?.trim();
+  if (fromSpec) return fromSpec;
+  const body = draft?.body || metaRaw || "";
+  const goal = body.replace(/^[\s\S]*?## Goal\s*\n/i, "").split(/\n## /)[0]?.trim();
+  return goal || draft?.title || "";
+}
+
+async function finalizeQuickRun(opts: {
+  mode: RunMode;
+  replyPath: ReplyPath;
+  intent: string;
+  reply: string;
+  model?: string;
+  sources?: Array<{ title: string; url: string }>;
+  durationMs: number;
+  success: boolean;
+  error?: string;
+  runId: string;
+  startedAt: string;
+}): Promise<SessionEntry> {
+  const endedAt = new Date().toISOString();
+  const cfg = await readTaskConfig();
+  const title = currentDraft?.title || cfg.title || "Quick reply";
+  const body = currentDraft?.body || cfg.body || "";
+  const route = currentDraft?.route || cfg.route || "quick";
+  const arts = readExecutionArtifacts(ROOT);
+  const success = opts.success;
+  let taskLifecycle: "cleared" | "retained" | "unchanged" = "unchanged";
+  if (success) {
+    archiveAndClearOnSuccess(ROOT, {
+      title,
+      body,
+      summary: opts.reply || arts.summary,
+    });
+    taskLifecycle = "cleared";
+    currentDraft = null;
+  } else {
+    retainOnFailure(ROOT, {
+      title,
+      body,
+      reason: opts.error || arts.summary || "quick path failed",
+    });
+    taskLifecycle = "retained";
+  }
+
+  const pathLabel = replyPathLabel(opts.replyPath, loadLocaleConfig().locale === "en" ? "en" : "ar");
+  const report = buildRunReport({
+    success,
+    title,
+    route: String(route),
+    mode: opts.mode,
+    summary: opts.reply || opts.error || arts.summary,
+    artifacts: arts.artifacts,
+    taskLifecycle,
+    auditPassed: true,
+    goalPassed: success,
+    goalFidelityScore: success ? 1 : 0,
+  });
+  if (opts.replyPath === "web" && opts.sources?.length) {
+    report.bullets = [
+      ...(report.bullets || []).slice(0, 2),
+      ...opts.sources.slice(0, 3).map((s) => s.url),
+    ];
+  }
+  report.headline = success
+    ? `${pathLabel}: ${opts.reply.slice(0, 120)}`
+    : `${pathLabel} failed: ${opts.error || "error"}`;
+
+  const entry: SessionEntry = {
+    id: `run-${Date.now().toString(36)}`,
+    title,
+    route,
+    mode: opts.mode,
+    promptPreview: body
+      .replace(/^[\s\S]*?## Goal\s*\n/i, "")
+      .split(/\n## /)[0]
+      .trim()
+      .slice(0, 400),
+    targetRepo: currentDraft?.targetRepo || cfg.targetRepo || undefined,
+    startedAt: opts.startedAt,
+    endedAt,
+    exitCode: success ? 0 : 1,
+    success,
+    summary: opts.reply || opts.error || arts.summary,
+    artifacts: arts.artifacts,
+    logTail: runLogBuffer.slice(-2500),
+    auditPassed: true,
+    goalPassed: success,
+    goalFidelityScore: success ? 1 : 0,
+    replyPath: opts.replyPath,
+    report,
+    taskLifecycle,
+  };
+  session.entries.unshift(entry);
+  if (session.entries.length > 50) session.entries.length = 50;
+  saveSession(ROOT, session);
+
+  lastRun = {
+    mode: opts.mode,
+    startedAt: opts.startedAt,
+    endedAt,
+    running: false,
+    phase: "done",
+    runId: opts.runId,
+    exitCode: entry.exitCode,
+  };
+  try {
+    finishDurableRun(opts.runId, {
+      ok: success,
+      exitCode: entry.exitCode,
+      durationMs: opts.durationMs,
+    });
+  } catch {
+    /* ignore */
+  }
+  try {
+    endCostRun();
+  } catch {
+    /* ignore */
+  }
+  try {
+    endOutputRun();
+  } catch {
+    /* ignore */
+  }
+  activeDurableRunId = null;
+  activeRunStartedMs = 0;
+
+  broadcast("run", {
+    type: "end",
+    exitCode: entry.exitCode,
+    at: endedAt,
+    ready: true,
+    phase: "done",
+    entry,
+    report,
+    replyPath: opts.replyPath,
+  });
+  broadcast("session", session);
+  broadcast("ready", {
+    message: success
+      ? `Quick path (${pathLabel}) done.`
+      : `Quick path failed — task retained.`,
+    at: endedAt,
+    taskLifecycle,
+    replyPath: opts.replyPath,
+  });
+  return entry;
+}
+
 async function handleRun(req: http.IncomingMessage, res: http.ServerResponse) {
   const raw = await readBody(req);
-  const body = JSON.parse(raw || "{}") as { mode?: RunMode; confirmImplement?: boolean };
+  const body = JSON.parse(raw || "{}") as {
+    mode?: RunMode;
+    confirmImplement?: boolean;
+    forceAgency?: boolean;
+    networkApproved?: boolean | string;
+  };
   const mode = (body.mode || "agency") as RunMode;
+  const forceAgency = body.forceAgency === true;
 
   if (activeChild) {
     sendJson(res, 409, { ok: false, error: "A run is already in progress" });
@@ -638,7 +811,12 @@ async function handleRun(req: http.IncomingMessage, res: http.ServerResponse) {
     return;
   }
 
-  if (mode !== "smoke") {
+  // Repeat-success gate applies to agency/ops tasks, not chatty quick/web replies.
+  const promptPreviewForGate = extractPromptForQuickPath(currentDraft, meta.raw || "");
+  const gateClass = forceAgency
+    ? { replyPath: "agency" as const }
+    : classifyIntentHeuristic(promptPreviewForGate);
+  if (mode !== "smoke" && gateClass.replyPath === "agency") {
     const gate = assertNotRepeatSuccess(ROOT, currentDraft?.body || meta.raw || "");
     if (!gate.ok) {
       sendJson(res, 409, { ok: false, error: gate.error, blockedRepeat: true });
@@ -666,22 +844,103 @@ async function handleRun(req: http.IncomingMessage, res: http.ServerResponse) {
     mode,
     runId,
     threadId: runId,
-    meta: { confirmImplement: body.confirmImplement === true },
+    meta: {
+      confirmImplement: body.confirmImplement === true,
+      forceAgency,
+    },
   });
   activeDurableRunId = durable.id;
   activeRunStartedMs = Date.now();
   const outputRun = beginOutputRun(runId);
-  const { cmd, args, env } = runArgsForMode(mode);
   runLogBuffer = "";
   smokePending = mode === "smoke" ? 2 : 0;
+  const startedAt = new Date().toISOString();
   lastRun = {
     mode,
-    startedAt: new Date().toISOString(),
+    startedAt,
     running: true,
     phase: "running",
     runId: durable.id,
     threadId: durable.threadId,
   };
+
+  // —— Lightweight quick / web path (before agency spawn) ——
+  if (mode === "agency" && !forceAgency) {
+    const prompt = extractPromptForQuickPath(currentDraft, meta.raw || "");
+    const heuristic = classifyIntentHeuristic(prompt);
+    if (heuristic.replyPath !== "agency") {
+      broadcast("run", {
+        type: "start",
+        ...lastRun,
+        phase: "running",
+        runId: durable.id,
+        threadId: durable.threadId,
+        cost: budget,
+        outputDir: outputRun.runDir,
+        tenantId: getActiveTenantId(),
+        replyPath: heuristic.replyPath,
+        intent: heuristic.intent,
+      });
+      appendLog(
+        `[quick-path] intent=${heuristic.intent} path=${heuristic.replyPath} (${heuristic.reason})\n`
+      );
+      try {
+        const quick = await tryRunQuickPath({
+          prompt,
+          cwd: ROOT,
+          runId: durable.id,
+          forceAgency: false,
+          networkApproved: body.networkApproved,
+          onEvent: (ev) => {
+            appendLog(`[quick-path] ${ev.type}: ${ev.message}\n`);
+          },
+        });
+        if (quick) {
+          const { result } = quick;
+          if (result.searchFailureReason) {
+            appendLog(
+              `[quick-path] web search empty/failed: ${result.searchFailureReason}\n`
+            );
+          }
+          appendLog(
+            result.ok
+              ? `[quick-path] done in ${result.durationMs}ms via ${result.model || (result.skippedModel ? "skipped-model" : "?")}\n${result.reply}\n`
+              : `[quick-path] failed: ${result.error}\n`
+          );
+          const entry = await finalizeQuickRun({
+            mode,
+            replyPath: result.replyPath,
+            intent: result.intent,
+            reply: result.reply,
+            model: result.model,
+            sources: result.sources,
+            durationMs: result.durationMs,
+            success: result.ok,
+            error: result.error,
+            runId: durable.id,
+            startedAt,
+          });
+          sendJson(res, 200, {
+            ok: true,
+            mode,
+            startedAt,
+            runId: durable.id,
+            threadId: durable.threadId,
+            replyPath: result.replyPath,
+            intent: result.intent,
+            quick: true,
+            entry,
+          });
+          return;
+        }
+        appendLog("[quick-path] classifier chose agency — spawning pipeline\n");
+      } catch (e: any) {
+        appendLog(`[quick-path] error, falling back to agency: ${e?.message || e}\n`);
+      }
+    }
+  }
+
+  const { cmd, args, env } = runArgsForMode(mode);
   broadcast("run", {
     type: "start",
     ...lastRun,
@@ -693,6 +952,7 @@ async function handleRun(req: http.IncomingMessage, res: http.ServerResponse) {
     cost: budget,
     outputDir: outputRun.runDir,
     tenantId: getActiveTenantId(),
+    replyPath: "agency" as ReplyPath,
   });
 
   const child = spawn(cmd, args, {
@@ -703,6 +963,7 @@ async function handleRun(req: http.IncomingMessage, res: http.ServerResponse) {
       SAM_RUN_DIR: outputRun.runDir,
       SAM_OUTPUT_HOME: tenantOutputHome(),
       SAM_TENANT_ID: getActiveTenantId(),
+      ...(forceAgency ? { FORCE_AGENCY: "1" } : {}),
     },
     shell: true,
   });
@@ -716,7 +977,7 @@ async function handleRun(req: http.IncomingMessage, res: http.ServerResponse) {
     kind: "process",
     name: "spawn",
     status: "start",
-    detail: { mode, cmd },
+    detail: { mode, cmd, forceAgency },
   });
 
   child.stdout.on("data", (buf) => appendLog(buf.toString("utf-8")));
@@ -736,6 +997,7 @@ async function handleRun(req: http.IncomingMessage, res: http.ServerResponse) {
     startedAt: lastRun.startedAt,
     runId: durable.id,
     threadId: durable.threadId,
+    replyPath: "agency",
   });
 }
 

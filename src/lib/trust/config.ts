@@ -26,6 +26,16 @@ export type TrustPolicy = {
   auditEnabled: boolean;
   /** Write evidence bundles under runs/ + reports/. */
   evidenceEnabled: boolean;
+  /**
+   * Allow outbound HTTP for quick-path web research (search + page fetch).
+   * Default true. Set SAM_ALLOW_NETWORK_EGRESS=0 to disable.
+   */
+  allowNetworkEgress: boolean;
+  /**
+   * When true, web research needs owner approval / APPROVE_NETWORK / APPROVE_TRUST.
+   * Default false (egress allowed without HITL when allowNetworkEgress is true).
+   */
+  requireApprovalNetworkEgress: boolean;
 };
 
 const DEFAULT_SENSITIVE = [
@@ -54,6 +64,8 @@ export const DEFAULT_TRUST_POLICY: TrustPolicy = {
   gatesEnabled: true,
   auditEnabled: true,
   evidenceEnabled: true,
+  allowNetworkEgress: true,
+  requireApprovalNetworkEgress: false,
 };
 
 function envBool(name: string, fallback: boolean): boolean {
@@ -107,6 +119,12 @@ function loadFilePolicy(cwd: string = process.cwd()): Partial<TrustPolicy> {
       if (typeof raw.evidenceEnabled === "boolean") {
         out.evidenceEnabled = raw.evidenceEnabled;
       }
+      if (typeof raw.allowNetworkEgress === "boolean") {
+        out.allowNetworkEgress = raw.allowNetworkEgress;
+      }
+      if (typeof raw.requireApprovalNetworkEgress === "boolean") {
+        out.requireApprovalNetworkEgress = raw.requireApprovalNetworkEgress;
+      }
       return out;
     } catch {
       /* ignore bad file */
@@ -147,6 +165,11 @@ export function loadTrustPolicy(cwd: string = process.cwd()): TrustPolicy {
     gatesEnabled: envBool("SAM_TRUST_GATES", base.gatesEnabled),
     auditEnabled: envBool("SAM_TRUST_AUDIT", base.auditEnabled),
     evidenceEnabled: envBool("SAM_TRUST_EVIDENCE", base.evidenceEnabled),
+    allowNetworkEgress: envBool("SAM_ALLOW_NETWORK_EGRESS", base.allowNetworkEgress),
+    requireApprovalNetworkEgress: envBool(
+      "SAM_TRUST_REQUIRE_NETWORK_APPROVAL",
+      base.requireApprovalNetworkEgress
+    ),
   };
 }
 

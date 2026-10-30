@@ -19,6 +19,24 @@
       "outputs": ["route", "gate_decision"]
     },
     {
+      "id": "quick",
+      "title": "Quick Reply",
+      "mission": "Lightweight local replies for greetings, simple questions, and web-research summaries. Not part of the agency pipeline.",
+      "enabled": true,
+      "builtin": true,
+      "prefersCloud": false,
+      "models": {
+        "local": "qwen2.5:1.5b",
+        "cloud": "gemma4:cloud",
+        "free": null
+      },
+      "temperature": 0.4,
+      "numPredict": 256,
+      "stage": "none",
+      "order": 1,
+      "outputs": ["quick_reply"]
+    },
+    {
       "id": "intake",
       "title": "Intake Analyst",
       "mission": "Normalize client brief into engagement + success criteria.",
