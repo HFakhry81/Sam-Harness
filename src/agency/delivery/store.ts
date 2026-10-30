@@ -8,6 +8,7 @@ import {
   type GoNoGoRecord,
   type TicketStatus,
 } from "./types.js";
+import { loadStoreDoc, saveStoreDoc } from "../../lib/db/storeBridge.js";
 
 const BOARD_JSON = "delivery-board.json";
 const BOARD_MD = "DELIVERY_BOARD.md";
@@ -26,15 +27,29 @@ export function assertTransition(from: TicketStatus, to: TicketStatus): void {
 }
 
 export function loadBoard(cwd = process.cwd()): DeliveryBoard | null {
-  const p = path.join(cwd, BOARD_JSON);
-  if (!fs.existsSync(p)) return null;
-  return JSON.parse(fs.readFileSync(p, "utf-8")) as DeliveryBoard;
+  const board = loadStoreDoc<DeliveryBoard | Record<string, never>>(
+    cwd,
+    "delivery-board",
+    BOARD_JSON,
+    {}
+  );
+  if (board && "version" in board && Array.isArray((board as DeliveryBoard).tickets)) {
+    return board as DeliveryBoard;
+  }
+  return null;
 }
 
 export function saveBoard(board: DeliveryBoard, cwd = process.cwd()): void {
   board.updatedAt = new Date().toISOString();
-  fs.writeFileSync(path.join(cwd, BOARD_JSON), JSON.stringify(board, null, 2), "utf-8");
-  fs.writeFileSync(path.join(cwd, BOARD_MD), renderBoardMarkdown(board), "utf-8");
+  saveStoreDoc(cwd, "delivery-board", board);
+  // Dual-write board JSON + MD — pack archives and smokes still expect cwd files
+  // (operational state like daily-ops/cost lives DB-only).
+  try {
+    fs.writeFileSync(path.join(cwd, BOARD_JSON), JSON.stringify(board, null, 2), "utf-8");
+    fs.writeFileSync(path.join(cwd, BOARD_MD), renderBoardMarkdown(board), "utf-8");
+  } catch {
+    /* mirror best-effort */
+  }
 }
 
 export function renderBoardMarkdown(board: DeliveryBoard): string {

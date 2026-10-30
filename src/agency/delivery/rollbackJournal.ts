@@ -1,9 +1,11 @@
 /**
  * P10 — Rollback journal for Level-3 file writes + git branch/commit snapshots.
+ * Persisted in embedded DB (legacy rollback-journal.json imported once).
  */
 import * as fs from "fs";
 import * as path from "path";
 import * as crypto from "crypto";
+import { loadStoreDoc, saveStoreDoc } from "../../lib/db/storeBridge.js";
 
 export type RollbackEntry = {
   id: string;
@@ -30,17 +32,16 @@ function backupDir(harnessRoot: string): string {
 }
 
 function load(harnessRoot: string): RollbackStore {
-  const p = journalPath(harnessRoot);
-  try {
-    if (fs.existsSync(p)) return JSON.parse(fs.readFileSync(p, "utf-8"));
-  } catch {
-    /* ignore */
-  }
-  return { entries: [] };
+  return loadStoreDoc<RollbackStore>(
+    harnessRoot,
+    "rollback-journal",
+    "rollback-journal.json",
+    { entries: [] }
+  );
 }
 
 function save(harnessRoot: string, store: RollbackStore): void {
-  fs.writeFileSync(journalPath(harnessRoot), JSON.stringify(store, null, 2), "utf-8");
+  saveStoreDoc(harnessRoot, "rollback-journal", store);
 }
 
 export function loadRollbackJournal(harnessRoot: string): RollbackStore {

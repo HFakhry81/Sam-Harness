@@ -28,6 +28,29 @@ import {
   getOutputHome,
   mirrorRunArtifacts,
 } from "../lib/outputHome.js";
+import { initPersistence, getPersistence, getDriver } from "../lib/db/index.js";
+import {
+  startDurableRun,
+  finishDurableRun,
+  cancelDurableRun,
+  getRunTimeline,
+  listDurableRuns,
+  appendTimeline,
+} from "../lib/durableRuns.js";
+import {
+  initTracing,
+  getMetrics,
+  createLogger,
+  runWithLogContextAsync,
+} from "../lib/observability/index.js";
+import {
+  getActiveTenantId,
+  setActiveTenantId,
+  tenantOutputHome,
+  tenantStateDir,
+  DEFAULT_TENANT_ID,
+} from "../lib/tenant/context.js";
+import { backupSqlite } from "../lib/db/backup.js";
 import {
   loadSession,
   readExecutionArtifacts,
@@ -85,6 +108,7 @@ const ROOT = path.resolve(__dirname, "..", "..");
 const PUBLIC = path.join(__dirname, "public");
 const PORT = Number(process.env.CONTROL_PLANE_PORT || 8787);
 const OWNER_TOKEN = loadOrCreateOwnerToken(ROOT);
+const log = createLogger("controlplane");
 
 type RunMode = "agency" | "implement" | "smoke" | "legacy";
 type UiPhase = "idle" | "running" | "done";
@@ -97,6 +121,8 @@ let session: AgencySession = loadSession(ROOT);
 let currentDraft: TaskDraft | null = null;
 let runLogBuffer = "";
 let smokePending = 0;
+let activeDurableRunId: string | null = null;
+let activeRunStartedMs = 0;
 
 let lastRun: {
   mode: RunMode;
@@ -105,6 +131,8 @@ let lastRun: {
   exitCode?: number | null;
   running: boolean;
   phase: UiPhase;
+  runId?: string;
+  threadId?: string;
 } | null = null;
 
 function contentType(file: string): string {
@@ -307,6 +335,17 @@ async function finalizeRun(mode: RunMode, exitCode: number | null) {
     lastRun.exitCode = exitCode;
     lastRun.endedAt = endedAt;
     lastRun.phase = "done";
+  }
+  if (activeDurableRunId) {
+    const cancelled = Boolean((lastRun as { cancelled?: boolean } | null)?.cancelled);
+    finishDurableRun(activeDurableRunId, {
+      ok: exitCode === 0 && !cancelled,
+      exitCode,
+      cancelled,
+      durationMs: activeRunStartedMs ? Date.now() - activeRunStartedMs : undefined,
+    });
+    activeDurableRunId = null;
+    activeRunStartedMs = 0;
   }
 
   const cfg = await readTaskConfig();
@@ -567,6 +606,14 @@ async function handleRun(req: http.IncomingMessage, res: http.ServerResponse) {
   }
 
   const runId = beginCostRun();
+  const durable = startDurableRun({
+    mode,
+    runId,
+    threadId: runId,
+    meta: { confirmImplement: body.confirmImplement === true },
+  });
+  activeDurableRunId = durable.id;
+  activeRunStartedMs = Date.now();
   const outputRun = beginOutputRun(runId);
   const { cmd, args, env } = runArgsForMode(mode);
   runLogBuffer = "";
@@ -576,6 +623,8 @@ async function handleRun(req: http.IncomingMessage, res: http.ServerResponse) {
     startedAt: new Date().toISOString(),
     running: true,
     phase: "running",
+    runId: durable.id,
+    threadId: durable.threadId,
   };
   broadcast("run", {
     type: "start",
@@ -583,22 +632,36 @@ async function handleRun(req: http.IncomingMessage, res: http.ServerResponse) {
     cmd,
     args,
     phase: "running",
-    runId,
+    runId: durable.id,
+    threadId: durable.threadId,
     cost: budget,
     outputDir: outputRun.runDir,
+    tenantId: getActiveTenantId(),
   });
 
   const child = spawn(cmd, args, {
     cwd: ROOT,
     env: {
       ...(env || process.env),
-      SAM_HARNESS_RUN_ID: runId,
+      SAM_HARNESS_RUN_ID: durable.id,
       SAM_RUN_DIR: outputRun.runDir,
-      SAM_OUTPUT_HOME: getOutputHome(),
+      SAM_OUTPUT_HOME: tenantOutputHome(),
+      SAM_TENANT_ID: getActiveTenantId(),
     },
     shell: true,
   });
   activeChild = child;
+
+  void runWithLogContextAsync(
+    { runId: durable.id, traceId: durable.threadId, tenantId: getActiveTenantId() },
+    async () => undefined
+  );
+  appendTimeline(durable.id, {
+    kind: "process",
+    name: "spawn",
+    status: "start",
+    detail: { mode, cmd },
+  });
 
   child.stdout.on("data", (buf) => appendLog(buf.toString("utf-8")));
   child.stderr.on("data", (buf) => appendLog(buf.toString("utf-8")));
@@ -611,7 +674,13 @@ async function handleRun(req: http.IncomingMessage, res: http.ServerResponse) {
     void finalizeRun(mode, code);
   });
 
-  sendJson(res, 200, { ok: true, mode, startedAt: lastRun.startedAt });
+  sendJson(res, 200, {
+    ok: true,
+    mode,
+    startedAt: lastRun.startedAt,
+    runId: durable.id,
+    threadId: durable.threadId,
+  });
 }
 
 async function runSmokeChain(firstCode: number | null) {
@@ -643,10 +712,14 @@ function handleStop(_req: http.IncomingMessage, res: http.ServerResponse) {
     sendJson(res, 200, { ok: true, stopped: false });
     return;
   }
+  if (activeDurableRunId) {
+    cancelDurableRun(activeDurableRunId);
+    if (lastRun) (lastRun as { cancelled?: boolean }).cancelled = true;
+  }
   // Kill only — child's "close" handler finalizes session + unlocks UI
-  broadcast("run", { type: "stopped", phase: "running" });
+  broadcast("run", { type: "stopped", phase: "running", runId: activeDurableRunId });
   activeChild.kill();
-  sendJson(res, 200, { ok: true, stopped: true });
+  sendJson(res, 200, { ok: true, stopped: true, runId: activeDurableRunId });
 }
 
 function handleReady(_req: http.IncomingMessage, res: http.ServerResponse) {
@@ -695,7 +768,13 @@ function handleSse(_req: http.IncomingMessage, res: http.ServerResponse) {
   _req.on("close", () => sseClients.delete(id));
 }
 
-const PUBLIC_API = new Set(["/api/login", "/api/auth/status", "/api/logout"]);
+const PUBLIC_API = new Set([
+  "/api/login",
+  "/api/auth/status",
+  "/api/logout",
+  "/healthz",
+  "/api/healthz",
+]);
 
 const server = http.createServer(async (req, res) => {
   try {
@@ -761,6 +840,27 @@ const server = http.createServer(async (req, res) => {
       return;
     }
 
+    // —— Public liveness (Phase 3) — before auth ——
+    if (method === "GET" && (p === "/healthz" || p === "/api/healthz")) {
+      let dbInfo: { kind: string; location: string } | null = null;
+      try {
+        const pers = getPersistence();
+        dbInfo = { kind: pers.driver.kind, location: pers.dbPath };
+      } catch {
+        dbInfo = null;
+      }
+      sendJson(res, 200, {
+        ok: true,
+        status: "ok",
+        service: "sam-harness-control-plane",
+        tenantId: getActiveTenantId(),
+        db: dbInfo,
+        uptimeSec: getMetrics().uptimeSec,
+        running: Boolean(activeChild),
+      });
+      return;
+    }
+
     // —— Require auth for every other /api/* route ——
     if (p.startsWith("/api/") && !PUBLIC_API.has(p)) {
       const auth = authenticateRequest(req, OWNER_TOKEN, {
@@ -784,6 +884,94 @@ const server = http.createServer(async (req, res) => {
         tasksInSession: session.entries.length,
         port: PORT,
         auth: true,
+        tenantId: getActiveTenantId(),
+        metrics: getMetrics(),
+      });
+      return;
+    }
+
+    if (method === "GET" && p === "/api/metrics") {
+      sendJson(res, 200, { ok: true, metrics: getMetrics() });
+      return;
+    }
+
+    if (method === "GET" && p === "/api/tenant") {
+      const tid = getActiveTenantId();
+      let costCapUsd = 0.5;
+      try {
+        const row = getDriver()
+          .prepare("SELECT cost_cap_usd FROM tenants WHERE id = ?")
+          .get(tid);
+        if (row) costCapUsd = Number(row.cost_cap_usd);
+      } catch {
+        /* ignore */
+      }
+      sendJson(res, 200, {
+        ok: true,
+        tenantId: tid,
+        defaultTenant: DEFAULT_TENANT_ID,
+        outputHome: tenantOutputHome(tid),
+        costCapUsd,
+      });
+      return;
+    }
+
+    if (method === "POST" && p === "/api/tenant") {
+      const body = JSON.parse((await readBody(req)) || "{}") as { tenantId?: string };
+      const next = setActiveTenantId(body.tenantId || DEFAULT_TENANT_ID);
+      sendJson(res, 200, {
+        ok: true,
+        tenantId: next,
+        outputHome: tenantOutputHome(next),
+      });
+      return;
+    }
+
+    if (method === "GET" && p === "/api/runs") {
+      const urlObj = new URL(req.url || "/", `http://${req.headers.host}`);
+      const limit = Number(urlObj.searchParams.get("limit") || 30);
+      sendJson(res, 200, {
+        ok: true,
+        tenantId: getActiveTenantId(),
+        runs: listDurableRuns({ limit }),
+      });
+      return;
+    }
+
+    if (method === "GET" && /^\/api\/runs\/[^/]+\/timeline$/.test(p)) {
+      const runId = decodeURIComponent(p.split("/")[3] || "");
+      sendJson(res, 200, {
+        ok: true,
+        runId,
+        tenantId: getActiveTenantId(),
+        events: getRunTimeline(runId),
+      });
+      return;
+    }
+
+    if (method === "POST" && /^\/api\/runs\/[^/]+\/resume$/.test(p)) {
+      const runId = decodeURIComponent(p.split("/")[3] || "");
+      try {
+        const { resumeDurableRun } = await import("../lib/durableRuns.js");
+        const run = resumeDurableRun(runId);
+        sendJson(res, 200, { ok: true, run });
+      } catch (e: any) {
+        sendJson(res, 400, { ok: false, error: e?.message || String(e) });
+      }
+      return;
+    }
+
+    if (method === "POST" && p === "/api/db/backup") {
+      const pers = getPersistence();
+      const result = backupSqlite(pers.driver, {
+        backupDir: path.join(tenantStateDir(), "backups"),
+        label: "manual",
+        keep: 20,
+      });
+      sendJson(res, result.ok ? 200 : 400, {
+        ok: result.ok,
+        path: result.path,
+        error: result.error,
       });
       return;
     }
@@ -1095,53 +1283,79 @@ const dailyScheduler = startDailyOpsScheduler({
   intervalMs: Number(process.env.DAILY_OPS_TICK_MS || 30_000),
   onRun: async (job) => {
     const result = await executeDailyOpsJob(job);
-    console.log(
-      `[DailyOps] ran ${job.id} → ${result.success ? "ok" : "fail"}`
+    log.info(
+      { jobId: job.id, ok: result.success },
+      "daily-ops tick"
     );
     return result;
   },
 });
 
-server.listen(PORT, "127.0.0.1", () => {
-  const url = `http://127.0.0.1:${PORT}/`;
+async function boot() {
   try {
-    seedHarnessLessons(ROOT);
-  } catch {
-    /* ignore */
-  }
-  const tokenHint =
-    process.env.CONTROL_PLANE_TOKEN?.trim()
-      ? "CONTROL_PLANE_TOKEN (env)"
-      : `.controlplane-token (${OWNER_TOKEN.slice(0, 8)}…)`;
-  try {
-    const layout = ensureOutputHome();
-    cleanOutputTemp();
-    console.log(`[Control Plane] Output home → ${layout.home}`);
+    const pers = await initPersistence({ cwd: ROOT, skipBackup: false });
+    log.info(
+      { backend: pers.driver.kind, dbPath: pers.dbPath, tenantId: pers.tenantId },
+      "persistence ready"
+    );
+    if (pers.importResult?.imported?.length) {
+      log.info({ imported: pers.importResult.imported }, "legacy JSON imported");
+    }
   } catch (e: any) {
-    console.warn(`[Control Plane] Output home init failed: ${e?.message || e}`);
+    log.warn({ err: e?.message || String(e) }, "persistence init failed — falling back on first access");
   }
-  console.log(`[Control Plane] Sam-Harness UI → ${url}`);
-  console.log(`[Control Plane] Project root → ${ROOT}`);
-  console.log(`[Control Plane] Auth required — owner token: ${tokenHint}`);
-  console.log(
-    `[Control Plane] Workspace roots (${listAllowlistRoots(ROOT).length}): ` +
-      listAllowlistRoots(ROOT)
-        .slice(0, 8)
-        .join(" | ") +
-      (listAllowlistRoots(ROOT).length > 8 ? " | …" : "")
-  );
-  console.log(`[Control Plane] Session ${session.id} · ${session.entries.length} prior entries`);
-  console.log(
-    `[Control Plane] Daily Ops scheduler on (tick ${process.env.DAILY_OPS_TICK_MS || 30000}ms)`
-  );
-  console.log(
-    `[Control Plane] Email provider: ${getCommsProviderStatus().provider}` +
-      (getCommsProviderStatus().dryRun ? " (dry-run)" : "")
-  );
-  // Keep reference so shutdown hooks can stop it later
-  void dailyScheduler;
-  if (process.platform === "win32" && process.env.CONTROL_PLANE_NO_BROWSER !== "1") {
-    spawn("cmd", ["/c", "start", "", url], { detached: true, stdio: "ignore" }).unref();
+  try {
+    await initTracing();
+  } catch {
+    /* optional */
   }
-});
+
+  server.listen(PORT, "127.0.0.1", () => {
+    const url = `http://127.0.0.1:${PORT}/`;
+    try {
+      seedHarnessLessons(ROOT);
+    } catch {
+      /* ignore */
+    }
+    const tokenHint =
+      process.env.CONTROL_PLANE_TOKEN?.trim()
+        ? "CONTROL_PLANE_TOKEN (env)"
+        : `.controlplane-token (${OWNER_TOKEN.slice(0, 8)}…)`;
+    try {
+      const layout = ensureOutputHome(tenantOutputHome());
+      cleanOutputTemp();
+      console.log(`[Control Plane] Output home → ${layout.home}`);
+    } catch (e: any) {
+      console.warn(`[Control Plane] Output home init failed: ${e?.message || e}`);
+    }
+    console.log(`[Control Plane] Sam-Harness UI → ${url}`);
+    console.log(`[Control Plane] Project root → ${ROOT}`);
+    console.log(`[Control Plane] Auth required — owner token: ${tokenHint}`);
+    console.log(`[Control Plane] Tenant → ${getActiveTenantId()}`);
+    console.log(`[Control Plane] /healthz ready`);
+    console.log(
+      `[Control Plane] Workspace roots (${listAllowlistRoots(ROOT).length}): ` +
+        listAllowlistRoots(ROOT)
+          .slice(0, 8)
+          .join(" | ") +
+        (listAllowlistRoots(ROOT).length > 8 ? " | …" : "")
+    );
+    console.log(`[Control Plane] Session ${session.id} · ${session.entries.length} prior entries`);
+    console.log(
+      `[Control Plane] Daily Ops scheduler on (tick ${process.env.DAILY_OPS_TICK_MS || 30000}ms)`
+    );
+    const email = getCommsProviderStatus();
+    console.log(
+      `[Control Plane] Email provider: ${email.provider}` +
+        (email.dryRun ? " (dry-run)" : "")
+    );
+    void dailyScheduler;
+    if (process.platform === "win32" && process.env.CONTROL_PLANE_NO_BROWSER !== "1") {
+      spawn("cmd", ["/c", "start", "", url], { detached: true, stdio: "ignore" }).unref();
+    }
+  });
+}
+
+void boot();
+
 

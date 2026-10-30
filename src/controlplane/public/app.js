@@ -344,6 +344,7 @@ const PLATFORM_STAGES = {
   daily: "stageDaily",
   profiles: "stageProfiles",
   memory: "stageMemory",
+  timeline: "stageTimeline",
   rollback: "stageRollback",
 };
 
@@ -355,6 +356,7 @@ function hideAllMainPanels() {
     $("stageDaily"),
     $("stageProfiles"),
     $("stageMemory"),
+    $("stageTimeline"),
     $("stageRollback"),
   ].forEach((el) => el?.classList.add("hidden"));
 }
@@ -383,8 +385,83 @@ function showPlatformPanel(view) {
   if (view === "daily") loadDailyOps();
   if (view === "profiles") loadProfiles();
   if (view === "memory") loadMemoryUi();
+  if (view === "timeline") loadRunsTimeline();
   if (view === "rollback") loadRollback();
 }
+
+async function loadRunsTimeline() {
+  const body = $("runsBody");
+  const meta = $("timelineMeta");
+  if (!body) return;
+  try {
+    const tenant = await api("/api/tenant").then((r) => r.json()).catch(() => ({}));
+    if ($("tenantIdInput") && tenant.tenantId) {
+      $("tenantIdInput").value = tenant.tenantId;
+    }
+    const data = await api("/api/runs?limit=40").then((r) => r.json());
+    body.innerHTML = "";
+    (data.runs || []).forEach((run) => {
+      const tr = document.createElement("tr");
+      tr.innerHTML = `<td class="mono">${escapeHtml(run.id)}</td>
+        <td>${escapeHtml(run.mode)}</td>
+        <td><span class="chip ${run.status === "completed" ? "on" : run.status === "failed" || run.status === "cancelled" ? "off" : ""}">${escapeHtml(run.status)}</span></td>
+        <td class="mono">${run.attempt ?? 0}</td>
+        <td class="mono">${escapeHtml(String(run.startedAt || "").slice(0, 19).replace("T", " "))}</td>
+        <td><button type="button" class="linkish" data-run-id="${escapeHtml(run.id)}">الخط الزمني</button></td>`;
+      body.appendChild(tr);
+    });
+    if (!(data.runs || []).length) {
+      body.innerHTML = `<tr><td colspan="6" class="dim">لا تشغيلات بعد</td></tr>`;
+    }
+    if (meta) {
+      meta.textContent = `Tenant: ${data.tenantId || "local"} · ${ (data.runs || []).length } تشغيل · output ${tenant.outputHome || ""}`;
+    }
+    body.querySelectorAll("[data-run-id]").forEach((btn) => {
+      btn.addEventListener("click", () => showRunTimeline(btn.getAttribute("data-run-id")));
+    });
+  } catch (e) {
+    body.innerHTML = `<tr><td colspan="6" class="dim">تعذّر التحميل</td></tr>`;
+    if (meta) meta.textContent = String(e?.message || e);
+  }
+}
+
+async function showRunTimeline(runId) {
+  const list = $("timelineList");
+  if (!list || !runId) return;
+  list.innerHTML = `<li class="dim">جارٍ التحميل…</li>`;
+  try {
+    const data = await api(`/api/runs/${encodeURIComponent(runId)}/timeline`).then((r) =>
+      r.json()
+    );
+    list.innerHTML = "";
+    (data.events || []).forEach((ev) => {
+      const li = document.createElement("li");
+      const when = String(ev.at || "").slice(11, 19);
+      li.innerHTML = `<strong class="mono">${escapeHtml(when)}</strong>
+        · <span class="chip">${escapeHtml(ev.kind)}</span>
+        · ${escapeHtml(ev.name)}
+        · <em>${escapeHtml(ev.status)}</em>
+        ${ev.durationMs != null ? ` · ${Math.round(ev.durationMs)}ms` : ""}
+        ${ev.costUsd != null ? ` · $${ev.costUsd}` : ""}`;
+      list.appendChild(li);
+    });
+    if (!(data.events || []).length) {
+      list.innerHTML = `<li class="dim">لا أحداث لهذا التشغيل</li>`;
+    }
+  } catch (e) {
+    list.innerHTML = `<li class="dim">${escapeHtml(String(e?.message || e))}</li>`;
+  }
+}
+
+$("btnRefreshRuns")?.addEventListener("click", () => loadRunsTimeline());
+$("btnTenantApply")?.addEventListener("click", async () => {
+  const tenantId = ($("tenantIdInput")?.value || "local").trim();
+  await api("/api/tenant", {
+    method: "POST",
+    body: JSON.stringify({ tenantId }),
+  });
+  loadRunsTimeline();
+});
 
 async function loadDailyOps() {
   const body = $("dailyOpsBody");

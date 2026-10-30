@@ -6,6 +6,9 @@ workspace-roots.json
 mcp.json
 .mcp.json
 cost-ledger.json
+*.sqlite
+*.sqlite-wal
+*.sqlite-shm
 node_modules/
 *.log
 .DS_Store

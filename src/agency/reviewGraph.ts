@@ -19,6 +19,11 @@ import {
   scoreGoalFidelity,
 } from "./goalFidelity.js";
 import { learningContextBlock } from "../controlplane/projectMemory.js";
+import { getCheckpointer } from "../lib/db/checkpointer.js";
+import { getPersistence } from "../lib/db/index.js";
+import { withRetry } from "../lib/retry.js";
+import { appendTimeline } from "../lib/durableRuns.js";
+import { withSpan } from "../lib/observability/index.js";
 
 const MAX_LOOPS = 5;
 
@@ -69,10 +74,14 @@ async function invoke(
   prompt: string
 ): Promise<string> {
   const modelName = String((model as { model?: string }).model || "specialist");
-  return invokeTracked(model, prompt, {
-    modelName,
-    cloud: useOllamaCloudNow(),
-  });
+  return withRetry(
+    () =>
+      invokeTracked(model, prompt, {
+        modelName,
+        cloud: useOllamaCloudNow(),
+      }),
+    { attempts: 3, label: `llm:${modelName}` }
+  );
 }
 
 async function invokeWithCloudFallback(
@@ -320,16 +329,33 @@ ${REJECTION_FORMAT}`
       remediate: "strategize",
     });
 
-  return graph.compile();
+  // Checkpointer enables crash-resume via thread_id
+  getPersistence();
+  return graph.compile({ checkpointer: getCheckpointer() });
 }
 
 let compiled: ReturnType<typeof buildGraph> | null = null;
+
+function getCompiled() {
+  if (!compiled) compiled = buildGraph();
+  return compiled;
+}
+
+/** Reset compiled graph (tests / checkpointer swap). */
+export function __resetReviewGraphForTests(): void {
+  compiled = null;
+}
 
 export async function runReviewGraph(input: {
   brief: string;
   evidenceMarkdown: string;
   loopDir: string;
   userGoal?: string;
+  /** LangGraph thread id — stable across resume after crash/restart */
+  threadId?: string;
+  /** When true, resume from last checkpoint instead of fresh state */
+  resume?: boolean;
+  runId?: string;
 }): Promise<{
   strategy: string;
   auditReport: string;
@@ -338,23 +364,65 @@ export async function runReviewGraph(input: {
   goalFidelityScore: number;
   loop: number;
   history: string[];
+  threadId: string;
 }> {
   fs.mkdirSync(input.loopDir, { recursive: true });
-  if (!compiled) compiled = buildGraph();
+  getPersistence();
+  const graph = getCompiled();
   const userGoal = input.userGoal || extractUserGoal(input.brief);
-  const out = await compiled.invoke({
-    brief: input.brief,
-    evidenceMarkdown: input.evidenceMarkdown,
-    loopDir: input.loopDir,
-    userGoal,
-    strategy: "",
-    auditReport: "",
-    loop: 0,
-    auditPassed: false,
-    goalPassed: false,
-    goalFidelityScore: 0,
-    history: [],
-  });
+  const threadId =
+    input.threadId ||
+    process.env.SAM_HARNESS_RUN_ID ||
+    `review-${Date.now().toString(36)}`;
+  const config = {
+    configurable: { thread_id: threadId },
+  };
+
+  if (input.runId) {
+    appendTimeline(input.runId, {
+      kind: "graph",
+      name: input.resume ? "review-resume" : "review-start",
+      status: "start",
+      detail: { threadId },
+    });
+  }
+
+  const out = await withSpan(
+    "reviewGraph",
+    { "sam.thread_id": threadId, "sam.resume": Boolean(input.resume) },
+    async () => {
+      if (input.resume) {
+        // Resume: invoke with null input to continue from checkpoint
+        return graph.invoke(null, config);
+      }
+      return graph.invoke(
+        {
+          brief: input.brief,
+          evidenceMarkdown: input.evidenceMarkdown,
+          loopDir: input.loopDir,
+          userGoal,
+          strategy: "",
+          auditReport: "",
+          loop: 0,
+          auditPassed: false,
+          goalPassed: false,
+          goalFidelityScore: 0,
+          history: [],
+        },
+        config
+      );
+    }
+  );
+
+  if (input.runId) {
+    appendTimeline(input.runId, {
+      kind: "graph",
+      name: "review-end",
+      status: out.auditPassed ? "ok" : "error",
+      detail: { loop: out.loop, auditPassed: out.auditPassed },
+    });
+  }
+
   return {
     strategy: out.strategy || "",
     auditReport: out.auditReport || "",
@@ -363,6 +431,7 @@ export async function runReviewGraph(input: {
     goalFidelityScore: Number(out.goalFidelityScore) || 0,
     loop: out.loop || 0,
     history: out.history || [],
+    threadId,
   };
 }
 

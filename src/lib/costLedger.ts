@@ -1,9 +1,13 @@
 /**
  * Runtime cost-cap enforcement — per-run + per-day token/cost ledger by model.
+ * Ledger persisted in embedded DB (legacy cost-ledger.json imported once).
  */
-import * as fs from "fs";
-import * as path from "path";
 import { loadHybridProfile } from "../controlplane/hybridProfile.js";
+import { loadStoreDoc, saveStoreDoc } from "./db/storeBridge.js";
+import { getActiveTenantId } from "./tenant/context.js";
+import { getDriver, getPersistence } from "./db/index.js";
+import { recordCost } from "./observability/metrics.js";
+import * as crypto from "crypto";
 
 const FILE = "cost-ledger.json";
 
@@ -91,30 +95,54 @@ export function estimateCloudCallUsd(model: string, promptChars = 0, outputChars
 }
 
 export function loadCostLedger(cwd: string): CostLedger {
-  const p = path.join(cwd, FILE);
-  try {
-    if (fs.existsSync(p)) {
-      const raw = JSON.parse(fs.readFileSync(p, "utf-8")) as CostLedger;
-      if (raw.day !== dayKey()) {
-        const fresh = emptyLedger();
-        saveCostLedger(cwd, fresh);
-        return fresh;
-      }
-      return {
-        day: raw.day,
-        entries: Array.isArray(raw.entries) ? raw.entries : [],
-        byModel: raw.byModel || {},
-        runs: raw.runs || {},
-      };
-    }
-  } catch {
-    /* reset */
+  const raw = loadStoreDoc<Partial<CostLedger>>(cwd, "cost-ledger", FILE, emptyLedger());
+  if (raw.day !== dayKey()) {
+    const fresh = emptyLedger();
+    saveCostLedger(cwd, fresh);
+    return fresh;
   }
-  return emptyLedger();
+  return {
+    day: raw.day || dayKey(),
+    entries: Array.isArray(raw.entries) ? raw.entries : [],
+    byModel: raw.byModel || {},
+    runs: raw.runs || {},
+  };
 }
 
 export function saveCostLedger(cwd: string, ledger: CostLedger): void {
-  fs.writeFileSync(path.join(cwd, FILE), JSON.stringify(ledger, null, 2), "utf-8");
+  saveStoreDoc(cwd, "cost-ledger", ledger);
+}
+
+function mirrorCostEntry(
+  cwd: string,
+  row: CostUsageEntry
+): void {
+  try {
+    getPersistence();
+    const tenantId = getActiveTenantId();
+    getDriver()
+      .prepare(
+        `INSERT INTO cost_entries (
+          id, tenant_id, day, at, run_id, model, input_tokens, output_tokens, cost_usd, cloud
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+      )
+      .run(
+        `ce-${crypto.randomBytes(4).toString("hex")}`,
+        tenantId,
+        dayKey(),
+        row.at,
+        row.runId,
+        row.model,
+        row.inputTokens,
+        row.outputTokens,
+        row.costUsd,
+        row.cloud ? 1 : 0
+      );
+    // Per-tenant day spend can also be derived from tenants.cost_cap_usd
+    void cwd;
+  } catch {
+    /* ignore mirror failures */
+  }
 }
 
 export function beginCostRun(runId?: string): string {
@@ -253,6 +281,8 @@ export function recordUsage(
   ledger.runs[runId] = run;
 
   saveCostLedger(cwd, ledger);
+  if (cloud && costUsd > 0) recordCost(costUsd);
+  mirrorCostEntry(cwd, row);
   return row;
 }
 

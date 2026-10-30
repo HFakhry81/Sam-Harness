@@ -1,8 +1,10 @@
 /**
  * P9 — Lightweight per-project memory / lessons store.
+ * Persisted in embedded DB (legacy project-memory.json imported once).
  */
 import * as fs from "fs";
 import * as path from "path";
+import { loadStoreDoc, saveStoreDoc } from "../lib/db/storeBridge.js";
 
 export type MemoryEntry = {
   key: string;
@@ -15,17 +17,11 @@ export type MemoryStore = { entries: MemoryEntry[] };
 const FILE = "project-memory.json";
 
 function load(cwd: string): MemoryStore {
-  const p = path.join(cwd, FILE);
-  try {
-    if (fs.existsSync(p)) return JSON.parse(fs.readFileSync(p, "utf-8"));
-  } catch {
-    /* ignore */
-  }
-  return { entries: [] };
+  return loadStoreDoc<MemoryStore>(cwd, "project-memory", FILE, { entries: [] });
 }
 
 function save(cwd: string, store: MemoryStore): void {
-  fs.writeFileSync(path.join(cwd, FILE), JSON.stringify(store, null, 2), "utf-8");
+  saveStoreDoc(cwd, "project-memory", store);
 }
 
 export function loadMemory(cwd: string): MemoryStore {

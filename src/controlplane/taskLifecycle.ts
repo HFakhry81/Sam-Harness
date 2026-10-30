@@ -10,6 +10,7 @@ import * as path from "path";
 import { extractGoalFocus } from "../agent/heuristic.js";
 import { buildTaskDraft, renderTaskTs, type TaskDraft } from "./taskWriter.js";
 import { writeTaskSpecFiles } from "./taskSpec.js";
+import { loadStoreDoc, saveStoreDoc } from "../lib/db/storeBridge.js";
 
 export type TaskFingerprintState = {
   lastSuccessHash: string | null;
@@ -21,29 +22,30 @@ export type TaskFingerprintState = {
 
 const STATE_FILE = "task-lifecycle.json";
 
+const EMPTY_LIFECYCLE: TaskFingerprintState = {
+  lastSuccessHash: null,
+  lastSuccessAt: null,
+  lastSuccessTitle: null,
+  lastFailureHash: null,
+  lastFailureAt: null,
+};
+
 export function goalFingerprint(goalOrTask: string): string {
   const goal = extractGoalFocus(goalOrTask).trim().toLowerCase().replace(/\s+/g, " ");
   return crypto.createHash("sha256").update(goal).digest("hex").slice(0, 24);
 }
 
 export function loadLifecycle(cwd: string): TaskFingerprintState {
-  const p = path.join(cwd, STATE_FILE);
-  try {
-    if (fs.existsSync(p)) return JSON.parse(fs.readFileSync(p, "utf-8"));
-  } catch {
-    /* ignore */
-  }
-  return {
-    lastSuccessHash: null,
-    lastSuccessAt: null,
-    lastSuccessTitle: null,
-    lastFailureHash: null,
-    lastFailureAt: null,
-  };
+  return loadStoreDoc<TaskFingerprintState>(
+    cwd,
+    "task-lifecycle",
+    STATE_FILE,
+    { ...EMPTY_LIFECYCLE }
+  );
 }
 
 function saveLifecycle(cwd: string, state: TaskFingerprintState): void {
-  fs.writeFileSync(path.join(cwd, STATE_FILE), JSON.stringify(state, null, 2), "utf-8");
+  saveStoreDoc(cwd, "task-lifecycle", state);
 }
 
 export function assertNotRepeatSuccess(

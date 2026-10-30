@@ -74,9 +74,10 @@
 - [x] Phase 2 gaps — MCP client (`mcp.json`), `run_node_sandbox`, generic Level-3, git snapshots
 - [x] P9 Memory — `project-memory.json` + UI (+ existing task-spec evals)
 - [x] P10 Rollback journal — file backups + git-snapshot entries from Level-3
+- [x] Phase 3 — SQLite (`node:sqlite`) + optional Postgres, LangGraph checkpointer, durable runs, tenant groundwork, pino/OTel/`/healthz`, timeline UI; `EMAIL_PROVIDER=smtp` default (see `docs/PHASE3_PRODUCTION_OPS.md`)
 
-**Test-ready today:** Control Plane + agency packs + `pnpm test` + `smoke:mcp` / `smoke:sandbox`.  
-**Next (Phase 3):** SQLite persistence, checkpointer, multi-client workspaces, OTel.
+**Test-ready today:** Control Plane + agency packs + `pnpm test` + smokes + `/healthz`.  
+**Next (Phase 4+):** Windows desktop operator, near-zero cost routing, trust packs, Arabic-first distribution.
 
 ## Success metrics (منافسة حقيقية)
 - تكلفة توكن لكل تقرير ناجح → أقرب ما يكون للصفر عبر المحلي.

@@ -88,12 +88,12 @@ describe("Daily Ops scheduler", () => {
 
   it("scheduler tick fires due jobs and writes run history under output home", async () => {
     const job = addDailyJob(dir, { title: "tick-me", schedule: "manual" });
-    // Force due via nextRunAt
-    const storePath = path.join(dir, "daily-ops.json");
-    const store = JSON.parse(fs.readFileSync(storePath, "utf-8"));
+    // Force due via nextRunAt (DB-backed store — no cwd JSON file)
+    const { saveStoreDoc } = await import("../src/lib/db/storeBridge.js");
+    const store = loadDailyOps(dir);
     store.jobs[0].schedule = "0 0 * * *";
     store.jobs[0].nextRunAt = new Date(Date.now() - 1000).toISOString();
-    fs.writeFileSync(storePath, JSON.stringify(store, null, 2));
+    saveStoreDoc(dir, "daily-ops", store);
 
     let ran = 0;
     const handle = startDailyOpsScheduler({

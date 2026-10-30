@@ -3,8 +3,6 @@
  * Providers: SMTP (nodemailer), Resend API, or dry-run when not configured.
  * Never auto-sends without owner approval (approved=true + APPROVE_COMMS=1).
  */
-import * as fs from "fs";
-import * as path from "path";
 import * as crypto from "crypto";
 import {
   detectEmailProvider,
@@ -12,6 +10,7 @@ import {
   type EmailProviderStatus,
   type SendEmailResult,
 } from "./emailProvider.js";
+import { loadStoreDoc, saveStoreDoc } from "../lib/db/storeBridge.js";
 
 export type CommDraft = {
   id: string;
@@ -38,17 +37,11 @@ export type CommsStore = { drafts: CommDraft[] };
 const FILE = "comms-drafts.json";
 
 function load(cwd: string): CommsStore {
-  const p = path.join(cwd, FILE);
-  try {
-    if (fs.existsSync(p)) return JSON.parse(fs.readFileSync(p, "utf-8"));
-  } catch {
-    /* ignore */
-  }
-  return { drafts: [] };
+  return loadStoreDoc<CommsStore>(cwd, "comms-drafts", FILE, { drafts: [] });
 }
 
 function save(cwd: string, store: CommsStore): void {
-  fs.writeFileSync(path.join(cwd, FILE), JSON.stringify(store, null, 2), "utf-8");
+  saveStoreDoc(cwd, "comms-drafts", store);
 }
 
 export function loadComms(cwd: string): CommsStore {

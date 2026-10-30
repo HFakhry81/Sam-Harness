@@ -2,7 +2,7 @@
 
 **الهدف:** وكالة هجينة متعددة الاستخدامات جاهزة لإنتاج داخلي موثوق (UpNexa)، ثم توسيع لعزل عملاء متعددين.
 
-**الوضع (بعد Phase 1 — الأمن والتكلفة):** Control Plane محمي بتوكن مالك + CSRF، صندوق ملفات بجذور صريحة (deny-by-default)، وسقف تكلفة يومي يُفرض وقت التشغيل. ما زال منتجاً لمستخدم واحد على جهاز محلي (ليس multi-tenant).
+**الوضع (بعد Phase 3 — التشغيل الإنتاجي):** Control Plane محمي بتوكن مالك + CSRF، صندوق ملفات، سقف تكلفة مفروض، SQLite مدمج (Postgres اختياري)، تشغيلات قابلة للاستئناف + checkpointer، عزل عملاء أولي، ومراقبة (pino/OTel/`/healthz`). الاستخدام الافتراضي ما زال مالكاً واحداً (`tenant=local`).
 
 ## فجوات حرجة (مما رُصد تشغيلياً)
 
@@ -15,12 +15,12 @@
 | 5 | review-loop قديم يتسرب للمهمة التالية | ضوضاء/انحراف أول لفة | ✅ مسح قبل التشغيل |
 | 6 | لا بوابة صلبة تمنع docsRoot أجنبي لمهام الذات | خطر تكرار خطأ Maw3ed | ✅ حراسة runner |
 | 7 | نقص evals انحدار لمسار الحزم/الذات | رجوع الصدوع | ✅ `smoke:prod-gates` 4/4 |
-| 8 | عزل عملاء / ملفات اعتماد متعددة | غير جاهز لـ multi-tenant | لاحقاً (Phase 3) |
+| 8 | عزل عملاء / ملفات اعتماد متعددة | عزل tenant_id + مجلدات workspaces | ✅ Phase 3 groundwork |
 | 9 | موصلات إيميل حقيقية + جدولة Daily Ops | SMTP/Resend/dry-run + مجدول cron | ✅ Phase 2 |
 | 10 | snapshots rollback | journal + git branch/commit snapshots | ✅ Phase 2 |
 | 11 | Control Plane بلا مصادقة | أي عملية محلية تشغّل المهام | ✅ Phase 1 — توكن مالك + جلسة + CSRF + Host/Origin |
 | 12 | أمان مسارات الأدوات | سطح هجوم / أو تقييد زائد | ✅ Phase 1 — بيئة مستخدم افتراضية + DENY حساس + `WORKSPACE_ROOTS`/`WORKSPACE_DENY` |
-| 13 | سقف تكلفة محفوظ وغير مفروض | تجاوز ميزانية سحابية | ✅ Phase 1 — `cost-ledger.json` + إيقاف السحابة؛ افتراضي $0.50 |
+| 13 | سقف تكلفة محفوظ وغير مفروض | تجاوز ميزانية سحابية | ✅ Phase 1/3 — ledger في DB + إيقاف السحابة؛ افتراضي $0.50 |
 | 14 | مخرجات الوكيل متفرقة في cwd | فوضى ملفات | ✅ Phase 1 — `SAM_OUTPUT_HOME` ≈ Documents/Sam-Harness |
 
 ## تعريف «جاهز للإنتاج الداخلي»
@@ -52,9 +52,16 @@ typecheck + Vitest + CI (ubuntu/windows) + smokes محمولة.
 4. إيميل حقيقي: SMTP (nodemailer) و/أو Resend؛ dry-run إن لم يُضبط؛ موافقة مالك إلزامية.
 5. مجدول Daily Ops ثابت في `daily-ops.json` مع سجل تحت `runs/daily-ops/`.
 
-### بعد Phase 2 (Phase 3+)
+### Phase 3 — التشغيل الإنتاجي ✅
+1. طبقة تخزين SQLite (`node:sqlite`) تحت `SAM_OUTPUT_HOME/state/` + استيراد JSON لمرة واحدة + نسخ احتياطي؛ `DATABASE_URL` لـ Postgres اختياري.
+2. تشغيلات دائمة + LangGraph checkpointer + استئناف/إلغاء/إعادة محاولة.
+3. عزل عملاء أولي (`SAM_TENANT_ID`، مجلدات `workspaces/<id>/`، سقف تكلفة لكل tenant).
+4. pino + OTel اختياري + مقاييس + خط زمني في UI + `/healthz`.
+5. `EMAIL_PROVIDER=smtp` افتراضياً (dry-run حتى ضبط SMTP).
+
+### بعد Phase 3 (Phase 4+)
 - موافقة بشرية موسّعة على أفعال مدمرة (الحذف خارج مساحة الوكيل ما زال عبر confirm + مصفوفة الأدوار).
-- عزل ملفات لكل عميل، SQLite/checkpointer، مراقبة OTel.
+- مشغّل سطح مكتب Windows، تكلفة شبه صفرية، بوابات ثقة، توزيع عربي.
 
 ## قرارات المالك (مُثبَّتة في هذا الفرع)
 
@@ -64,6 +71,8 @@ typecheck + Vitest + CI (ubuntu/windows) + smokes محمولة.
 | مجلد مخرجات الوكيل | `~/Documents/Sam-Harness` (`SAM_OUTPUT_HOME`) مع `reports/ documents/ exports/ runs/ memory/ temp/` |
 | سقف التكلفة اليومي | **$0.50** افتراضياً؛ `$0` = منع السحابة بالكامل |
 | مصدر التوكن | ملف محلي مولَّد أو `CONTROL_PLANE_TOKEN` في `.env` |
-| مزود الإيميل | **قرار مفتوح:** `EMAIL_PROVIDER=smtp` أو `resend` (أو dry-run الافتراضي) |
+| مزود الإيميل | **SMTP** — `EMAIL_PROVIDER=smtp` افتراضياً؛ dry-run حتى ضبط `SMTP_*`؛ Resend عبر `EMAIL_PROVIDER=resend` |
+| قاعدة البيانات | SQLite مدمج افتراضياً؛ Postgres اختياري عبر `DATABASE_URL` |
+| التتبع | OpenTelemetry فقط (مُصدِّر اختياري عبر env) |
 | عزل التنفيذ | عملية فرعية مقيدة افتراضياً؛ Docker اختياري عند التوفر |
 | خوادم MCP الأولى | ابدأ من `mcp.example.json`؛ أضف الخوادم المطلوبة في `mcp.json` (غير مُلتزَم إن حوى أسراراً) |

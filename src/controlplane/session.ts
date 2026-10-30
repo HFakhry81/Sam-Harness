@@ -6,6 +6,7 @@ import * as fs from "fs";
 import * as path from "path";
 import type { UiRoute } from "./taskWriter.js";
 import { artifactNamesForSession } from "./artifacts.js";
+import { loadStoreDoc, saveStoreDoc } from "../lib/db/storeBridge.js";
 
 export type SessionEntry = {
   id: string;
@@ -53,27 +54,25 @@ function newSession(): AgencySession {
 }
 
 export function loadSession(cwd: string): AgencySession {
-  const p = path.join(cwd, "controlplane-session.json");
-  try {
-    if (fs.existsSync(p)) {
-      const j = JSON.parse(fs.readFileSync(p, "utf-8")) as AgencySession;
-      if (j?.id && Array.isArray(j.entries)) return j;
-    }
-  } catch {
-    /* ignore */
-  }
+  const j = loadStoreDoc<Partial<AgencySession>>(
+    cwd,
+    "controlplane-session",
+    "controlplane-session.json",
+    {}
+  );
+  if (j?.id && Array.isArray(j.entries)) return j as AgencySession;
   return newSession();
 }
 
 export function saveSession(cwd: string, session: AgencySession): void {
   session.updatedAt = new Date().toISOString();
-  fs.writeFileSync(
-    path.join(cwd, "controlplane-session.json"),
-    JSON.stringify(session, null, 2),
-    "utf-8"
-  );
+  saveStoreDoc(cwd, "controlplane-session", session);
   const md = renderSessionMarkdown(session);
-  fs.writeFileSync(path.join(cwd, "controlplane-session.md"), md, "utf-8");
+  try {
+    fs.writeFileSync(path.join(cwd, "controlplane-session.md"), md, "utf-8");
+  } catch {
+    /* markdown mirror is best-effort */
+  }
 }
 
 export function resetSession(cwd: string): AgencySession {
