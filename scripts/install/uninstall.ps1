@@ -1,7 +1,7 @@
 ﻿#Requires -Version 5.1
 <#
 .SYNOPSIS
-  Sam-Harness uninstall (Windows) — removes startup task + install marker.
+  Sam-Harness uninstall (Windows) - removes startup task + install marker.
   Does not delete SAM_OUTPUT_HOME or node_modules unless -PurgeData / -PurgeDeps.
 #>
 [CmdletBinding()]

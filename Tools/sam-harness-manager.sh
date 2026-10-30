@@ -2,7 +2,7 @@
 # Sam-Harness unified Tools manager (Ubuntu / macOS).
 # Usage:
 #   ./sam-harness-manager.sh
-#   ./sam-harness-manager.sh --action update --lang en --non-interactive
+#   ./sam-harness-manager.sh --action update --non-interactive
 set -euo pipefail
 
 TOOLS_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -22,7 +22,7 @@ RESTORE_PATH=""
 
 usage() {
   cat <<EOF
-Usage: $(basename "$0") [--action ID] [--lang ar|en] [--non-interactive]
+Usage: $(basename "$0") [--action ID] [--non-interactive]
                         [--clone-url URL] [--backup-path PATH] [--restore-path PATH]
 
 Actions (see Tools/lib/actions.manifest):
@@ -34,7 +34,7 @@ EOF
 while [[ $# -gt 0 ]]; do
   case "$1" in
     --action|-Action|-a) ACTION="${2:-}"; shift ;;
-    --lang|-Lang) LANG_OPT="${2:-}"; shift ;;
+    --lang|-Lang) LANG_OPT="${2:-}"; shift ;;  # ignored (English-only)
     --non-interactive|-NonInteractive|-y) NONINTERACTIVE=1 ;;
     --clone-url) CLONE_URL="${2:-}"; shift ;;
     --backup-path|-BackupPath) BACKUP_PATH="${2:-}"; shift ;;
@@ -45,44 +45,38 @@ while [[ $# -gt 0 ]]; do
   shift
 done
 
-if [[ -n "$LANG_OPT" ]]; then
-  sam_set_lang "$LANG_OPT"
-else
-  sam_set_lang "${SAM_TOOLS_LANG:-ar}"
-fi
+sam_set_lang en  # English-only (-Lang/--lang ignored)
 
 # Ensure UTF-8 locale when possible
 export LANG="${LANG:-en_US.UTF-8}"
 export LC_ALL="${LC_ALL:-$LANG}"
 
 show_menu() {
-  sam_banner "$(t "القائمة الرئيسية" "Main menu")"
+  sam_banner "Main menu"
   echo -e "  ${C_GRAY}Project: ${PROJECT_ROOT}${C_RESET}"
-  echo -e "  ${C_GRAY}Lang: ${SAM_HARNESS_LANG}  |  $(t "اضغط L لتبديل اللغة" "Press L to toggle language")${C_RESET}"
   echo ""
   local rows=(
-    "1|install|تثبيت على جهاز جديد|Install on a new machine"
-    "2|setup-prereqs|إعداد المتطلبات|Setup prerequisites"
-    "3|install-deps|تثبيت الاعتماديات (pnpm)|Install dependencies (pnpm)"
-    "4|update|تحديث (git + install + migrate + doctor)|Update (git + install + migrate + doctor)"
-    "5|build-check|بناء/فحص (typecheck + tests + doctor)|Build/check (typecheck + tests + doctor)"
-    "6|start-ui|تشغيل واجهة Control Plane|Start Control Plane UI"
-    "7|pull-models|سحب نماذج Ollama (من team.json)|Pull Ollama models (from team.json)"
-    "8|doctor|Doctor — فحص الصحة|Doctor — health check"
-    "9|help|المساعدة (pnpm help)|Help (pnpm help)"
-    "10|backup|نسخة احتياطية (DB + config + .env)|Backup (DB + config + .env)"
-    "11|restore|استعادة من نسخة|Restore from backup"
-    "12|repair|إصلاح (deps + migrate + doctor)|Repair (deps + migrate + doctor)"
-    "13|uninstall|إلغاء التثبيت|Uninstall"
-    "14|view-logs|عرض السجلات|View logs"
-    "15|cleanup-logs|تنظيف السجلات|Cleanup logs"
-    "16|health|فحص حي (doctor + /healthz)|Live health (doctor + /healthz)"
-    "0|exit|خروج|Exit"
+    "1|install|Install on a new machine"
+    "2|setup-prereqs|Setup prerequisites"
+    "3|install-deps|Install dependencies (pnpm)"
+    "4|update|Update (git + install + migrate + doctor)"
+    "5|build-check|Build/check (typecheck + tests + doctor)"
+    "6|start-ui|Start Control Plane UI"
+    "7|pull-models|Pull Ollama models (from team.json)"
+    "8|doctor|Doctor - health check"
+    "9|help|Help (pnpm help)"
+    "10|backup|Backup (DB + config + .env)"
+    "11|restore|Restore from backup"
+    "12|repair|Repair (deps + migrate + doctor)"
+    "13|uninstall|Uninstall"
+    "14|view-logs|View logs"
+    "15|cleanup-logs|Cleanup logs"
+    "16|health|Live health (doctor + /healthz)"
+    "0|exit|Exit"
   )
-  local row n id ar en label
+  local row n id label
   for row in "${rows[@]}"; do
-    IFS='|' read -r n id ar en <<<"$row"
-    if [[ "$SAM_HARNESS_LANG" == "en" ]]; then label="$en"; else label="$ar"; fi
+    IFS='|' read -r n id label <<<"$row"
     printf '   [%2s]  %s\n' "$n" "$label"
   done
   echo ""
@@ -91,9 +85,6 @@ show_menu() {
 resolve_choice() {
   local c="$1"
   c="$(echo "$c" | tr -d '[:space:]')"
-  case "$c" in
-    l|L|ع) echo "__toggle_lang__"; return ;;
-  esac
   case "$c" in
     1) echo install ;;
     2) echo setup-prereqs ;;
@@ -123,13 +114,13 @@ resolve_choice() {
 }
 
 action_install() {
-  sam_step "$(t "تثبيت على جهاز جديد (تفويض إلى scripts/install)" "Fresh-machine install (delegate to scripts/install)")"
+  sam_step "Fresh-machine install (delegate to scripts/install)"
   local is_repo=0
   if [[ -f "$PROJECT_ROOT/package.json" ]] && grep -q '"name"[[:space:]]*:[[:space:]]*"Sam-Harness"' "$PROJECT_ROOT/package.json"; then
     is_repo=1
   fi
   if [[ "$is_repo" -eq 0 ]]; then
-    sam_warn "$(t "المجلد الحالي ليس Sam-Harness — محاولة الاستنساخ" "Current folder is not Sam-Harness — attempting clone")"
+    sam_warn "Current folder is not Sam-Harness - attempting clone"
     if ! command -v git >/dev/null 2>&1; then
       sam_fail "git missing"; return 1
     fi
@@ -137,7 +128,7 @@ action_install() {
     parent="$(dirname "$PROJECT_ROOT")"
     target="$parent/Sam-Harness"
     if [[ ! -d "$target" ]]; then
-      sam_info "git clone $CLONE_URL → $target"
+      sam_info "git clone $CLONE_URL -> $target"
       git clone "$CLONE_URL" "$target"
     fi
     PROJECT_ROOT="$target"
@@ -150,15 +141,15 @@ action_install() {
   fi
   local args=()
   if [[ "$NONINTERACTIVE" -eq 1 ]]; then args+=(--non-interactive); fi
-  sam_info "→ bash $installer ${args[*]:-}"
+  sam_info "-> bash $installer ${args[*]:-}"
   bash "$installer" "${args[@]+"${args[@]}"}"
   local ec=$?
-  if [[ $ec -eq 0 ]]; then sam_ok "$(t "التثبيت اكتمل" "Install finished")"; else sam_fail "install.sh exit $ec"; fi
+  if [[ $ec -eq 0 ]]; then sam_ok "Install finished"; else sam_fail "install.sh exit $ec"; fi
   return $ec
 }
 
 action_setup_prereqs() {
-  sam_step "$(t "التحقق من Git / Node / pnpm / Ollama" "Check Git / Node / pnpm / Ollama")"
+  sam_step "Check Git / Node / pnpm / Ollama"
   if ! command -v git >/dev/null 2>&1; then
     sam_warn "Git missing"
     if command -v apt-get >/dev/null 2>&1; then
@@ -171,7 +162,7 @@ action_setup_prereqs() {
   if command -v git >/dev/null 2>&1; then sam_ok "$(git --version)"; else sam_fail "Git not in PATH"; fi
 
   if ! command -v node >/dev/null 2>&1; then
-    sam_warn "Node missing — install Node 20+ LTS"
+    sam_warn "Node missing - install Node 20+ LTS"
     if command -v brew >/dev/null 2>&1; then
       brew install node@22 || true
     fi
@@ -186,7 +177,7 @@ action_setup_prereqs() {
     corepack prepare "pnpm@${pnpm_ver}" --activate >/dev/null 2>&1 || true
   fi
   if ! command -v pnpm >/dev/null 2>&1; then
-    sam_warn "pnpm missing — npm install -g pnpm"
+    sam_warn "pnpm missing - npm install -g pnpm"
     npm install -g pnpm
   fi
   if command -v pnpm >/dev/null 2>&1; then sam_ok "pnpm $(pnpm -v)"; else sam_fail "pnpm missing"; return 1; fi
@@ -194,7 +185,7 @@ action_setup_prereqs() {
   if command -v ollama >/dev/null 2>&1; then
     sam_ok "Ollama CLI found"
   else
-    sam_warn "$(t "Ollama غير موجود — https://ollama.com/download" "Ollama not found — https://ollama.com/download")"
+    sam_warn "Ollama not found - https://ollama.com/download"
   fi
 
   sam_step ".env + SAM_OUTPUT_HOME"
@@ -213,7 +204,7 @@ action_setup_prereqs() {
 action_install_deps() {
   sam_step "pnpm install"
   if ! command -v pnpm >/dev/null 2>&1; then
-    sam_fail "$(t "pnpm مفقود — شغّل setup-prereqs أولاً" "pnpm missing — run setup-prereqs first")"
+    sam_fail "pnpm missing - run setup-prereqs first"
     return 1
   fi
   pnpm install
@@ -223,29 +214,29 @@ action_install_deps() {
 }
 
 action_update() {
-  sam_step "$(t "تحديث آمن للفرع الحالي" "Safe update of current branch")"
+  sam_step "Safe update of current branch"
   if ! command -v git >/dev/null 2>&1; then sam_fail "git missing"; return 1; fi
 
   local dirty
   dirty="$(git status --porcelain || true)"
   if [[ -n "$dirty" ]]; then
-    sam_fail "$(t "شجرة العمل غير نظيفة — ارفض التحديث. احفظ/التزم التغييرات أولاً." "Dirty working tree — refusing update. Commit or stash first.")"
+    sam_fail "Dirty working tree - refusing update. Commit or stash first."
     sam_info "$dirty"
     return 1
   fi
-  sam_ok "$(t "شجرة العمل نظيفة" "Working tree clean")"
+  sam_ok "Working tree clean"
 
   local branch
   branch="$(git rev-parse --abbrev-ref HEAD)"
   sam_info "branch=$branch"
   if [[ "$branch" == "HEAD" ]]; then
-    sam_fail "$(t "detached HEAD — ارفض السحب" "detached HEAD — refusing pull")"
+    sam_fail "detached HEAD - refusing pull"
     return 1
   fi
 
   sam_step "git pull --ff-only origin $branch"
   if ! git pull --ff-only "origin" "$branch"; then
-    sam_warn "ff-only origin failed — trying git pull --ff-only"
+    sam_warn "ff-only origin failed - trying git pull --ff-only"
     if ! git pull --ff-only; then
       sam_fail "git pull failed"
       return 1
@@ -274,7 +265,7 @@ action_build_check() {
 }
 
 action_start_ui() {
-  sam_step "$(t "تشغيل Control Plane" "Start Control Plane")"
+  sam_step "Start Control Plane"
   if [[ ! -d "$PROJECT_ROOT/node_modules" ]]; then
     action_install_deps || return $?
   fi
@@ -288,9 +279,9 @@ action_start_ui() {
 }
 
 action_pull_models() {
-  sam_step "$(t "سحب النماذج المحلية من config/team.json" "Pull local models from config/team.json")"
+  sam_step "Pull local models from config/team.json"
   if ! command -v ollama >/dev/null 2>&1; then
-    sam_fail "$(t "ollama غير موجود في PATH" "ollama not in PATH")"
+    sam_fail "ollama not in PATH"
     return 1
   fi
   local m failed=0
@@ -328,12 +319,12 @@ action_help() {
   sam_step "pnpm run help"
   if ! command -v pnpm >/dev/null 2>&1; then sam_fail "pnpm missing"; return 1; fi
   pnpm run help || true
-  sam_info "$(t "مدير الأدوات: Tools/sam-harness-manager.sh" "Tools manager: Tools/sam-harness-manager.sh")"
+  sam_info "Tools manager: Tools/sam-harness-manager.sh"
   return 0
 }
 
 action_backup() {
-  sam_step "$(t "نسخ احتياطي لقاعدة البيانات والإعدادات" "Backup DB + config + .env")"
+  sam_step "Backup DB + config + .env"
   sam_ensure_output_home
   local home stamp dest stage
   home="$(sam_output_home)"
@@ -359,18 +350,18 @@ action_backup() {
     dest="${dest%.zip}.tar.gz"
   fi
   rm -rf "$stage"
-  sam_ok "Backup → $dest"
+  sam_ok "Backup -> $dest"
   return 0
 }
 
 action_restore() {
-  sam_step "$(t "استعادة من أرشيف" "Restore from archive")"
+  sam_step "Restore from archive"
   local zip="${RESTORE_PATH:-${BACKUP_PATH:-}}"
   if [[ -z "$zip" && "$NONINTERACTIVE" -eq 0 ]]; then
-    read -r -p "$(t "  مسار ملف النسخة" "  Backup archive path"): " zip || true
+    read -r -p "  Backup archive path: " zip || true
   fi
   if [[ -z "$zip" || ! -f "$zip" ]]; then
-    sam_fail "$(t "ملف النسخة مفقود" "Backup archive missing")"
+    sam_fail "Backup archive missing"
     return 1
   fi
   sam_ensure_output_home
@@ -401,12 +392,12 @@ action_restore() {
     sam_step "pnpm run migrate"
     pnpm run migrate || true
   fi
-  sam_ok "$(t "الاستعادة اكتملت" "Restore complete")"
+  sam_ok "Restore complete"
   return 0
 }
 
 action_repair() {
-  sam_step "$(t "إصلاح التثبيت" "Repair installation")"
+  sam_step "Repair installation"
   action_setup_prereqs || return $?
   action_install_deps || return $?
   sam_step "pnpm run migrate"
@@ -416,7 +407,7 @@ action_repair() {
 }
 
 action_uninstall() {
-  sam_step "$(t "إلغاء التثبيت عبر scripts/install/uninstall.sh" "Uninstall via scripts/install/uninstall.sh")"
+  sam_step "Uninstall via scripts/install/uninstall.sh"
   local u="$PROJECT_ROOT/scripts/install/uninstall.sh"
   if [[ ! -f "$u" ]]; then sam_fail "uninstall.sh missing"; return 1; fi
   local args=()
@@ -428,7 +419,7 @@ action_uninstall() {
 }
 
 action_view_logs() {
-  sam_step "$(t "عرض أحدث السجلات" "View recent logs")"
+  sam_step "View recent logs"
   local home logs_tools
   home="$(sam_output_home)/logs"
   logs_tools="$PROJECT_ROOT/Tools/logs"
@@ -438,7 +429,7 @@ action_view_logs() {
     [[ -f "$f" ]] && files+=("$f")
   done
   if [[ ${#files[@]} -eq 0 ]]; then
-    sam_warn "$(t "لا توجد ملفات سجل" "No log files found")"
+    sam_warn "No log files found"
     return 0
   fi
   # sort by mtime (portable; avoid mapfile for macOS bash 3.2)
@@ -458,7 +449,7 @@ action_view_logs() {
 }
 
 action_cleanup_logs() {
-  sam_step "$(t "تنظيف السجلات الأقدم من 14 يوماً" "Cleanup logs older than 14 days")"
+  sam_step "Cleanup logs older than 14 days"
   local home="$PROJECT_ROOT"
   local removed=0
   local d
@@ -475,7 +466,7 @@ action_cleanup_logs() {
 }
 
 action_health() {
-  sam_step "$(t "فحص حي" "Live health")"
+  sam_step "Live health"
   local ec=0
   action_doctor || ec=$?
   local port="${CONTROL_PLANE_PORT:-8787}"
@@ -485,10 +476,10 @@ action_health() {
     if curl -fsS --max-time 3 "$url" >/dev/null 2>&1; then
       sam_ok "/healthz OK"
     else
-      sam_warn "$(t "Control Plane غير متاح على $url (شغّل start-ui)" "Control Plane not reachable at $url (start-ui)")"
+      sam_warn "Control Plane not reachable at $url (start-ui)"
     fi
   else
-    sam_warn "curl missing — skipped /healthz"
+    sam_warn "curl missing - skipped /healthz"
   fi
   return $ec
 }
@@ -517,16 +508,16 @@ invoke_action() {
     view-logs) action_view_logs || code=$? ;;
     cleanup-logs) action_cleanup_logs || code=$? ;;
     health) action_health || code=$? ;;
-    *) sam_fail "$(t "إجراء غير معروف: $id" "Unknown action: $id")"; code=2 ;;
+    *) sam_fail "Unknown action: $id"; code=2 ;;
   esac
   if [[ $code -ne 0 && $SAM_HARNESS_FAIL -eq 0 ]]; then
-    sam_fail "$(t "انتهى بفشل (exit $code)" "Finished with failure (exit $code)")"
+    sam_fail "Finished with failure (exit $code)"
   fi
   sam_summary "$code"
   return $code
 }
 
-# —— entry ——
+# -- entry --
 if [[ -n "$ACTION" ]]; then
   id="$(echo "$ACTION" | tr '[:upper:]' '[:lower:]')"
   invoke_action "$id"
@@ -535,19 +526,15 @@ fi
 
 while true; do
   show_menu
-  prompt="$(t "  اختر رقمًا (أو L للغة)" "  Choose a number (or L for language)")"
+  prompt="  Choose a number"
   read -r -p "${prompt}: " choice || true
   id="$(resolve_choice "${choice:-}")"
-  if [[ "$id" == "__toggle_lang__" ]]; then
-    if [[ "$SAM_HARNESS_LANG" == "ar" ]]; then sam_set_lang en; else sam_set_lang ar; fi
-    continue
-  fi
   if [[ -z "$id" ]]; then
-    echo -e "  ${C_YELLOW}$(t "اختيار غير صالح" "Invalid choice")${C_RESET}"
+    echo -e "  ${C_YELLOW}Invalid choice${C_RESET}"
     continue
   fi
   if [[ "$id" == "exit" ]]; then
-    echo -e "  ${C_GREEN}$(t "إلى اللقاء." "Goodbye.")${C_RESET}"
+    echo -e "  ${C_GREEN}Goodbye.${C_RESET}"
     exit 0
   fi
   set +e
@@ -555,6 +542,6 @@ while true; do
   set -e
   if [[ "$NONINTERACTIVE" -eq 0 ]]; then
     echo ""
-    read -r -p "$(t "  اضغط Enter للعودة للقائمة" "  Press Enter to return to menu"): " _ || true
+    read -r -p "  Press Enter to return to menu: " _ || true
   fi
 done

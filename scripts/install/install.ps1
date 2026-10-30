@@ -1,7 +1,7 @@
 ﻿#Requires -Version 5.1
 <#
 .SYNOPSIS
-  Sam-Harness one-click install (Windows) — idempotent.
+  Sam-Harness one-click install (Windows) - idempotent.
 
 .DESCRIPTION
   Checks/installs Node + pnpm (winget / Corepack), installs deps, creates .env
@@ -9,7 +9,7 @@
   Documents\Sam-Harness, optionally registers a logon scheduled task, runs doctor.
 
 .PARAMETER NonInteractive
-  Skip prompts; use defaults (Arabic locale, eastern numerals).
+  Skip prompts; use defaults (locale=ar, eastern numerals for app config).
 
 .PARAMETER RegisterStartup
   Register ONLOGON scheduled task for Control Plane UI.
@@ -39,16 +39,16 @@ function Write-Err([string]$msg) { Write-Host "  [XX] $msg" -ForegroundColor Red
 Write-Host ""
 Write-Host "  ================================================================" -ForegroundColor DarkCyan
 Write-Host "   Sam-Harness  -  One-click install (Windows)" -ForegroundColor White
-Write-Host "   Arabic-first · Control Plane · Hybrid Agency" -ForegroundColor Gray
+Write-Host "   Control Plane | Hybrid Agency" -ForegroundColor Gray
 Write-Host "  ================================================================" -ForegroundColor DarkCyan
 Write-Host "  Project: $ProjectRoot"
 Write-Host ""
 
-# —— Node ——
-Write-Step "Checking Node.js…"
+# -- Node --
+Write-Step "Checking Node.js..."
 $node = Get-Command node -ErrorAction SilentlyContinue
 if (-not $node) {
-  Write-Warn "Node not in PATH — trying winget OpenJS.NodeJS.LTS"
+  Write-Warn "Node not in PATH - trying winget OpenJS.NodeJS.LTS"
   $winget = Get-Command winget -ErrorAction SilentlyContinue
   if ($winget) {
     & winget install -e --id OpenJS.NodeJS.LTS --accept-package-agreements --accept-source-agreements
@@ -60,18 +60,18 @@ if (-not $node) {
               [System.Environment]::GetEnvironmentVariable("Path", "User")
   $node = Get-Command node -ErrorAction SilentlyContinue
   if (-not $node) {
-    Write-Err "Node still missing — open a new terminal after install."
+    Write-Err "Node still missing - open a new terminal after install."
     exit 1
   }
 }
 $nodeVer = & node -v
 Write-Ok "Node $nodeVer"
 
-# —— pnpm via Corepack ——
-Write-Step "Enabling Corepack / pnpm…"
+# -- pnpm via Corepack --
+Write-Step "Enabling Corepack / pnpm..."
 try { & corepack enable 2>$null } catch { }
 try { & corepack prepare pnpm@11.23.0 --activate } catch {
-  Write-Warn "corepack prepare failed — trying npm i -g pnpm"
+  Write-Warn "corepack prepare failed - trying npm i -g pnpm"
   & npm install -g pnpm
 }
 $pnpm = Get-Command pnpm -ErrorAction SilentlyContinue
@@ -81,7 +81,7 @@ if (-not $pnpm) {
 }
 Write-Ok "pnpm $(pnpm -v)"
 
-# —— Prompts / .env ——
+# -- Prompts / .env --
 $locale = "ar"
 $numerals = "eastern"
 $port = "8787"
@@ -94,11 +94,11 @@ if (-not $NonInteractive) {
   if ($p) { $port = $p.Trim() }
   if (-not $RegisterStartup) {
     $s = Read-Host "  Register startup task? [y/N]"
-    if ($s -match '^(y|yes|ن|نعم)$') { $RegisterStartup = $true }
+    if ($s -match '^(y|yes)$') { $RegisterStartup = $true }
   }
 }
 
-Write-Step "Creating .env from .env.example (idempotent)…"
+Write-Step "Creating .env from .env.example (idempotent)..."
 $envPath = Join-Path $ProjectRoot ".env"
 $examplePath = Join-Path $ProjectRoot ".env.example"
 if (-not (Test-Path $examplePath)) {
@@ -136,8 +136,8 @@ Set-EnvKey $envPath "CONTROL_PLANE_PORT" $port
 Set-EnvKey $envPath "SAM_OUTPUT_HOME" $outputHome
 Write-Ok "Locale=$locale numerals=$numerals port=$port"
 
-# —— Output home ——
-Write-Step "Ensuring SAM_OUTPUT_HOME…"
+# -- Output home --
+Write-Step "Ensuring SAM_OUTPUT_HOME..."
 @(
   $outputHome,
   (Join-Path $outputHome "reports"),
@@ -152,7 +152,7 @@ Write-Step "Ensuring SAM_OUTPUT_HOME…"
 }
 Write-Ok $outputHome
 
-# —— task.ts seed ——
+# -- task.ts seed --
 $taskPath = Join-Path $ProjectRoot "task.ts"
 $seedPath = Join-Path $ProjectRoot "templates\task.seed.ts"
 if (-not (Test-Path $taskPath) -and (Test-Path $seedPath)) {
@@ -160,9 +160,9 @@ if (-not (Test-Path $taskPath) -and (Test-Path $seedPath)) {
   Write-Ok "Seeded task.ts"
 }
 
-# —— deps ——
+# -- deps --
 if (-not $SkipDeps) {
-  Write-Step "pnpm install…"
+  Write-Step "pnpm install..."
   & pnpm install
   if ($LASTEXITCODE -ne 0) { Write-Err "pnpm install failed"; exit $LASTEXITCODE }
   Write-Ok "Dependencies installed"
@@ -170,16 +170,16 @@ if (-not $SkipDeps) {
   Write-Warn "Skipped pnpm install"
 }
 
-# —— startup ——
+# -- startup --
 $taskName = "SamHarnessControlPlane"
 if ($RegisterStartup) {
-  Write-Step "Registering scheduled task $taskName…"
+  Write-Step "Registering scheduled task $taskName..."
   $tr = "cmd /c `"cd /d `"$ProjectRoot`" && pnpm run ui`""
   & schtasks /Create /TN $taskName /TR $tr /SC ONLOGON /RL LIMITED /F | Out-Null
   Write-Ok "Scheduled task registered"
 }
 
-# —— marker ——
+# -- marker --
 $marker = Join-Path $ProjectRoot ".sam-harness-installed"
 @{
   installedAt = (Get-Date).ToString("o")
@@ -190,16 +190,16 @@ $marker = Join-Path $ProjectRoot ".sam-harness-installed"
 } | ConvertTo-Json | Set-Content -LiteralPath $marker -Encoding UTF8
 Write-Ok "Wrote install marker"
 
-# —— doctor ——
-Write-Step "Running doctor…"
+# -- doctor --
+Write-Step "Running doctor..."
 & pnpm run doctor
 $doctorCode = $LASTEXITCODE
 
 Write-Host ""
 Write-Host "  Install complete. Next:" -ForegroundColor Green
-Write-Host "    pnpm run ui          → Control Plane"
-Write-Host "    pnpm run doctor      → re-check"
-Write-Host "    SamHarness.bat       → launcher menu"
+Write-Host "    pnpm run ui          -> Control Plane"
+Write-Host "    pnpm run doctor      -> re-check"
+Write-Host "    SamHarness.bat       -> launcher menu"
 Write-Host "  Uninstall: powershell -File scripts\install\uninstall.ps1"
 Write-Host ""
 exit $doctorCode

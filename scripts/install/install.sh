@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Sam-Harness one-click install (macOS / Linux) — idempotent.
+# Sam-Harness one-click install (macOS / Linux) - idempotent.
 set -euo pipefail
 
 PROJECT_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
@@ -34,17 +34,17 @@ err() { printf '  [XX] %s\n' "$*" >&2; }
 echo ""
 echo "  ================================================================"
 echo "   Sam-Harness  -  One-click install (macOS / Linux)"
-echo "   Arabic-first · Control Plane · Hybrid Agency"
+echo "   Control Plane | Hybrid Agency"
 echo "  ================================================================"
 echo "  Project: $PROJECT_ROOT"
 echo ""
 
-# —— Node ——
-step "Checking Node.js…"
+# -- Node --
+step "Checking Node.js..."
 if ! command -v node >/dev/null 2>&1; then
-  warn "Node missing — install Node 20+ LTS then re-run"
+  warn "Node missing - install Node 20+ LTS then re-run"
   if command -v brew >/dev/null 2>&1; then
-    step "brew install node@22…"
+    step "brew install node@22..."
     brew install node@22 || true
   fi
 fi
@@ -54,14 +54,14 @@ if ! command -v node >/dev/null 2>&1; then
 fi
 ok "Node $(node -v)"
 
-# —— pnpm ——
-step "Enabling Corepack / pnpm…"
+# -- pnpm --
+step "Enabling Corepack / pnpm..."
 if command -v corepack >/dev/null 2>&1; then
   corepack enable >/dev/null 2>&1 || true
   corepack prepare pnpm@11.23.0 --activate >/dev/null 2>&1 || true
 fi
 if ! command -v pnpm >/dev/null 2>&1; then
-  warn "pnpm missing — npm install -g pnpm"
+  warn "pnpm missing - npm install -g pnpm"
   npm install -g pnpm
 fi
 ok "pnpm $(pnpm -v)"
@@ -78,7 +78,7 @@ if [[ "$NONINTERACTIVE" -eq 0 ]]; then
   [[ -n "${P:-}" ]] && PORT="$P"
   if [[ "$REGISTER_STARTUP" -eq 0 ]]; then
     read -r -p "  Register user startup service? [y/N]: " S || true
-    if [[ "${S:-}" =~ ^(y|yes|ن|نعم)$ ]]; then REGISTER_STARTUP=1; fi
+    if [[ "${S:-}" =~ ^(y|yes)$ ]]; then REGISTER_STARTUP=1; fi
   fi
 fi
 
@@ -98,7 +98,7 @@ set_env_key() {
   fi
 }
 
-step "Creating .env from .env.example (idempotent)…"
+step "Creating .env from .env.example (idempotent)..."
 if [[ ! -f .env.example ]]; then
   err ".env.example missing"
   exit 1
@@ -118,7 +118,7 @@ set_env_key .env CONTROL_PLANE_PORT "$PORT"
 set_env_key .env SAM_OUTPUT_HOME "$OUTPUT_HOME"
 ok "Locale=$LOCALE numerals=$NUMERALS port=$PORT"
 
-step "Ensuring SAM_OUTPUT_HOME…"
+step "Ensuring SAM_OUTPUT_HOME..."
 mkdir -p "$OUTPUT_HOME"/{reports,documents,exports,runs,memory,temp,state}
 ok "$OUTPUT_HOME"
 
@@ -128,16 +128,16 @@ if [[ ! -f task.ts && -f templates/task.seed.ts ]]; then
 fi
 
 if [[ "$SKIP_DEPS" -eq 0 ]]; then
-  step "pnpm install…"
+  step "pnpm install..."
   pnpm install
   ok "Dependencies installed"
 else
   warn "Skipped pnpm install"
 fi
 
-# —— optional startup ——
+# -- optional startup --
 if [[ "$REGISTER_STARTUP" -eq 1 ]]; then
-  step "Registering user startup…"
+  step "Registering user startup..."
   if [[ "$(uname -s)" == "Darwin" ]]; then
     PLIST="$HOME/Library/LaunchAgents/com.upnexa.sam-harness.plist"
     mkdir -p "$(dirname "$PLIST")"
@@ -184,7 +184,7 @@ UNIT
       systemctl --user enable --now sam-harness.service || warn "systemctl enable failed (session bus?)"
       ok "systemd user unit sam-harness.service"
     else
-      warn "systemctl not available — unit written to $UNIT"
+      warn "systemctl not available - unit written to $UNIT"
     fi
   fi
 fi
@@ -200,7 +200,7 @@ cat >.sam-harness-installed <<JSON
 JSON
 ok "Wrote install marker"
 
-step "Running doctor…"
+step "Running doctor..."
 pnpm run doctor
 DOCTOR=$?
 
