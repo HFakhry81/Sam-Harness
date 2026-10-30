@@ -1,8 +1,29 @@
 # Sam-Harness
 
-Hybrid AI agency for Windows: **Control Plane UI** + **LangGraph review** + **desktop operator tools** + numbered report packs under `docs/Sam-Harness no.X`.
+Hybrid AI agency (Arabic-first): **Control Plane UI** + **LangGraph review** + **desktop operator tools** + numbered report packs under `docs/Sam-Harness no.X`.
 
-## Quick start (Windows)
+## Quick start
+
+### One-click install (recommended)
+
+**Windows**
+
+```bat
+scripts\install\install.cmd
+:: or: powershell -ExecutionPolicy Bypass -File scripts\install\install.ps1
+```
+
+**macOS / Linux**
+
+```bash
+bash scripts/install/install.sh
+```
+
+The installer checks/installs Node + pnpm, runs `pnpm install`, creates `.env` from `.env.example` (prompts for locale), sets up `~/Documents/Sam-Harness`, optionally registers startup, then runs `pnpm run doctor`.
+
+Uninstall: `scripts\install\uninstall.ps1` / `bash scripts/install/uninstall.sh`
+
+### Manual (Windows Tools)
 
 1. Open `Tools\README.md` and run **`Tools\01-setup-prereqs.bat`**
 2. **`Tools\02-install-deps.bat`**
@@ -11,6 +32,8 @@ Hybrid AI agency for Windows: **Control Plane UI** + **LangGraph review** + **de
    or run **`Tools\05-start-ui.bat`**
 
 UI: http://127.0.0.1:8787/ (owner token required — see `.controlplane-token` or `CONTROL_PLANE_TOKEN`)
+
+Default UI locale is **Arabic (RTL)**. Switch to English in the header, or set `SAM_LOCALE=en` in `.env`. Health check: `pnpm run doctor`.
 
 Filesystem tools use a **desktop-controller** sandbox: normal user environment (home, Desktop/Documents/Downloads, accessible drives) with a DENY list for OS/credential paths. Optional `WORKSPACE_ROOTS` restricts; `WORKSPACE_DENY` extends denies. Agent-generated packs/reports land under `~/Documents/Sam-Harness` (`SAM_OUTPUT_HOME`). Daily cloud cap defaults to **$0.50** (`$0` forbids cloud).
 
@@ -23,6 +46,8 @@ Filesystem tools use a **desktop-controller** sandbox: normal user environment (
 **Phase 5:** Near-zero model cost — difficulty-based routing (local → free → paid), exact SQLite prompt cache + provider cache hints, context compaction, accurate per-run/daily accounting with near-cap degradation (never exceed the $0.50 default daily cloud cap). See `docs/PHASE5_NEAR_ZERO_COST.md`.
 
 **Phase 6:** Verifiable gates & trust — acceptance gates per step (never silent success), HITL approvals for destructive FS / email / spend / sensitive desktop apps, hash-chained SQLite audit log + `pnpm run trust:verify`, run evidence bundles under `SAM_OUTPUT_HOME`. See `docs/PHASE6_GATES_TRUST.md`.
+
+**Phase 7:** Arabic-first i18n (RTL UI, Arabic agent/reports, intent cues) + one-click install (Windows PowerShell + macOS/Linux shell) + `pnpm run doctor`. See `docs/PHASE7_ARABIC_INSTALL.md`.
 
 ## Layout
 
@@ -41,6 +66,7 @@ Filesystem tools use a **desktop-controller** sandbox: normal user environment (
 ```bat
 pnpm typecheck
 pnpm test
+pnpm run doctor
 pnpm run smoke
 pnpm run smoke:prod-gates
 pnpm run test:desktop:windows
@@ -62,5 +88,6 @@ State defaults to SQLite under `SAM_OUTPUT_HOME/state/sam-harness.sqlite`. Set `
 - `docs/PHASE4_DESKTOP_OPERATOR.md`
 - `docs/PHASE5_NEAR_ZERO_COST.md`
 - `docs/PHASE6_GATES_TRUST.md`
+- `docs/PHASE7_ARABIC_INSTALL.md`
 - `docs/AGENCY_OPS.md`
 - `docs/engagements/EXAMPLE-CLIENT.md`

@@ -78,8 +78,14 @@ typecheck + Vitest + CI (ubuntu/windows) + smokes محمولة.
 4. حزمة أدلة لكل تشغيل تحت `SAM_OUTPUT_HOME/runs/.../evidence/` + مرآة في `reports/`.
 5. Control Plane `/api/trust/*` + CLI `trust:*` — انظر `docs/PHASE6_GATES_TRUST.md`.
 
-### بعد Phase 6 (Phase 7+)
-- توزيع عربي أولاً.
+### Phase 7 — توزيع عربي أولاً + تثبيت بنقرة ✅
+1. i18n عربي افتراضي + RTL في Control Plane؛ إنجليزي كسقوط؛ `SAM_LOCALE` / `SAM_NUMERALS`.
+2. توجيه لغة للوكلاء + تقارير RTL؛ فهم نوايا عربية/مصرية للمهام.
+3. مثبت PowerShell (Windows) وshell (macOS/Linux) تكراري مع إلغاء تثبيت؛ `pnpm run doctor`.
+4. انظر `docs/PHASE7_ARABIC_INSTALL.md`.
+
+### بعد Phase 7 (Phase 8+)
+- موصلات أوسع / حزم توزيع اختيارية (MSI).
 
 ## قرارات المالك (مُثبَّتة في هذا الفرع)
 

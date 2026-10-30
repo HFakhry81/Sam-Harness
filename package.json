@@ -34,7 +34,12 @@
     "trust:approve": "tsx scripts/trust-cli.ts approve",
     "trust:deny": "tsx scripts/trust-cli.ts deny",
     "trust:evidence": "tsx scripts/trust-cli.ts evidence",
-    "trust:policy": "tsx scripts/trust-cli.ts policy"
+    "trust:policy": "tsx scripts/trust-cli.ts policy",
+    "doctor": "tsx scripts/doctor.ts",
+    "install:unix": "bash scripts/install/install.sh --non-interactive",
+    "install:win": "powershell -NoProfile -ExecutionPolicy Bypass -File scripts/install/install.ps1 -NonInteractive",
+    "uninstall:unix": "bash scripts/install/uninstall.sh --non-interactive",
+    "uninstall:win": "powershell -NoProfile -ExecutionPolicy Bypass -File scripts/install/uninstall.ps1 -NonInteractive"
   },
   "keywords": [],
   "author": "",

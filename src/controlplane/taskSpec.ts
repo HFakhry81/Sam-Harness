@@ -121,7 +121,7 @@ export function detectRoute(prompt: string, hint?: UiRoute | "auto"): UiRoute {
   }
 
   if (
-    /excel|xlsx|\.xls|csv|screenshot|لقطة|سكرين|انقل|احذف|امسح|افتح|اعمل ملف|أنشئ ملف|انشئ ملف|اكتب (فيه|في)|سطح المكتب|desktop|open |move |copy |folder|مجلد|ملف على|جدول|mkdir|delete/i.test(
+    /excel|xlsx|\.xls|csv|screenshot|لقطة|سكرين|انقل|احذف|امسح|افتح|اعمل ملف|أنشئ ملف|انشئ ملف|سو[ّ']?ي ملف|اكتب (فيه|في)|سطح المكتب|desktop|open |move |copy |folder|مجلد|ملف على|جدول|mkdir|delete|شيل|شِيل|حر[ّ']?ك/i.test(
       t
     ) &&
     !/architecture|saas|blueprint|multi-tenant|فجوات|حزمة تقارير|sam-harness no\.|مراجعة معمار|product spec|help system|marketing campaign/i.test(

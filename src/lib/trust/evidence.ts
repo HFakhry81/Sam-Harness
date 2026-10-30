@@ -16,6 +16,12 @@ import { listAudit, appendAudit } from "./auditLog.js";
 import { listAllApprovals } from "./approvals.js";
 import { getEffectiveTrustPolicy } from "./config.js";
 import { getActiveTenantId } from "../tenant/context.js";
+import {
+  loadLocaleConfig,
+  arabicMarkdownPreamble,
+  arabicMarkdownEpilogue,
+  evidenceHeading,
+} from "../i18n/index.js";
 
 export type EvidenceBundle = {
   runId: string;
@@ -90,48 +96,64 @@ function collectDiffRefs(evidenceDir: string): string[] {
 }
 
 function toMarkdown(bundle: EvidenceBundle): string {
+  const cfg = loadLocaleConfig();
+  const ar = cfg.contentLocale === "ar";
+  const title = evidenceHeading(cfg.contentLocale, bundle.runId);
   const lines = [
-    `# Run evidence — ${bundle.runId}`,
+    `# ${title.replace(/^[\u200E\u200F]+|[\u200E\u200F]+$/g, "")}`,
     "",
-    `- Written: ${bundle.writtenAt}`,
-    `- Tenant: ${bundle.tenantId}`,
-    `- Status: ${bundle.status ?? "unknown"}`,
-    `- Mode: ${bundle.mode ?? "unknown"}`,
-    `- Audit head: ${bundle.auditHead ?? "(empty)"}`,
+    ar
+      ? `- كُتب: ${bundle.writtenAt}\n- المستأجر: ${bundle.tenantId}\n- الحالة: ${bundle.status ?? "unknown"}\n- الوضع: ${bundle.mode ?? "unknown"}\n- رأس التدقيق: ${bundle.auditHead ?? "(فارغ)"}`
+      : `- Written: ${bundle.writtenAt}\n- Tenant: ${bundle.tenantId}\n- Status: ${bundle.status ?? "unknown"}\n- Mode: ${bundle.mode ?? "unknown"}\n- Audit head: ${bundle.auditHead ?? "(empty)"}`,
     "",
-    "## Cost",
+    ar ? "## التكلفة" : "## Cost",
     "",
     `- Run: $${bundle.cost.runSpentUsd.toFixed(4)}`,
     `- Day: $${bundle.cost.daySpentUsd.toFixed(4)} / cap $${bundle.cost.capUsd.toFixed(2)}`,
     `- Tokens: in=${bundle.cost.inputTokens} out=${bundle.cost.outputTokens} cloudCalls=${bundle.cost.cloudCalls}`,
     "",
-    "## Steps",
+    ar ? "## الخطوات" : "## Steps",
     "",
   ];
-  if (!bundle.steps.length) lines.push("_No timeline steps._", "");
+  if (!bundle.steps.length) {
+    lines.push(ar ? "_لا خطوات._" : "_No timeline steps._", "");
+  }
   for (const s of bundle.steps) {
     lines.push(`- **${s.name}** [${s.status}] @ ${s.at}`);
   }
-  lines.push("", "## Gates", "");
-  if (!bundle.gates.length) lines.push("_No gate results._", "");
+  lines.push("", ar ? "## البوابات" : "## Gates", "");
+  if (!bundle.gates.length) {
+    lines.push(ar ? "_لا نتائج بوابات._" : "_No gate results._", "");
+  }
   for (const g of bundle.gates) {
     lines.push(
       `- ${g.passed ? "PASS" : "FAIL"} \`${g.gateId}\` (${g.kind}) step=${g.stepId} attempts=${g.attempts}${g.escalated ? " ESCALATED" : ""}`
     );
   }
-  lines.push("", "## Approvals", "");
-  if (!bundle.approvals.length) lines.push("_No approvals linked._", "");
+  lines.push("", ar ? "## الموافقات" : "## Approvals", "");
+  if (!bundle.approvals.length) {
+    lines.push(ar ? "_لا موافقات._" : "_No approvals linked._", "");
+  }
   for (const a of bundle.approvals) {
     lines.push(`- ${a.status} \`${a.id}\` ${a.kind} — ${a.subject}`);
   }
-  lines.push("", "## Screenshots", "");
-  if (!bundle.screenshots.length) lines.push("_None._", "");
+  lines.push("", ar ? "## لقطات الشاشة" : "## Screenshots", "");
+  if (!bundle.screenshots.length) lines.push(ar ? "_لا شيء._" : "_None._", "");
   for (const s of bundle.screenshots) lines.push(`- \`${s}\``);
-  lines.push("", "## Diffs", "");
-  if (!bundle.diffs.length) lines.push("_None._", "");
+  lines.push("", ar ? "## الفروقات" : "## Diffs", "");
+  if (!bundle.diffs.length) lines.push(ar ? "_لا شيء._" : "_None._", "");
   for (const d of bundle.diffs) lines.push(`- \`${d}\``);
   lines.push("");
-  return lines.join("\n");
+  const body = lines.join("\n");
+  if (!ar) return body;
+  return (
+    arabicMarkdownPreamble({
+      title: `أدلة التشغيل — ${bundle.runId}`,
+      numerals: cfg.numerals,
+    }) +
+    body.replace(/^\s*#\s+.+\n?/, "") +
+    arabicMarkdownEpilogue()
+  );
 }
 
 /**

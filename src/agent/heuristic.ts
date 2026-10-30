@@ -38,7 +38,7 @@ export function hasDeleteIntent(text: string): boolean {
       return false;
     }
   }
-  return /\b(delete|remove|unlink|rmdir|rm\b)\b|احذف|امسح|شيل الملف|حذف/i.test(text);
+  return /\b(delete|remove|unlink|rmdir|rm\b)\b|احذف|امسح|شيل(?:\s*الملف)?|شِيل|حذف/i.test(text);
 }
 
 /**
@@ -87,18 +87,21 @@ export function detectOpsIntent(goal: string): OpsIntent {
     return "delete";
   }
 
-  if (/\b(move|transfer)\b|انقل|ودّيه|وديه|انقلوا/i.test(t)) return "move";
-  if (/\bcopy\b|انسخ|نسخ/i.test(t)) return "copy";
+  if (/\b(move|transfer)\b|انقل|ودّيه|وديه|انقلوا|حر[ّ']?ك|ود[ّ']?ي/i.test(t)) return "move";
+  if (/\bcopy\b|انسخ|نسخ|خذ\s*نسخة/i.test(t)) return "copy";
 
   if (
-    /\bmkdir\b|create\s+(a\s+)?(folder|directory)|اعمل\s*مجلد|أنشئ\s*مجلد|انشئ\s*مجلد|مجلد جديد/i.test(
+    /\bmkdir\b|create\s+(a\s+)?(folder|directory)|اعمل\s*مجلد|أنشئ\s*مجلد|انشئ\s*مجلد|سو[ّ']?ي\s*مجلد|مجلد جديد/i.test(
       t
     )
   ) {
     return "mkdir";
   }
 
-  if (/play|شغل|افتح|open\b/i.test(t) && !/اعمل|انشئ|أنشئ|اكتب|create|write/i.test(t)) {
+  if (
+    /play|شغ[ّ']?ل|افتح|open\b/i.test(t) &&
+    !/اعمل|انشئ|أنشئ|اكتب|سو[ّ']?ي|create|write/i.test(t)
+  ) {
     return "open";
   }
 
@@ -117,7 +120,7 @@ export function detectOpsIntent(goal: string): OpsIntent {
     if (!/\b(move|copy|transfer|انقل|شيل|انسخ)\b/i.test(t)) return "create_excel";
   }
 
-  if (/create|write|انشئ|أنشئ|اعمل|اكتب|ملف/i.test(t)) return "write_file";
+  if (/create|write|انشئ|أنشئ|اعمل|اكتب|سو[ّ']?ي\s*ملف|ملف/i.test(t)) return "write_file";
 
   return "unknown";
 }
