@@ -1,6 +1,6 @@
 # Local vs cloud vs hybrid
 
-Sources: `src/lib/cost/router.ts`, `difficulty.ts`, `config.ts`, `src/controlplane/hybridProfile.ts`, `src/agent/models.ts`, `.env.example`.
+Sources: `src/lib/cost/router.ts`, `difficulty.ts`, `config.ts`, `src/controlplane/hybridProfile.ts`, `src/agent/models.ts`, `src/agency/teamConfig.ts`, `.env.example`.
 
 ## Mode decision
 
@@ -12,7 +12,15 @@ Sources: `src/lib/cost/router.ts`, `difficulty.ts`, `config.ts`, `src/controlpla
 
 Precedence: `FORCE_LOCAL_SPECIALISTS=1` → `HYBRID_MODE` env → hybrid profile in DB → default `auto`.
 
-Control Plane: **Hybrid** tab (`GET/POST /api/hybrid-profile`) and `GET /api/cost-usage`.
+### Per-role hybrid map (Phase 8 — live)
+
+`hybrid-profile.roles` (e.g. `strategist: "local"`, `auditor: "cloud"`) is **read by** `resolveModelRoute` via `effectiveHybridModeForRole`. Combined with:
+
+- Phase 5 difficulty router
+- Role `prefersCloud` from team config / `AGENCY_ROLES`
+- **Daily cost cap always wins** (near-cap / exhausted → never paid)
+
+Control Plane: **Hybrid** tab (`GET/POST /api/hybrid-profile`), **Team** tab, and `GET /api/routing/effective` for the effective decision per role. Doctor prints a routing summary.
 
 ## Daily cap $0.50
 
@@ -34,10 +42,12 @@ Control Plane: **Hybrid** tab (`GET/POST /api/hybrid-profile`) and `GET /api/cos
 | standard | mid | default / help / marketer |
 | premium | ≥0.7 | auditor, architect, strategist, coder |
 
+`prefersCloud` can nudge standard → premium when the role hybrid mode is not `local` and budget allows.
+
 Escalation: confidence below `SAM_ESCALATE_CONFIDENCE_BELOW` (0.55) or verification failure → bump one tier.
 
-`SAM_ROUTING_ENABLED=0` disables difficulty routing (legacy: cloud if key+budget).
+`SAM_ROUTING_ENABLED=0` disables difficulty routing (legacy: cloud if key+budget), but **cap and per-role local map still apply**.
 
 ## Related env vars
 
-`HYBRID_MODE`, `FORCE_LOCAL_SPECIALISTS`, `SAM_ROUTING_ENABLED`, `SAM_COST_NEAR_CAP_RATIO`, `SAM_LOCAL_*`, `SAM_FREE_*`, `SAM_PAID_*`, `SAM_ESCALATE_CONFIDENCE_BELOW`, `SAM_PREFER_FREE_FOR_STANDARD`, `OLLAMA_API_KEY`, cache `SAM_CACHE_*`.
+`HYBRID_MODE`, `FORCE_LOCAL_SPECIALISTS`, `SAM_ROUTING_ENABLED`, `SAM_COST_NEAR_CAP_RATIO`, `SAM_LOCAL_*`, `SAM_FREE_*`, `SAM_PAID_*`, `SAM_ROLE_*_MODEL`, `SAM_ESCALATE_CONFIDENCE_BELOW`, `SAM_PREFER_FREE_FOR_STANDARD`, `OLLAMA_API_KEY`, cache `SAM_CACHE_*`.

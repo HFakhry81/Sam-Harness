@@ -1,26 +1,35 @@
 # الوكلاء والنماذج لكل دور
 
-المصدر: `src/agent/models.ts`, مواقع الاستدعاء في `runner.ts` / `reviewGraph.ts` / `level2Swarm.ts` / `level3Implement.ts` / `ceoLoop.ts` / `index.ts`, و`src/lib/cost/config.ts`, و`.env.example`.
+المصدر: `config/team.json`, `src/agency/teamConfig.ts`, `src/agent/models.ts`, `src/lib/cost/config.ts`, `.env.example`.
 
-## لا توجد متغيرات بيئة لكل دور
+## إعداد نموذج لكل دور (المرحلة 8)
 
-**غير منفّذ:** لا يوجد `HELP_MODEL` أو `AUDITOR_MODEL`. الربط ثابت في مواقع الاستدعاء؛ السحابة مقابل المحلي يقرره `resolveModelRoute` + السقف + وضع الهجين.
+لكل دور نماذج قابلة للضبط: **محلي** و**سحابة/مدفوع** و**مجاني** اختياري:
 
-## الجدول الفعلي (أسماء من الكود)
+1. الافتراضيات في `config/team.json` (مُتحقَّق عبر `config/team.schema.json`)
+2. تجاوزات البيئة:
+   - `SAM_ROLE_<ROLE>_MODEL` → محلي
+   - `SAM_ROLE_<ROLE>_CLOUD_MODEL` → سحابة
+   - `SAM_ROLE_<ROLE>_FREE_MODEL` → مجاني
+3. تجاوزات مواقع الاستدعاء اختيارية؛ المصانع تفضّل إعداد الفريق
 
-| الدور / الوكيل | نموذج السحابة (ثابت) | نموذج محلي (ثابت / بيئة) | المصنع |
+`<ROLE>` هو معرّف الدور بأحرف كبيرة (`strategist` → `SAM_ROLE_STRATEGIST_MODEL`).
+
+## الجدول الافتراضي (يحافظ على سلوك ما قبل المرحلة 8)
+
+| الدور / الوكيل | سحابة (افتراضي) | محلي (افتراضي) | المصنع |
 | --- | --- | --- | --- |
-| CEO Router (`index.ts`) | — محلي فقط | `CEO_MODEL` أو `qwen2.5-coder:1.5b` | `ChatOllama` مباشرة |
-| CEO Loop L1 | — محلي فقط | `CEO_MODEL` أو `qwen2.5-coder:1.5b` | `ChatOllama` على `localhost:11434` |
-| `makeCeoModel` (مُتحقق / رخيص) | عبر التوجيه؛ `forceCheap` | `CEO_MODEL` أو `SAM_LOCAL_MODEL` أو الافتراضي أعلاه | `makeCeoModel` |
-| Strategist | `gemma4:cloud` | `CEO_MODEL` أو `qwen2.5-coder:1.5b` | `makeSpecialistModel` |
-| Auditor | `gemma4:cloud` | `gemma3:1b` | `makeSpecialistModel` |
-| Architect | `gemma4:cloud` | `qwen2.5:1.5b` | `makeSpecialistModel` |
-| Help (حزمة التقارير) | `gemma4:cloud` | `qwen2.5:1.5b` | `makeSpecialistModel` `role:"help"` |
-| Marketer | `gemma4:cloud` | `qwen2.5:1.5b` | `makeSpecialistModel` |
-| L3 Coder | `gemma4:cloud` | `qwen2.5-coder:1.5b` | `makeSpecialistModel` `role:"coder"` |
-| L3 Reviewer | مسار CEO | محلي رخيص | `makeCeoModel` |
+| CEO Router | `gemma4:cloud` | `CEO_MODEL` أو `qwen2.5-coder:1.5b` | `makeCeoModel` |
+| Strategist | `gemma4:cloud` | `CEO_MODEL` أو `qwen2.5-coder:1.5b` | `makeSpecialistModel` `role:"strategist"` |
+| Auditor | `gemma4:cloud` | `gemma3:1b` | `role:"auditor"` |
+| Architect | `gemma4:cloud` | `qwen2.5:1.5b` | `role:"architect"` |
+| Help (حزمة التقارير) | `gemma4:cloud` | `qwen2.5:1.5b` | `role:"help"` |
+| Marketer | `gemma4:cloud` | `qwen2.5:1.5b` | `role:"marketer"` |
+| L3 Coder | `gemma4:cloud` | `qwen2.5-coder:1.5b` | `role:"coder"` |
+| Verifier | مسار CEO | محلي رخيص | `makeCeoModel` |
 | Intake / Evidence | بلا LLM | — | ملفات / `scanRepoEvidence` |
+
+عدّل النماذج من لوحة التحكم → **الفريق**، أو `config/team.json`، أو متغيرات البيئة.
 
 ## افتراضيات المزود العالمية
 
@@ -28,18 +37,18 @@
 | --- | --- |
 | `CEO_MODEL` | `qwen2.5-coder:1.5b` |
 | `SAM_LOCAL_BASE_URL` | `http://localhost:11434` |
-| `SAM_LOCAL_MODEL` | فارغ → سلسلة `CEO_MODEL` ثم `qwen2.5-coder:1.5b` |
+| `SAM_LOCAL_MODEL` | فارغ → `CEO_MODEL` ثم الافتراضي أعلاه |
 | `SAM_PAID_BASE_URL` | `https://ollama.com` |
 | `SAM_PAID_MODEL` | `gemma4:cloud` |
-| `SAM_FREE_*` | فارغ (الطبقة المجانية غير مستخدمة حتى تُضبط) |
+| `SAM_FREE_*` | فارغ حتى يُضبط |
 | `OLLAMA_API_KEY` | مطلوب للسحابة المدفوعة |
-
-مفاتيح أخرى في المثال: `GEMINI_API_KEY`, `GOOGLE_API_KEY`, `OPENAI_API_KEY` — موجودة في `.env.example`؛ مسار المتخصصين الحي عبر Ollama (`ChatOllama`) والتوجيه في `models.ts`.
 
 ## صعوبة الدور (للتوجيه)
 
-من `difficulty.ts`:
+من `difficulty.ts` (+ تلميح `prefersCloud` في المرحلة 8):
 
 - **رخيص:** `ceo_router`, `ceo`, `operator`, `evidence`, `router`
-- **ممتاز (أرضية):** `auditor`, `architect`, `strategist`, `coder`, `reviewer`
-- **قياسي:** `help`, `marketer`, `verifier`, … ما لم ترفع تعقيد المطالبة الدرجة
+- **أرضية مميزة:** `auditor`, `architect`, `strategist`, `coder`, `reviewer`
+- **قياسي:** `help`, `marketer`, `verifier`, … ما لم ترفع التعقيد / prefersCloud الدرجة
+
+التوجيه الحي لكل دور: `GET /api/routing/effective` أو `pnpm run doctor`.

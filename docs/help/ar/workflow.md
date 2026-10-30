@@ -20,7 +20,7 @@
 | `implementer` | Implementer | `EXECUTION_JOURNAL.md` (بعد GO فقط) |
 | `operator` | Desktop Operator | نتائج أدوات سطح المكتب (مسار تشغيلي L1) |
 
-> **ملاحظة صادقة:** حقل `prefersCloud` موجود في العقد لكنه **غير مستخدم** في التوجيه الحي. مصفوفة الأدوات الحقيقية في `ROLE_CAPABILITIES` / `OPERATOR_CAPABILITIES`.
+> **المرحلة 8:** `prefersCloud` وخريطة `roles` في ملف الهجين تُستشار في التوجيه الحي (سقف التكلفة يفوز دائماً). نماذج الأدوار وترتيب خطوات ما بعد الموافقة من `config/team.json`. مصفوفة الأدوات في `ROLE_CAPABILITIES` / `OPERATOR_CAPABILITIES`.
 
 دور `help` في الوكالة يكتب مواصفة مساعدة داخل الحزمة بعد موافقة المدقق — هذا **غير** نفس نظام المساعدة داخل المنتج (`docs/help` + CLI/API/UI) الذي تقرأه الآن.
 
