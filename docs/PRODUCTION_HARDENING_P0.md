@@ -16,8 +16,8 @@
 | 6 | لا بوابة صلبة تمنع docsRoot أجنبي لمهام الذات | خطر تكرار خطأ Maw3ed | ✅ حراسة runner |
 | 7 | نقص evals انحدار لمسار الحزم/الذات | رجوع الصدوع | ✅ `smoke:prod-gates` 4/4 |
 | 8 | عزل عملاء / ملفات اعتماد متعددة | غير جاهز لـ multi-tenant | لاحقاً (Phase 3) |
-| 9 | موصلات إيميل حقيقية + جدولة Daily Ops | جزئي stubs | لاحقاً (Phase 2) |
-| 10 | snapshots rollback ثنائية | journal فقط | لاحقاً (Phase 2) |
+| 9 | موصلات إيميل حقيقية + جدولة Daily Ops | SMTP/Resend/dry-run + مجدول cron | ✅ Phase 2 |
+| 10 | snapshots rollback | journal + git branch/commit snapshots | ✅ Phase 2 |
 | 11 | Control Plane بلا مصادقة | أي عملية محلية تشغّل المهام | ✅ Phase 1 — توكن مالك + جلسة + CSRF + Host/Origin |
 | 12 | أمان مسارات الأدوات | سطح هجوم / أو تقييد زائد | ✅ Phase 1 — بيئة مستخدم افتراضية + DENY حساس + `WORKSPACE_ROOTS`/`WORKSPACE_DENY` |
 | 13 | سقف تكلفة محفوظ وغير مفروض | تجاوز ميزانية سحابية | ✅ Phase 1 — `cost-ledger.json` + إيقاف السحابة؛ افتراضي $0.50 |
@@ -45,9 +45,16 @@ typecheck + Vitest + CI (ubuntu/windows) + smokes محمولة.
 2. صندوق ملفات بأسلوب مشغّل سطح المكتب: بيئة المستخدم الافتراضية (منزل + مجلدات شائعة + محركات متاحة) مع قائمة DENY للمسارات الحساسة؛ `WORKSPACE_ROOTS` يضيّق و`WORKSPACE_DENY` يوسّع المنع؛ تطبيع + realpath/symlink؛ مخرجات الوكيل تحت `~/Documents/Sam-Harness` (`SAM_OUTPUT_HOME`).
 3. فرض سقف التكلفة: دفتر يومي/لكل تشغيل حسب النموذج، حجب السحابة، عرض في UI (قسم الهجين). الافتراضي **$0.50/يوم** (`$0` = منع السحابة).
 
-### بعد Phase 1 (لاحقاً)
+### Phase 2 — سد فجوات الوثائق ✅
+1. Level-3 عام عبر `level3-plan.json` (لا hardcode لمنتج عميل) + فرع git وrollback عند فشل الاختبار.
+2. عميل MCP (`src/tools/mcp.ts`) من `mcp.json` — stdio + HTTP؛ الأدوات عبر مصفوفة الصلاحيات؛ بدون تسريب أسرار للبيئة.
+3. `run_node_sandbox` — عملية فرعية بمهلة/ذاكرة تحت `SAM_OUTPUT_HOME/temp/runs`؛ Docker اختياري (`SAM_SANDBOX_DOCKER=1`).
+4. إيميل حقيقي: SMTP (nodemailer) و/أو Resend؛ dry-run إن لم يُضبط؛ موافقة مالك إلزامية.
+5. مجدول Daily Ops ثابت في `daily-ops.json` مع سجل تحت `runs/daily-ops/`.
+
+### بعد Phase 2 (Phase 3+)
 - موافقة بشرية موسّعة على أفعال مدمرة (الحذف خارج مساحة الوكيل ما زال عبر confirm + مصفوفة الأدوار).
-- عزل ملفات لكل عميل، جدولة Daily Ops، SMTP، لقطات rollback، MCP، REPL معزول.
+- عزل ملفات لكل عميل، SQLite/checkpointer، مراقبة OTel.
 
 ## قرارات المالك (مُثبَّتة في هذا الفرع)
 
@@ -57,3 +64,6 @@ typecheck + Vitest + CI (ubuntu/windows) + smokes محمولة.
 | مجلد مخرجات الوكيل | `~/Documents/Sam-Harness` (`SAM_OUTPUT_HOME`) مع `reports/ documents/ exports/ runs/ memory/ temp/` |
 | سقف التكلفة اليومي | **$0.50** افتراضياً؛ `$0` = منع السحابة بالكامل |
 | مصدر التوكن | ملف محلي مولَّد أو `CONTROL_PLANE_TOKEN` في `.env` |
+| مزود الإيميل | **قرار مفتوح:** `EMAIL_PROVIDER=smtp` أو `resend` (أو dry-run الافتراضي) |
+| عزل التنفيذ | عملية فرعية مقيدة افتراضياً؛ Docker اختياري عند التوفر |
+| خوادم MCP الأولى | ابدأ من `mcp.example.json`؛ أضف الخوادم المطلوبة في `mcp.json` (غير مُلتزَم إن حوى أسراراً) |

@@ -404,13 +404,16 @@ Available tools (ONE JSON — follow USER GOAL verbs; paths work on Windows/macO
 7) open_path / list_dir / read_file
 8) run_shell    { "command":"powershell -NoProfile -Command Get-ChildItem D:\\\\ -Recurse -Include *.xls,*.xlsx,*.xlsm -File -ErrorAction SilentlyContinue | Select-Object -First 80 FullName" }
 9) screenshot   { "filename":"capture.png" }  // ONLY if Goal asks
-10) finish       { "summary":"...", "success":true|false }
+10) run_node_sandbox { "code":"console.log(1+1)" }  // isolated Node REPL (timeout/memory; optional Docker)
+11) mcp_call    { "server":"name", "tool":"toolName", "arguments":{...} }  // from mcp.json
+12) finish       { "summary":"...", "success":true|false }
 
 Rules:
 - انقل/move → move_file. اعمل مجلد → mkdir. احذف → delete_path with confirm:true (role matrix + confirm; required outside agent workspace).
 - Agent-generated reports/docs default under Documents/Sam-Harness (SAM_OUTPUT_HOME): reports/, documents/, runs/.
 - تقرير/جرد ملفات Excel على محرك → run_shell Get-ChildItem أو list_dir ثم write_file تقرير نصي (.txt) — لا تستخدم write_excel.
 - Never delete without confirm:true. Never touch OS system folders, .ssh, browser profiles, or harness secrets.
+- MCP tools require mcp.json; sandboxed code never receives secret env vars.
 - Use real names from the Goal — do not copy catalog examples blindly.
 `;
 
@@ -441,6 +444,28 @@ export async function executeTool(
       message: String(params.summary || "Finished"),
       data: params,
     };
+  }
+  if (name === "run_node_sandbox") {
+    const { runNodeSandboxTool } = await import("./sandbox.js");
+    return runNodeSandboxTool(params);
+  }
+  if (name === "mcp_call" || /^mcp:/i.test(name)) {
+    const { mcpCallTool, parseMcpToolName } = await import("./mcp.js");
+    if (/^mcp:/i.test(name) && name !== "mcp_call") {
+      const parsed = parseMcpToolName(name);
+      if (!parsed) {
+        return { ok: false, tool: name, message: `Invalid MCP tool id: ${name}` };
+      }
+      return mcpCallTool(
+        {
+          server: parsed.server,
+          tool: parsed.name,
+          arguments: params,
+        },
+        process.cwd()
+      );
+    }
+    return mcpCallTool(params, process.cwd());
   }
   const fn = TOOLS[name];
   if (!fn) {

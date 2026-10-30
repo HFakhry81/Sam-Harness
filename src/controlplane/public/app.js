@@ -394,11 +394,15 @@ async function loadDailyOps() {
     body.innerHTML = "";
     (data.jobs || []).forEach((j) => {
       const tr = document.createElement("tr");
+      const next = j.nextRunAt ? String(j.nextRunAt).slice(0, 16).replace("T", " ") : "—";
       tr.innerHTML = `<td>${escapeHtml(j.title || j.prompt)}</td>
         <td class="mono">${escapeHtml(j.schedule)}</td>
         <td><span class="chip ${j.enabled ? "on" : "off"}">${j.enabled ? "ON" : "OFF"}</span></td>
+        <td class="mono">${escapeHtml(next)}</td>
         <td class="mono">${escapeHtml(j.lastResult || "—")}${j.lastRunAt ? " · " + escapeHtml(String(j.lastRunAt).slice(0, 16)) : ""}</td>
         <td>
+          <button type="button" class="linkish" data-act="run" data-id="${j.id}">تشغيل</button>
+          ·
           <button type="button" class="linkish" data-act="toggle" data-id="${j.id}">تبديل</button>
           ·
           <button type="button" class="linkish" data-act="remove" data-id="${j.id}">حذف</button>
@@ -406,7 +410,7 @@ async function loadDailyOps() {
       body.appendChild(tr);
     });
     if (!(data.jobs || []).length) {
-      body.innerHTML = `<tr><td colspan="5" class="dim">لا مهام مجدولة بعد</td></tr>`;
+      body.innerHTML = `<tr><td colspan="6" class="dim">لا مهام مجدولة بعد</td></tr>`;
     }
     const ledger = $("dailyLedgerList");
     const meta = $("dailyLedgerMeta");
@@ -425,7 +429,7 @@ async function loadDailyOps() {
         : "دفتر النتائج فارغ";
     }
   } catch (e) {
-    body.innerHTML = `<tr><td colspan="5">${escapeHtml(e.message || String(e))}</td></tr>`;
+    body.innerHTML = `<tr><td colspan="6">${escapeHtml(e.message || String(e))}</td></tr>`;
   }
 }
 
@@ -1091,7 +1095,13 @@ $("dailyOpsBody")?.addEventListener("click", async (ev) => {
   if (!btn) return;
   const id = btn.dataset.id;
   const act = btn.dataset.act;
-  await api(act === "toggle" ? "/api/daily-ops/toggle" : "/api/daily-ops/remove", {
+  const path =
+    act === "toggle"
+      ? "/api/daily-ops/toggle"
+      : act === "run"
+        ? "/api/daily-ops/run"
+        : "/api/daily-ops/remove";
+  await api(path, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ id }),

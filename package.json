@@ -8,7 +8,7 @@
     "typecheck": "tsx scripts/ensure-task.ts && tsc --noEmit",
     "test": "vitest run",
     "test:watch": "vitest",
-    "smoke": "tsx scripts/ensure-task.ts && tsx scripts/smoke-agency.ts && tsx scripts/smoke-delivery.ts && tsx scripts/smoke-capabilities.ts && tsx scripts/smoke-ops-planner.ts && tsx scripts/smoke-controlplane.ts",
+    "smoke": "tsx scripts/ensure-task.ts && tsx scripts/smoke-agency.ts && tsx scripts/smoke-delivery.ts && tsx scripts/smoke-capabilities.ts && tsx scripts/smoke-ops-planner.ts && tsx scripts/smoke-controlplane.ts && tsx scripts/smoke-mcp.ts && tsx scripts/smoke-sandbox.ts",
     "start": "tsx index.ts",
     "agency": "tsx index.ts --yes",
     "ui": "tsx src/controlplane/server.ts",
@@ -18,6 +18,8 @@
     "smoke:capabilities": "tsx scripts/smoke-capabilities.ts",
     "smoke:ui": "tsx scripts/smoke-controlplane.ts",
     "smoke:ops": "tsx scripts/smoke-ops-planner.ts",
+    "smoke:mcp": "tsx scripts/smoke-mcp.ts",
+    "smoke:sandbox": "tsx scripts/smoke-sandbox.ts",
     "eval:task-spec": "tsx scripts/eval-task-spec.ts",
     "eval:goal-fidelity": "tsx scripts/eval-goal-fidelity.ts",
     "eval:evidence-scout": "tsx scripts/eval-evidence-scout.ts",
@@ -45,10 +47,12 @@
     "@langchain/google-genai": "^2.3.4",
     "@langchain/langgraph": "^1.5.3",
     "@langchain/ollama": "^1.3.0",
-    "dotenv": "^18.0.9"
+    "dotenv": "^18.0.9",
+    "nodemailer": "^10.3.0"
   },
   "devDependencies": {
     "@types/node": "^26.6.5",
+    "@types/nodemailer": "^8.0.2",
     "tsx": "^4.23.15",
     "typescript": "^7.0.2",
     "vitest": "^3.2.4"

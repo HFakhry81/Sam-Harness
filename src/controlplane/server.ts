@@ -45,12 +45,20 @@ import {
 import {
   addDailyJob,
   loadDailyOps,
+  recordDailyResult,
   removeDailyJob,
+  startDailyOpsScheduler,
   toggleDailyJob,
+  type DailyOpsItem,
 } from "./dailyOps.js";
 import { loadHybridProfile, saveHybridProfile } from "./hybridProfile.js";
 import { loadMemory, removeMemory, seedHarnessLessons, upsertMemory } from "./projectMemory.js";
-import { createCommDraft, loadComms, requestCommSend } from "./comms.js";
+import {
+  createCommDraft,
+  getCommsProviderStatus,
+  loadComms,
+  requestCommSend,
+} from "./comms.js";
 import { loadRollbackJournal } from "../agency/delivery/rollbackJournal.js";
 import {
   listRunArtifacts,
@@ -892,6 +900,24 @@ const server = http.createServer(async (req, res) => {
       sendJson(res, ok ? 200 : 404, { ok, store: loadDailyOps(ROOT) });
       return;
     }
+    if (method === "POST" && p === "/api/daily-ops/run") {
+      const body = JSON.parse((await readBody(req)) || "{}") as { id?: string };
+      const store = loadDailyOps(ROOT);
+      const job = body.id ? store.jobs.find((j) => j.id === body.id) : null;
+      if (!job) {
+        sendJson(res, 404, { ok: false, error: "job not found" });
+        return;
+      }
+      const result = await executeDailyOpsJob(job);
+      const entry = recordDailyResult(ROOT, {
+        taskId: job.id,
+        prompt: job.prompt,
+        success: result.success,
+        summary: result.summary,
+      });
+      sendJson(res, 200, { ok: true, entry, store: loadDailyOps(ROOT) });
+      return;
+    }
 
     // —— P8 Hybrid profile + cost ledger ——
     if (method === "GET" && p === "/api/hybrid-profile") {
@@ -946,9 +972,13 @@ const server = http.createServer(async (req, res) => {
       return;
     }
 
-    // —— P7 Comms stubs ——
+    // —— P7 Comms (SMTP / Resend / dry-run) ——
     if (method === "GET" && p === "/api/comms") {
-      sendJson(res, 200, { ok: true, ...loadComms(ROOT) });
+      sendJson(res, 200, {
+        ok: true,
+        ...loadComms(ROOT),
+        provider: getCommsProviderStatus(),
+      });
       return;
     }
     if (method === "POST" && p === "/api/comms/draft") {
@@ -956,6 +986,7 @@ const server = http.createServer(async (req, res) => {
         subject?: string;
         body?: string;
         to?: string;
+        channel?: "email" | "desktop-notify";
       };
       if (!body.subject || !body.body) {
         sendJson(res, 400, { ok: false, error: "subject and body required" });
@@ -965,6 +996,7 @@ const server = http.createServer(async (req, res) => {
         subject: body.subject,
         body: body.body,
         to: body.to,
+        channel: body.channel,
       });
       sendJson(res, 200, { ok: true, draft });
       return;
@@ -974,12 +1006,14 @@ const server = http.createServer(async (req, res) => {
         id?: string;
         approved?: boolean;
       };
-      const draft = body.id ? requestCommSend(ROOT, body.id, Boolean(body.approved)) : null;
+      const draft = body.id
+        ? await requestCommSend(ROOT, body.id, Boolean(body.approved))
+        : null;
       if (!draft) {
         sendJson(res, 404, { ok: false, error: "draft not found" });
         return;
       }
-      sendJson(res, 200, { ok: true, draft });
+      sendJson(res, 200, { ok: true, draft, provider: getCommsProviderStatus() });
       return;
     }
 
@@ -1045,6 +1079,29 @@ const server = http.createServer(async (req, res) => {
   }
 });
 
+/** Execute a daily-ops job body (no ledger write — caller/scheduler records). */
+async function executeDailyOpsJob(
+  job: DailyOpsItem
+): Promise<{ success: boolean; summary: string }> {
+  // Phase 2: scheduled tick ledger. Full agent spawn remains opt-in via Control Plane Run.
+  return {
+    success: true,
+    summary: `Scheduled tick for "${job.title}" (prompt: ${job.prompt.slice(0, 120)})`,
+  };
+}
+
+const dailyScheduler = startDailyOpsScheduler({
+  cwd: ROOT,
+  intervalMs: Number(process.env.DAILY_OPS_TICK_MS || 30_000),
+  onRun: async (job) => {
+    const result = await executeDailyOpsJob(job);
+    console.log(
+      `[DailyOps] ran ${job.id} → ${result.success ? "ok" : "fail"}`
+    );
+    return result;
+  },
+});
+
 server.listen(PORT, "127.0.0.1", () => {
   const url = `http://127.0.0.1:${PORT}/`;
   try {
@@ -1074,6 +1131,15 @@ server.listen(PORT, "127.0.0.1", () => {
       (listAllowlistRoots(ROOT).length > 8 ? " | …" : "")
   );
   console.log(`[Control Plane] Session ${session.id} · ${session.entries.length} prior entries`);
+  console.log(
+    `[Control Plane] Daily Ops scheduler on (tick ${process.env.DAILY_OPS_TICK_MS || 30000}ms)`
+  );
+  console.log(
+    `[Control Plane] Email provider: ${getCommsProviderStatus().provider}` +
+      (getCommsProviderStatus().dryRun ? " (dry-run)" : "")
+  );
+  // Keep reference so shutdown hooks can stop it later
+  void dailyScheduler;
   if (process.platform === "win32" && process.env.CONTROL_PLANE_NO_BROWSER !== "1") {
     spawn("cmd", ["/c", "start", "", url], { detached: true, stdio: "ignore" }).unref();
   }

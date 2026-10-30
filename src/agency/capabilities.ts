@@ -16,6 +16,8 @@ export type ToolName =
   | "open_path"
   | "screenshot"
   | "run_shell"
+  | "run_node_sandbox"
+  | "mcp_call"
   | "finish"
   | "scan_evidence"
   | "write_report";
@@ -44,6 +46,8 @@ const OPS_TOOLS: ToolName[] = [
   "copy_file",
   "move_file",
   "run_shell",
+  "run_node_sandbox",
+  "mcp_call",
 ];
 const WRITE_TOOLS: ToolName[] = [...OPS_TOOLS, "write_report"];
 
@@ -110,6 +114,8 @@ export const ROLE_CAPABILITIES: RoleCapabilities[] = [
       "Requires Go/No-Go = GO",
       "Target only authorized repo path",
       "Shell still allowlisted (no arbitrary install/rm)",
+      "run_node_sandbox: isolated subprocess (optional Docker)",
+      "mcp_call: routed MCP tools from mcp.json (secret env stripped)",
       "Blocked: Windows/Program Files system paths",
     ],
   },
@@ -125,6 +131,7 @@ export const OPERATOR_CAPABILITIES: RoleCapabilities = {
     "delete_path requires confirm:true; recursive:true for non-empty dirs",
     "Blocked: OS system folders (Windows/Program Files, /etc, /System, …)",
     "Shell: dir/type/echo/where/Get-* only",
+    "run_node_sandbox + mcp_call gated by this matrix (and cost cap for cloud)",
   ],
 };
 
@@ -138,7 +145,9 @@ export function capabilitiesFor(role: RoleId): RoleCapabilities {
 export function assertToolAllowed(role: RoleId, tool: string): void {
   const caps = capabilitiesFor(role);
   if (tool === "finish") return;
-  if (!caps.tools.includes(tool as ToolName)) {
+  // Qualified MCP tools (mcp:server:name) map to mcp_call permission
+  const effective = /^mcp:/i.test(tool) ? "mcp_call" : tool;
+  if (!caps.tools.includes(effective as ToolName)) {
     throw new Error(
       `Role ${role} cannot use tool "${tool}". Allowed: ${caps.tools.join(", ")}`
     );
