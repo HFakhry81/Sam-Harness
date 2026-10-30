@@ -90,6 +90,7 @@ The manager `install` action **delegates** to those scripts (no duplicated logic
 - pnpm pinned via `packageManager` (`pnpm@11.23.0`) + Corepack  
 - Git  
 - Ollama optional (local models from `config/team.json`)  
+- **Windows PowerShell 5.1** is supported (no pwsh 7 required). All `Tools/**/*.ps1` and `scripts/install/*.ps1` are committed as **UTF-8 with BOM** so PS 5.1 does not mangle Arabic strings. Launchers run `chcp 65001`.
 
 After setup: `pnpm run doctor` then `pnpm run ui` (or menu item 6).
 

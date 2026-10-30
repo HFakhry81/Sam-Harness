@@ -42,6 +42,44 @@ jobs:
       - name: Unit tests
         run: pnpm test
 
+      # Tools manager — Windows PowerShell 5.1 (not pwsh 7) must parse Arabic .ps1 (UTF-8 BOM)
+      - name: PowerShell 5.1 parse + Tools manager smoke
+        if: runner.os == 'Windows'
+        shell: powershell
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $ps51 = Join-Path $env:SystemRoot 'System32\WindowsPowerShell\v1.0\powershell.exe'
+          if (-not (Test-Path -LiteralPath $ps51)) { throw "powershell.exe 5.1 missing: $ps51" }
+          Write-Host "Using $ps51"
+          $files = @()
+          $files += Get-ChildItem -Path Tools -Recurse -Filter *.ps1 -File
+          $files += Get-ChildItem -Path scripts\install -Filter *.ps1 -File
+          foreach ($f in $files) {
+            $bytes = [System.IO.File]::ReadAllBytes($f.FullName)
+            if ($bytes.Length -lt 3 -or $bytes[0] -ne 0xEF -or $bytes[1] -ne 0xBB -or $bytes[2] -ne 0xBF) {
+              throw "Missing UTF-8 BOM (required for PS 5.1 + Arabic): $($f.FullName)"
+            }
+            $tokens = $null
+            $errs = $null
+            [void][System.Management.Automation.Language.Parser]::ParseFile($f.FullName, [ref]$tokens, [ref]$errs)
+            if ($errs -and $errs.Count -gt 0) {
+              $errs | ForEach-Object { Write-Host $_ }
+              throw "Parse failed under Windows PowerShell 5.1: $($f.FullName)"
+            }
+            Write-Host "OK parse $($f.FullName)"
+          }
+          # Smoke run via powershell.exe 5.1 (Arabic strings must not ParserError)
+          & $ps51 -NoProfile -ExecutionPolicy Bypass -File Tools\Sam-Harness-Manager.ps1 -Action health -Lang ar -NonInteractive
+          $ec = $LASTEXITCODE
+          Write-Host "health (ar) exit=$ec"
+          if ($ec -gt 1) { throw "Unexpected health exit $ec" }
+          # .cmd wrapper path (double-click equivalent)
+          $env:SAM_TOOLS_NOPAUSE = '1'
+          cmd /c "Tools\Sam-Harness-Manager.cmd -Action doctor -Lang en -NonInteractive"
+          $ec2 = $LASTEXITCODE
+          Write-Host "cmd doctor exit=$ec2"
+          if ($ec2 -gt 1) { throw "Unexpected cmd doctor exit $ec2" }
+
       - name: Smoke (offline gates)
         run: pnpm run smoke
 

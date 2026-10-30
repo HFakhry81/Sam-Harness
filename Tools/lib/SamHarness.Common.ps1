@@ -1,4 +1,4 @@
-#Requires -Version 5.1
+﻿#Requires -Version 5.1
 <#
 .SYNOPSIS
   Shared helpers for Sam-Harness Tools (Windows PowerShell 5.1 + pwsh 7).
