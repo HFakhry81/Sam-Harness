@@ -71,8 +71,15 @@ typecheck + Vitest + CI (ubuntu/windows) + smokes محمولة.
 3. محاسبة دقيقة لكل تشغيل/يوم مربوطة بسقف Phase 1؛ تدهور لطيف للمحلي قرب السقف دون تجاوزه.
 4. إعداد عبر env — انظر `docs/PHASE5_NEAR_ZERO_COST.md` و`.env.example`.
 
-### بعد Phase 5 (Phase 6+)
-- بوابات ثقة قابلة للإثبات، توزيع عربي أولاً.
+### Phase 6 — بوابات ثقة قابلة للإثبات ✅
+1. بوابات جودة صريحة لكل خطوة (tests / typecheck / file assertions / desktop postconditions) — لا نجاح صامت؛ فشل → إعادة محاولة ثم تصعيد.
+2. موافقات بشرية لأفعال خطرة (حذف خارج مجلد المخرجات، إرسال بريد، إنفاق فوق عتبة، سطح مكتب لتطبيقات حساسة) + سياسة `trust-policy.json` / env.
+3. سجل تدقيق مُقيَّد بالتجزئة (hash chain) في SQLite + `pnpm run trust:verify` و`/api/trust/audit/verify`.
+4. حزمة أدلة لكل تشغيل تحت `SAM_OUTPUT_HOME/runs/.../evidence/` + مرآة في `reports/`.
+5. Control Plane `/api/trust/*` + CLI `trust:*` — انظر `docs/PHASE6_GATES_TRUST.md`.
+
+### بعد Phase 6 (Phase 7+)
+- توزيع عربي أولاً.
 
 ## قرارات المالك (مُثبَّتة في هذا الفرع)
 

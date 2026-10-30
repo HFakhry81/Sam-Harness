@@ -1027,6 +1027,117 @@ const server = http.createServer(async (req, res) => {
       return;
     }
 
+    // —— Phase 6 trust: approvals, audit verify, evidence ——
+    if (method === "GET" && p === "/api/trust/policy") {
+      const { getEffectiveTrustPolicy } = await import("../lib/trust/index.js");
+      sendJson(res, 200, { ok: true, policy: getEffectiveTrustPolicy(ROOT) });
+      return;
+    }
+    if (method === "GET" && p === "/api/trust/approvals") {
+      const { listPendingApprovals, listAllApprovals } = await import(
+        "../lib/trust/index.js"
+      );
+      const status = url.searchParams.get("status");
+      const rows =
+        status === "pending"
+          ? listPendingApprovals()
+          : status === "approved" || status === "rejected"
+            ? listAllApprovals(undefined, status)
+            : listAllApprovals();
+      sendJson(res, 200, { ok: true, approvals: rows });
+      return;
+    }
+    if (method === "POST" && p === "/api/trust/approvals") {
+      const body = JSON.parse((await readBody(req)) || "{}") as {
+        id?: string;
+        approve?: boolean;
+      };
+      if (!body.id) {
+        sendJson(res, 400, { ok: false, error: "id required" });
+        return;
+      }
+      const { decideApproval } = await import("../lib/trust/index.js");
+      const record = decideApproval(body.id, body.approve !== false);
+      if (!record) {
+        sendJson(res, 404, { ok: false, error: "approval not found" });
+        return;
+      }
+      // Keep desktop helper in sync for desktop:* kinds
+      if (record.kind.startsWith("desktop:")) {
+        try {
+          const { approveDesktopAction } = await import("../tools/desktop/index.js");
+          approveDesktopAction(body.id, body.approve !== false);
+        } catch {
+          /* already updated via decideApproval */
+        }
+      }
+      sendJson(res, 200, { ok: true, approval: record });
+      return;
+    }
+    if (method === "GET" && p === "/api/trust/audit/verify") {
+      const { verifyAuditChain } = await import("../lib/trust/index.js");
+      const result = verifyAuditChain();
+      sendJson(res, result.ok ? 200 : 409, { ...result });
+      return;
+    }
+    if (method === "GET" && p === "/api/trust/audit") {
+      const { listAudit } = await import("../lib/trust/index.js");
+      const limit = Number(url.searchParams.get("limit") || 100);
+      const runId = url.searchParams.get("runId") || undefined;
+      const category = url.searchParams.get("category") as
+        | "action"
+        | "gate"
+        | "approval"
+        | "cost"
+        | "system"
+        | "evidence"
+        | undefined;
+      const entries = listAudit({ limit, runId, category });
+      sendJson(res, 200, { ok: true, entries });
+      return;
+    }
+    if (method === "GET" && p.startsWith("/api/trust/evidence/")) {
+      const runId = decodeURIComponent(p.slice("/api/trust/evidence/".length));
+      if (!runId) {
+        sendJson(res, 400, { ok: false, error: "runId required" });
+        return;
+      }
+      const { readEvidenceBundle, writeEvidenceBundle } = await import(
+        "../lib/trust/index.js"
+      );
+      let bundle = readEvidenceBundle(runId);
+      if (!bundle && url.searchParams.get("write") === "1") {
+        bundle = writeEvidenceBundle({ runId });
+      }
+      if (!bundle) {
+        sendJson(res, 404, { ok: false, error: "evidence not found" });
+        return;
+      }
+      sendJson(res, 200, { ok: true, bundle });
+      return;
+    }
+    if (method === "POST" && p.startsWith("/api/trust/evidence/")) {
+      const runId = decodeURIComponent(p.slice("/api/trust/evidence/".length));
+      const { writeEvidenceBundle } = await import("../lib/trust/index.js");
+      const bundle = writeEvidenceBundle({ runId });
+      if (!bundle) {
+        sendJson(res, 400, { ok: false, error: "evidence disabled or failed" });
+        return;
+      }
+      sendJson(res, 200, { ok: true, bundle });
+      return;
+    }
+    if (method === "GET" && p.startsWith("/api/trust/gates/")) {
+      const runId = decodeURIComponent(p.slice("/api/trust/gates/".length));
+      const { listGateResults } = await import("../lib/trust/index.js");
+      sendJson(res, 200, {
+        ok: true,
+        runId,
+        gates: listGateResults(runId),
+      });
+      return;
+    }
+
     if (method === "POST" && p === "/api/db/backup") {
       const pers = getPersistence();
       const result = backupSqlite(pers.driver, {

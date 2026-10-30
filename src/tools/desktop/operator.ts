@@ -260,7 +260,7 @@ export async function runDesktopAction(
     /* ignore */
   }
 
-  // Approval gate
+  // Approval gate (Phase 4 risk matrix)
   const approval = resolveApproval(request, plan.risk);
   if (!approval.ok) {
     const result: DesktopActionResult = {
@@ -281,6 +281,49 @@ export async function runDesktopAction(
       durationMs: Date.now() - started,
     });
     return result;
+  }
+
+  // Phase 6 — sensitive app targets (Outlook, banking, password managers, …)
+  {
+    const { requireDesktopSensitiveApproval, appendAudit } = await import(
+      "../../lib/trust/index.js"
+    );
+    const sensitive = requireDesktopSensitiveApproval({
+      action: request.action,
+      params: request.params || {},
+      approved: request.approved,
+      runId,
+    });
+    if (!sensitive.ok) {
+      const result: DesktopActionResult = {
+        ok: false,
+        action: request.action,
+        message: sensitive.message || "Approval required for sensitive desktop app",
+        risk: plan.risk,
+        requiresApproval: true,
+        approvalId: sensitive.approvalId,
+        plan,
+        data: { pendingApproval: true, approval: sensitive.record, sensitive: true },
+      };
+      recordDesktopTimeline({
+        runId,
+        action: request.action,
+        status: "info",
+        result,
+        durationMs: Date.now() - started,
+      });
+      return result;
+    }
+    appendAudit({
+      category: "action",
+      action: `desktop:${request.action}`,
+      runId,
+      detail: {
+        risk: plan.risk,
+        approvalId: approval.approvalId || sensitive.approvalId,
+        params: request.params || {},
+      },
+    });
   }
 
   let screenshotBefore: string | undefined;

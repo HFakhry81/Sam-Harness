@@ -10,6 +10,8 @@ import {
   boundLogger,
 } from "./observability/index.js";
 import { withRetry } from "./retry.js";
+import { writeEvidenceBundle } from "./trust/evidence.js";
+import { appendAudit } from "./trust/auditLog.js";
 
 const log = boundLogger("runs");
 
@@ -105,6 +107,19 @@ export function finishDurableRun(
     durationMs: opts.durationMs,
     tenantId,
   });
+  // Phase 6 — evidence bundle + audit
+  try {
+    writeEvidenceBundle({ runId, tenantId });
+    appendAudit({
+      category: "system",
+      action: "run_finished",
+      runId,
+      detail: { status, ok: opts.ok, cancelled: opts.cancelled },
+      tenantId,
+    });
+  } catch {
+    /* evidence is best-effort */
+  }
   return updated;
 }
 
