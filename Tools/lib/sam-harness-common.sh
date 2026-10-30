@@ -2,7 +2,7 @@
 # Shared helpers for Sam-Harness Tools (bash — Ubuntu/macOS).
 # shellcheck shell=bash
 
-SAM_HARNESS_LANG="${SAM_TOOLS_LANG:-ar}"
+SAM_HARNESS_LANG="en"
 SAM_HARNESS_LOG_FILE=""
 SAM_HARNESS_START_EPOCH="$(date +%s)"
 SAM_HARNESS_STEP=0
@@ -77,18 +77,14 @@ sam_logs_dir() {
 }
 
 sam_set_lang() {
-  case "$1" in
-    ar|en) SAM_HARNESS_LANG="$1"; export SAM_TOOLS_LANG="$1" ;;
-  esac
+  # No-op: Tools console is English-only.
+  :
 }
 
 t() {
-  # t "arabic" "english"
-  if [[ "$SAM_HARNESS_LANG" == "en" ]]; then
-    printf '%s\n' "$2"
-  else
-    printf '%s\n' "$1"
-  fi
+  # Backward-compat: ignore Arabic arg; print English.
+  printf '%s
+' "${2:-$1}"
 }
 
 sam_log() {
@@ -121,12 +117,10 @@ sam_init_logging() {
 
 sam_banner() {
   local sub="${1:-}"
-  local title
-  title="$(t "مدير Sam-Harness" "Sam-Harness Manager")"
   echo ""
   echo -e "  ${C_DCYAN}================================================================${C_RESET}"
-  echo -e "   ${C_WHITE}${title}${C_RESET}"
-  echo -e "   ${C_GRAY}Arabic-first · Control Plane · Hybrid Agency · Phases 0-9${C_RESET}"
+  echo -e "   ${C_WHITE}Sam-Harness Manager${C_RESET}"
+  echo -e "   ${C_GRAY}Control Plane · Hybrid Agency · Phases 0-9${C_RESET}"
   if [[ -n "$sub" ]]; then
     echo -e "   ${C_CYAN}${sub}${C_RESET}"
   fi
@@ -152,7 +146,7 @@ sam_summary() {
   elapsed=$((now - SAM_HARNESS_START_EPOCH))
   echo ""
   echo -e "  ${C_GRAY}----------------------------------------------------------------${C_RESET}"
-  echo "  $(t "الملخص" "Summary"): OK=${SAM_HARNESS_OK}  WARN=${SAM_HARNESS_WARN}  FAIL=${SAM_HARNESS_FAIL}  time=${elapsed}s  exit=${code}"
+  echo "  Summary: OK=${SAM_HARNESS_OK}  WARN=${SAM_HARNESS_WARN}  FAIL=${SAM_HARNESS_FAIL}  time=${elapsed}s  exit=${code}"
   if [[ -n "$SAM_HARNESS_LOG_FILE" ]]; then
     echo -e "  ${C_GRAY}log: ${SAM_HARNESS_LOG_FILE}${C_RESET}"
   fi
@@ -211,12 +205,12 @@ sam_ensure_env() {
   if [[ ! -f "$root/.env" ]]; then
     if [[ -f "$root/.env.example" ]]; then
       cp "$root/.env.example" "$root/.env"
-      sam_ok "$(t "تم إنشاء .env من .env.example" "Created .env from .env.example")"
+      sam_ok "Created .env from .env.example"
     else
       sam_warn ".env.example missing"
     fi
   else
-    sam_ok "$(t ".env موجود" ".env already present")"
+    sam_ok ".env already present"
   fi
 }
 

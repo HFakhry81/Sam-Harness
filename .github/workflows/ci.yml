@@ -42,7 +42,7 @@ jobs:
       - name: Unit tests
         run: pnpm test
 
-      # Tools manager — Windows PowerShell 5.1 (not pwsh 7) must parse Arabic .ps1 (UTF-8 BOM)
+          # Tools manager — Windows PowerShell 5.1 parse (UTF-8 BOM) + English-only smoke
       - name: PowerShell 5.1 parse + Tools manager smoke
         if: runner.os == 'Windows'
         shell: powershell
@@ -57,7 +57,11 @@ jobs:
           foreach ($f in $files) {
             $bytes = [System.IO.File]::ReadAllBytes($f.FullName)
             if ($bytes.Length -lt 3 -or $bytes[0] -ne 0xEF -or $bytes[1] -ne 0xBB -or $bytes[2] -ne 0xBF) {
-              throw "Missing UTF-8 BOM (required for PS 5.1 + Arabic): $($f.FullName)"
+              throw "Missing UTF-8 BOM: $($f.FullName)"
+            }
+            $text = [System.IO.File]::ReadAllText($f.FullName)
+            if ($text -match '[\u0600-\u06FF]') {
+              throw "Arabic script found in Tools console script (English-only): $($f.FullName)"
             }
             $tokens = $null
             $errs = $null
@@ -84,38 +88,39 @@ jobs:
             $all = "$stdout`n$stderr"
             Write-Host "---- $Label exit=$($p.ExitCode) ----"
             Write-Host $all
+            if ($all -match '[\u0600-\u06FF]') { throw "$Label printed Arabic to console (English-only required)" }
             if ($all -match 'VariableNotWritable|Cannot overwrite variable|ParserError|ParameterArgumentTransformationError|Cannot convert.*Object\[\]') {
               throw "$Label hit PowerShell engine error"
             }
             if ($p.ExitCode -ne 0) { throw "$Label exit $($p.ExitCode)" }
-            # Success proof: summary exit=0 and/or at least one [OK] (help used to only print [INFO])
             if ($all -notmatch 'exit=0' -and $all -notmatch '\[OK\]') {
               throw "$Label missing success markers (need exit=0 summary or [OK])"
             }
             if ($all -match '\[FAIL\].*exit System\.Object') { throw "$Label leaked Object[] into exit summary" }
             return $all
           }
-          # Safe end-to-end menu actions under Windows PowerShell 5.1
-          Invoke-SamManager51 -Label 'doctor-en' -ManagerArgs @('-Action','doctor','-Lang','en','-NonInteractive') | Out-Null
-          $healthOut = Invoke-SamManager51 -Label 'health-ar' -ManagerArgs @('-Action','health','-Lang','ar','-NonInteractive')
+          # Safe end-to-end menu actions under Windows PowerShell 5.1 (English-only)
+          Invoke-SamManager51 -Label 'doctor' -ManagerArgs @('-Action','doctor','-NonInteractive') | Out-Null
+          $healthOut = Invoke-SamManager51 -Label 'health' -ManagerArgs @('-Action','health','-NonInteractive')
           if ($healthOut -notmatch '\[WARN\].*healthz|/healthz') {
             Write-Host 'NOTE: healthz WARN may be absent if UI is somehow up'
           }
-          Invoke-SamManager51 -Label 'help-en' -ManagerArgs @('-Action','help','-Lang','en','-NonInteractive') | Out-Null
-          Invoke-SamManager51 -Label 'view-logs' -ManagerArgs @('-Action','view-logs','-Lang','en','-NonInteractive') | Out-Null
-          Invoke-SamManager51 -Label 'cleanup-logs' -ManagerArgs @('-Action','cleanup-logs','-Lang','en','-NonInteractive') | Out-Null
+          # -Lang is ignored (compat); still must stay English
+          Invoke-SamManager51 -Label 'help' -ManagerArgs @('-Action','help','-Lang','ar','-NonInteractive') | Out-Null
+          Invoke-SamManager51 -Label 'view-logs' -ManagerArgs @('-Action','view-logs','-NonInteractive') | Out-Null
+          Invoke-SamManager51 -Label 'cleanup-logs' -ManagerArgs @('-Action','cleanup-logs','-NonInteractive') | Out-Null
           $bak = Join-Path $env:RUNNER_TEMP 'sam-harness-ci-backup.zip'
-          Invoke-SamManager51 -Label 'backup' -ManagerArgs @('-Action','backup','-Lang','en','-NonInteractive','-BackupPath',$bak) | Out-Null
+          Invoke-SamManager51 -Label 'backup' -ManagerArgs @('-Action','backup','-NonInteractive','-BackupPath',$bak) | Out-Null
           if (-not (Test-Path -LiteralPath $bak)) { throw "backup zip missing: $bak" }
-          Invoke-SamManager51 -Label 'build-check' -ManagerArgs @('-Action','build-check','-Lang','en','-NonInteractive') | Out-Null
-          # .cmd wrapper path (double-click equivalent → powershell.exe 5.1)
+          Invoke-SamManager51 -Label 'build-check' -ManagerArgs @('-Action','build-check','-NonInteractive') | Out-Null
           $env:SAM_TOOLS_NOPAUSE = '1'
           $cmdLog = Join-Path $env:RUNNER_TEMP 'sam-tools-cmd-doctor.log'
-          cmd /c "Tools\Sam-Harness-Manager.cmd -Action doctor -Lang en -NonInteractive > `"$cmdLog`" 2>&1"
+          cmd /c "Tools\Sam-Harness-Manager.cmd -Action doctor -NonInteractive > `"$cmdLog`" 2>&1"
           $ecCmd = $LASTEXITCODE
           $cmdOut = Get-Content -LiteralPath $cmdLog -Raw -ErrorAction SilentlyContinue
           Write-Host "---- cmd-doctor exit=$ecCmd ----"
           Write-Host $cmdOut
+          if ($cmdOut -match '[\u0600-\u06FF]') { throw 'cmd doctor printed Arabic' }
           if ($cmdOut -match 'VariableNotWritable|Cannot overwrite variable|ParserError|ParameterArgumentTransformationError') { throw 'cmd doctor hit PowerShell engine error' }
           if ($ecCmd -ne 0) { throw "cmd doctor exit $ecCmd" }
 

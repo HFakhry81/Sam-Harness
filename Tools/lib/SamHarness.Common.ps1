@@ -4,7 +4,6 @@
   Shared helpers for Sam-Harness Tools (Windows PowerShell 5.1 + pwsh 7).
 #>
 
-$script:SamHarnessLang = if ($env:SAM_TOOLS_LANG) { $env:SAM_TOOLS_LANG } else { "ar" }
 $script:SamHarnessLogFile = $null
 $script:SamHarnessStartTime = Get-Date
 $script:SamHarnessStep = 0
@@ -57,7 +56,7 @@ function Get-SamLogsDir {
 
 function Initialize-SamConsole {
   try {
-    # UTF-8 console for Arabic
+    # UTF-8 console
     cmd /c "chcp 65001 >nul" | Out-Null
   } catch { }
   try {
@@ -92,25 +91,23 @@ function Write-SamLog([string]$line) {
 }
 
 function T {
+  # Backward-compat no-op: Tools console is English-only. Ignore -Ar; return -En.
   param([string]$Ar, [string]$En)
-  if ($script:SamHarnessLang -eq "en") { return $En }
+  if ($En) { return $En }
   return $Ar
 }
 
 function Set-SamLang([string]$Lang) {
-  if ($Lang -eq "en" -or $Lang -eq "ar") {
-    $script:SamHarnessLang = $Lang
-    $env:SAM_TOOLS_LANG = $Lang
-  }
+  # No-op: language toggle removed (English-only console).
 }
+
 
 function Write-SamBanner {
   param([string]$Subtitle = "")
-  $title = T -Ar "مدير Sam-Harness" -En "Sam-Harness Manager"
   Write-Host ""
   Write-Host "  ================================================================" -ForegroundColor DarkCyan
-  Write-Host ("   " + $title) -ForegroundColor White
-  Write-Host "   Arabic-first · Control Plane · Hybrid Agency · Phases 0-9" -ForegroundColor Gray
+  Write-Host "   Sam-Harness Manager" -ForegroundColor White
+  Write-Host "   Control Plane · Hybrid Agency · Phases 0-9" -ForegroundColor Gray
   if ($Subtitle) {
     Write-Host ("   " + $Subtitle) -ForegroundColor Cyan
   }
@@ -156,7 +153,7 @@ function Write-SamSummary {
   $secs = [math]::Round($elapsed.TotalSeconds, 1)
   Write-Host ""
   Write-Host "  ----------------------------------------------------------------" -ForegroundColor DarkGray
-  $summary = T -Ar "الملخص" -En "Summary"
+  $summary = "Summary"
   Write-Host ("  {0}: OK={1}  WARN={2}  FAIL={3}  time={4}s  exit={5}" -f `
       $summary, $script:SamHarnessOk, $script:SamHarnessWarn, $script:SamHarnessFail, $secs, $ExitCode)
   if ($script:SamHarnessLogFile) {
@@ -323,12 +320,12 @@ function Ensure-SamEnvFile {
   if (-not (Test-Path -LiteralPath $envPath)) {
     if (Test-Path -LiteralPath $example) {
       Copy-Item -LiteralPath $example -Destination $envPath
-      Write-SamOk (T -Ar "تم إنشاء .env من .env.example" -En "Created .env from .env.example")
+      Write-SamOk ("Created .env from .env.example")
     } else {
       Write-SamWarn ".env.example missing"
     }
   } else {
-    Write-SamOk (T -Ar ".env موجود" -En ".env already present")
+    Write-SamOk (".env already present")
   }
 }
 

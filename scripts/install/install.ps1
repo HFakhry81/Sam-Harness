@@ -9,7 +9,7 @@
   Documents\Sam-Harness, optionally registers a logon scheduled task, runs doctor.
 
 .PARAMETER NonInteractive
-  Skip prompts; use defaults (Arabic locale, eastern numerals).
+  Skip prompts; use defaults (locale=ar, eastern numerals for app config).
 
 .PARAMETER RegisterStartup
   Register ONLOGON scheduled task for Control Plane UI.
@@ -39,7 +39,7 @@ function Write-Err([string]$msg) { Write-Host "  [XX] $msg" -ForegroundColor Red
 Write-Host ""
 Write-Host "  ================================================================" -ForegroundColor DarkCyan
 Write-Host "   Sam-Harness  -  One-click install (Windows)" -ForegroundColor White
-Write-Host "   Arabic-first · Control Plane · Hybrid Agency" -ForegroundColor Gray
+Write-Host "   Control Plane · Hybrid Agency" -ForegroundColor Gray
 Write-Host "  ================================================================" -ForegroundColor DarkCyan
 Write-Host "  Project: $ProjectRoot"
 Write-Host ""
@@ -94,7 +94,7 @@ if (-not $NonInteractive) {
   if ($p) { $port = $p.Trim() }
   if (-not $RegisterStartup) {
     $s = Read-Host "  Register startup task? [y/N]"
-    if ($s -match '^(y|yes|ن|نعم)$') { $RegisterStartup = $true }
+    if ($s -match '^(y|yes)$') { $RegisterStartup = $true }
   }
 }
 

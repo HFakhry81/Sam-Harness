@@ -2,7 +2,7 @@
 
 ## Unified Tools Manager (recommended)
 
-One menu for install, update, doctor, backup, Ollama pulls, and more:
+One menu for install, update, doctor, backup, Ollama pulls, and more (console output is **English-only**; `-Lang` is ignored):
 
 **Windows**
 

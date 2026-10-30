@@ -34,7 +34,7 @@ err() { printf '  [XX] %s\n' "$*" >&2; }
 echo ""
 echo "  ================================================================"
 echo "   Sam-Harness  -  One-click install (macOS / Linux)"
-echo "   Arabic-first · Control Plane · Hybrid Agency"
+echo "   Control Plane · Hybrid Agency"
 echo "  ================================================================"
 echo "  Project: $PROJECT_ROOT"
 echo ""
@@ -78,7 +78,7 @@ if [[ "$NONINTERACTIVE" -eq 0 ]]; then
   [[ -n "${P:-}" ]] && PORT="$P"
   if [[ "$REGISTER_STARTUP" -eq 0 ]]; then
     read -r -p "  Register user startup service? [y/N]: " S || true
-    if [[ "${S:-}" =~ ^(y|yes|ن|نعم)$ ]]; then REGISTER_STARTUP=1; fi
+    if [[ "${S:-}" =~ ^(y|yes)$ ]]; then REGISTER_STARTUP=1; fi
   fi
 fi
 

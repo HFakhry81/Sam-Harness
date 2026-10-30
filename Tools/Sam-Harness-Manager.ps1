@@ -7,7 +7,7 @@
   Non-interactive action id (see Tools/lib/actions.manifest).
 
 .PARAMETER Lang
-  UI language: ar (default) or en.
+  Ignored (English-only console; kept for backward compatibility).
 
 .PARAMETER NonInteractive
   Skip prompts (for CI / automation).
@@ -20,7 +20,7 @@
 
 .EXAMPLE
   .\Sam-Harness-Manager.ps1
-  .\Sam-Harness-Manager.ps1 -Action update -Lang en -NonInteractive
+  .\Sam-Harness-Manager.ps1 -Action update -NonInteractive
 #>
 [CmdletBinding()]
 param(
@@ -39,40 +39,37 @@ $Common = Join-Path $ToolsDir "lib\SamHarness.Common.ps1"
 . $Common
 
 Initialize-SamConsole
+# -Lang / SAM_TOOLS_LANG ignored (English-only console)
 if ($Lang) { Set-SamLang $Lang }
-elseif ($env:SAM_TOOLS_LANG) { Set-SamLang $env:SAM_TOOLS_LANG }
-else { Set-SamLang "ar" }
 
 $ProjectRoot = Resolve-Path (Join-Path $ToolsDir "..") | Select-Object -ExpandProperty Path
 Set-Location $ProjectRoot
 
 function Show-SamMenu {
-  Write-SamBanner -Subtitle (T -Ar "القائمة الرئيسية" -En "Main menu")
+  Write-SamBanner -Subtitle "Main menu"
   Write-Host ("  Project: $ProjectRoot") -ForegroundColor DarkGray
-  Write-Host ("  Lang: $($script:SamHarnessLang)  |  " + (T -Ar "اضغط L لتبديل اللغة" -En "Press L to toggle language")) -ForegroundColor DarkGray
   Write-Host ""
   $items = @(
-    @{ N = "1";  Id = "install";        Ar = "تثبيت على جهاز جديد";           En = "Install on a new machine" },
-    @{ N = "2";  Id = "setup-prereqs";   Ar = "إعداد المتطلبات";               En = "Setup prerequisites" },
-    @{ N = "3";  Id = "install-deps";    Ar = "تثبيت الاعتماديات (pnpm)";      En = "Install dependencies (pnpm)" },
-    @{ N = "4";  Id = "update";         Ar = "تحديث (git + install + migrate + doctor)"; En = "Update (git + install + migrate + doctor)" },
-    @{ N = "5";  Id = "build-check";    Ar = "بناء/فحص (typecheck + tests + doctor)"; En = "Build/check (typecheck + tests + doctor)" },
-    @{ N = "6";  Id = "start-ui";       Ar = "تشغيل واجهة Control Plane";     En = "Start Control Plane UI" },
-    @{ N = "7";  Id = "pull-models";    Ar = "سحب نماذج Ollama (من team.json)"; En = "Pull Ollama models (from team.json)" },
-    @{ N = "8";  Id = "doctor";         Ar = "Doctor — فحص الصحة";            En = "Doctor — health check" },
-    @{ N = "9";  Id = "help";           Ar = "المساعدة (pnpm help)";           En = "Help (pnpm help)" },
-    @{ N = "10"; Id = "backup";         Ar = "نسخة احتياطية (DB + config + .env)"; En = "Backup (DB + config + .env)" },
-    @{ N = "11"; Id = "restore";        Ar = "استعادة من نسخة";                En = "Restore from backup" },
-    @{ N = "12"; Id = "repair";         Ar = "إصلاح (deps + migrate + doctor)"; En = "Repair (deps + migrate + doctor)" },
-    @{ N = "13"; Id = "uninstall";      Ar = "إلغاء التثبيت";                  En = "Uninstall" },
-    @{ N = "14"; Id = "view-logs";      Ar = "عرض السجلات";                    En = "View logs" },
-    @{ N = "15"; Id = "cleanup-logs";   Ar = "تنظيف السجلات";                  En = "Cleanup logs" },
-    @{ N = "16"; Id = "health";         Ar = "فحص حي (doctor + /healthz)";     En = "Live health (doctor + /healthz)" },
-    @{ N = "0";  Id = "exit";           Ar = "خروج";                           En = "Exit" }
+    @{ N = "1";  Id = "install";        En = "Install on a new machine" },
+    @{ N = "2";  Id = "setup-prereqs";   En = "Setup prerequisites" },
+    @{ N = "3";  Id = "install-deps";    En = "Install dependencies (pnpm)" },
+    @{ N = "4";  Id = "update";         En = "Update (git + install + migrate + doctor)" },
+    @{ N = "5";  Id = "build-check";    En = "Build/check (typecheck + tests + doctor)" },
+    @{ N = "6";  Id = "start-ui";       En = "Start Control Plane UI" },
+    @{ N = "7";  Id = "pull-models";    En = "Pull Ollama models (from team.json)" },
+    @{ N = "8";  Id = "doctor";         En = "Doctor — health check" },
+    @{ N = "9";  Id = "help";           En = "Help (pnpm help)" },
+    @{ N = "10"; Id = "backup";         En = "Backup (DB + config + .env)" },
+    @{ N = "11"; Id = "restore";        En = "Restore from backup" },
+    @{ N = "12"; Id = "repair";         En = "Repair (deps + migrate + doctor)" },
+    @{ N = "13"; Id = "uninstall";      En = "Uninstall" },
+    @{ N = "14"; Id = "view-logs";      En = "View logs" },
+    @{ N = "15"; Id = "cleanup-logs";   En = "Cleanup logs" },
+    @{ N = "16"; Id = "health";         En = "Live health (doctor + /healthz)" },
+    @{ N = "0";  Id = "exit";           En = "Exit" }
   )
   foreach ($it in $items) {
-    $label = if ($script:SamHarnessLang -eq "en") { $it.En } else { $it.Ar }
-    Write-Host ("   [{0,2}]  {1}" -f $it.N, $label)
+    Write-Host ("   [{0,2}]  {1}" -f $it.N, $it.En)
   }
   Write-Host ""
   return $items
@@ -81,7 +78,6 @@ function Show-SamMenu {
 function Resolve-SamMenuChoice {
   param([string]$Choice, $Items)
   $c = $Choice.Trim()
-  if ($c -match '^(l|L|ع)$') { return "__toggle_lang__" }
   if ($c -eq "") { return "" }
   foreach ($it in $Items) {
     if ($c -eq $it.N -or $c -eq $it.Id) { return $it.Id }
@@ -121,7 +117,7 @@ function Invoke-SamAction {
       "cleanup-logs"   { $raw = Invoke-ActionCleanupLogs }
       "health"         { $raw = Invoke-ActionHealth }
       default {
-        Write-SamFail (T -Ar "إجراء غير معروف: $Id" -En "Unknown action: $Id")
+        Write-SamFail ("Unknown action: $Id")
         $raw = 2
       }
     }
@@ -133,14 +129,14 @@ function Invoke-SamAction {
   }
 
   if ($code -ne 0 -and $script:SamHarnessFail -eq 0) {
-    Write-SamFail (T -Ar ("انتهى بفشل (exit {0})" -f $code) -En ("Finished with failure (exit {0})" -f $code))
+    Write-SamFail (("Finished with failure (exit {0})" -f $code))
   }
   Write-SamSummary -ExitCode $code
   return $code
 }
 
 function Invoke-ActionInstall {
-  Write-SamStep (T -Ar "تثبيت على جهاز جديد (تفويض إلى scripts/install)" -En "Fresh-machine install (delegate to scripts/install)")
+  Write-SamStep ("Fresh-machine install (delegate to scripts/install)")
   $pkg = Join-Path $ProjectRoot "package.json"
   $isRepo = $false
   if (Test-Path -LiteralPath $pkg) {
@@ -149,7 +145,7 @@ function Invoke-ActionInstall {
   }
 
   if (-not $isRepo) {
-    Write-SamWarn (T -Ar "المجلد الحالي ليس Sam-Harness — محاولة الاستنساخ" -En "Current folder is not Sam-Harness — attempting clone")
+    Write-SamWarn ("Current folder is not Sam-Harness — attempting clone")
     if (-not (Test-SamCommand "git")) {
       Write-SamFail "git missing"
       return 1
@@ -177,13 +173,13 @@ function Invoke-ActionInstall {
   $ps51 = Join-Path $env:SystemRoot "System32\WindowsPowerShell\v1.0\powershell.exe"
   if (-not (Test-Path -LiteralPath $ps51)) { $ps51 = "powershell" }
   $ec = Invoke-SamNative -FilePath $ps51 -ArgumentList $installerArgs
-  if ($ec -eq 0) { Write-SamOk (T -Ar "التثبيت اكتمل" -En "Install finished") }
+  if ($ec -eq 0) { Write-SamOk ("Install finished") }
   else { Write-SamFail "install.ps1 exit $ec" }
   return $ec
 }
 
 function Invoke-ActionSetupPrereqs {
-  Write-SamStep (T -Ar "التحقق من Git / Node / pnpm / Ollama" -En "Check Git / Node / pnpm / Ollama")
+  Write-SamStep ("Check Git / Node / pnpm / Ollama")
 
   if (-not (Test-SamCommand "git")) {
     Write-SamWarn "Git missing — trying winget"
@@ -229,7 +225,7 @@ function Invoke-ActionSetupPrereqs {
   if (Test-SamCommand "ollama") {
     Write-SamOk "Ollama CLI found"
   } else {
-    Write-SamWarn (T -Ar "Ollama غير موجود — https://ollama.com/download أو winget install Ollama.Ollama" -En "Ollama not found — https://ollama.com/download or winget install Ollama.Ollama")
+    Write-SamWarn ("Ollama not found — https://ollama.com/download or winget install Ollama.Ollama")
   }
 
   Write-SamStep ".env + SAM_OUTPUT_HOME"
@@ -250,7 +246,7 @@ function Invoke-ActionSetupPrereqs {
 function Invoke-ActionInstallDeps {
   Write-SamStep "pnpm install"
   if (-not (Test-SamCommand "pnpm")) {
-    Write-SamFail (T -Ar "pnpm مفقود — شغّل setup-prereqs أولاً" -En "pnpm missing — run setup-prereqs first")
+    Write-SamFail ("pnpm missing — run setup-prereqs first")
     return 1
   }
   $ec = Invoke-SamNative -FilePath "pnpm" -ArgumentList @("install")
@@ -259,23 +255,23 @@ function Invoke-ActionInstallDeps {
 }
 
 function Invoke-ActionUpdate {
-  Write-SamStep (T -Ar "تحديث آمن للفرع الحالي" -En "Safe update of current branch")
+  Write-SamStep ("Safe update of current branch")
   if (-not (Test-SamCommand "git")) { Write-SamFail "git missing"; return 1 }
 
   $dirtyCap = Invoke-SamNativeCapture -FilePath "git" -ArgumentList @("status", "--porcelain")
   $dirty = @($dirtyCap.Lines | Where-Object { $_.Trim() -ne "" })
   if ($dirty.Count -gt 0) {
-    Write-SamFail (T -Ar "شجرة العمل غير نظيفة — ارفض التحديث. احفظ/التزم التغييرات أولاً." -En "Dirty working tree — refusing update. Commit or stash first.")
+    Write-SamFail ("Dirty working tree — refusing update. Commit or stash first.")
     Write-SamInfo ($dirty -join "`n")
     return 1
   }
-  Write-SamOk (T -Ar "شجرة العمل نظيفة" -En "Working tree clean")
+  Write-SamOk ("Working tree clean")
 
   $branchCap = Invoke-SamNativeCapture -FilePath "git" -ArgumentList @("rev-parse", "--abbrev-ref", "HEAD")
   $branch = ($branchCap.Text).Trim()
   Write-SamInfo "branch=$branch"
   if ($branch -eq "HEAD") {
-    Write-SamFail (T -Ar "detached HEAD — ارفض السحب" -En "detached HEAD — refusing pull")
+    Write-SamFail ("detached HEAD — refusing pull")
     return 1
   }
 
@@ -318,7 +314,7 @@ function Invoke-ActionBuildCheck {
 }
 
 function Invoke-ActionStartUi {
-  Write-SamStep (T -Ar "تشغيل Control Plane" -En "Start Control Plane")
+  Write-SamStep ("Start Control Plane")
   if (-not (Test-Path (Join-Path $ProjectRoot "node_modules"))) {
     $ec = ConvertTo-SamExitCode (Invoke-ActionInstallDeps)
     if ($ec -ne 0) { return $ec }
@@ -335,9 +331,9 @@ function Invoke-ActionStartUi {
 }
 
 function Invoke-ActionPullModels {
-  Write-SamStep (T -Ar "سحب النماذج المحلية من config/team.json" -En "Pull local models from config/team.json")
+  Write-SamStep ("Pull local models from config/team.json")
   if (-not (Test-SamCommand "ollama")) {
-    Write-SamFail (T -Ar "ollama غير موجود في PATH" -En "ollama not in PATH")
+    Write-SamFail ("ollama not in PATH")
     return 1
   }
   $models = Get-SamTeamLocalModels -ProjectRoot $ProjectRoot
@@ -369,9 +365,9 @@ function Invoke-ActionHelp {
   Write-SamStep "pnpm run help"
   if (-not (Test-SamCommand "pnpm")) { Write-SamFail "pnpm missing"; return 1 }
   $ec = Invoke-SamNative -FilePath "pnpm" -ArgumentList @("run", "help")
-  Write-SamInfo (T -Ar "مدير الأدوات: Tools\Sam-Harness-Manager.cmd" -En "Tools manager: Tools\Sam-Harness-Manager.cmd")
+  Write-SamInfo ("Tools manager: Tools\Sam-Harness-Manager.cmd")
   if ($ec -eq 0) {
-    Write-SamOk (T -Ar "المساعدة عُرضت" -En "Help displayed")
+    Write-SamOk ("Help displayed")
   } else {
     Write-SamFail "help exit $ec"
   }
@@ -379,7 +375,7 @@ function Invoke-ActionHelp {
 }
 
 function Invoke-ActionBackup {
-  Write-SamStep (T -Ar "نسخ احتياطي لقاعدة البيانات والإعدادات" -En "Backup DB + config + .env")
+  Write-SamStep ("Backup DB + config + .env")
   $outputHome = Ensure-SamOutputHomeDirs -ProjectRoot $ProjectRoot
   $stamp = Get-Date -Format "yyyyMMdd-HHmmss"
   $dest = $BackupPath
@@ -436,14 +432,14 @@ function Invoke-ActionBackup {
 }
 
 function Invoke-ActionRestore {
-  Write-SamStep (T -Ar "استعادة من أرشيف zip" -En "Restore from zip archive")
+  Write-SamStep ("Restore from zip archive")
   $zip = $RestorePath
   if (-not $zip) { $zip = $BackupPath }
   if (-not $zip -and -not $NonInteractive) {
-    $zip = Read-Host (T -Ar "  مسار ملف النسخة (.zip)" -En "  Backup zip path")
+    $zip = Read-Host ("  Backup zip path")
   }
   if (-not $zip -or -not (Test-Path -LiteralPath $zip)) {
-    Write-SamFail (T -Ar "ملف النسخة مفقود" -En "Backup zip missing")
+    Write-SamFail ("Backup zip missing")
     return 1
   }
   $outputHome = Ensure-SamOutputHomeDirs -ProjectRoot $ProjectRoot
@@ -477,7 +473,7 @@ function Invoke-ActionRestore {
     if (Test-SamCommand "pnpm") {
       [void](Invoke-SamNative -FilePath "pnpm" -ArgumentList @("run", "migrate"))
     }
-    Write-SamOk (T -Ar "الاستعادة اكتملت" -En "Restore complete")
+    Write-SamOk ("Restore complete")
     return 0
   } catch {
     Write-SamFail $_.Exception.Message
@@ -488,7 +484,7 @@ function Invoke-ActionRestore {
 }
 
 function Invoke-ActionRepair {
-  Write-SamStep (T -Ar "إصلاح التثبيت" -En "Repair installation")
+  Write-SamStep ("Repair installation")
   $ec = ConvertTo-SamExitCode (Invoke-ActionSetupPrereqs)
   if ($ec -ne 0) { return $ec }
   $ec = ConvertTo-SamExitCode (Invoke-ActionInstallDeps)
@@ -501,7 +497,7 @@ function Invoke-ActionRepair {
 }
 
 function Invoke-ActionUninstall {
-  Write-SamStep (T -Ar "إلغاء التثبيت عبر scripts/install/uninstall.ps1" -En "Uninstall via scripts/install/uninstall.ps1")
+  Write-SamStep ("Uninstall via scripts/install/uninstall.ps1")
   $u = Join-Path $ProjectRoot "scripts\install\uninstall.ps1"
   if (-not (Test-Path -LiteralPath $u)) { Write-SamFail "uninstall.ps1 missing"; return 1 }
   $psArgs = @("-NoProfile", "-ExecutionPolicy", "Bypass", "-File", $u)
@@ -514,7 +510,7 @@ function Invoke-ActionUninstall {
 }
 
 function Invoke-ActionViewLogs {
-  Write-SamStep (T -Ar "عرض أحدث السجلات" -En "View recent logs")
+  Write-SamStep ("View recent logs")
   $dirs = @()
   $outputHome = Get-SamOutputHome -ProjectRoot $ProjectRoot
   $dirs += (Join-Path $outputHome "logs")
@@ -527,8 +523,8 @@ function Invoke-ActionViewLogs {
     }
   }
   if ($found.Count -eq 0) {
-    Write-SamWarn (T -Ar "لا توجد ملفات سجل" -En "No log files found")
-    Write-SamOk (T -Ar "عرض السجلات اكتمل (فارغ)" -En "view-logs complete (empty)")
+    Write-SamWarn ("No log files found")
+    Write-SamOk ("view-logs complete (empty)")
     return 0
   }
   $top = $found | Select-Object -First 8
@@ -546,7 +542,7 @@ function Invoke-ActionViewLogs {
 }
 
 function Invoke-ActionCleanupLogs {
-  Write-SamStep (T -Ar "تنظيف السجلات الأقدم من 14 يوماً" -En "Cleanup logs older than 14 days")
+  Write-SamStep ("Cleanup logs older than 14 days")
   $cutoff = (Get-Date).AddDays(-14)
   $dirs = @()
   $outputHome = Get-SamOutputHome -ProjectRoot $ProjectRoot
@@ -567,7 +563,7 @@ function Invoke-ActionCleanupLogs {
 }
 
 function Invoke-ActionHealth {
-  Write-SamStep (T -Ar "فحص حي" -En "Live health")
+  Write-SamStep ("Live health")
   # Doctor result is authoritative; /healthz unreachable is WARN only (UI may be stopped).
   $ec = ConvertTo-SamExitCode (Invoke-ActionDoctor)
   $port = if ($env:CONTROL_PLANE_PORT) { $env:CONTROL_PLANE_PORT } else { "8787" }
@@ -580,10 +576,10 @@ function Invoke-ActionHealth {
     if ($resp -and $resp.StatusCode -ge 200 -and $resp.StatusCode -lt 300) {
       Write-SamOk "/healthz OK ($($resp.StatusCode))"
     } else {
-      Write-SamWarn (T -Ar "Control Plane غير متاح على $url (شغّل start-ui)" -En "Control Plane not reachable at $url (start-ui)")
+      Write-SamWarn ("Control Plane not reachable at $url (start-ui)")
     }
   } catch {
-    Write-SamWarn (T -Ar "Control Plane غير متاح على $url (شغّل start-ui)" -En "Control Plane not reachable at $url (start-ui)")
+    Write-SamWarn ("Control Plane not reachable at $url (start-ui)")
   } finally {
     $ErrorActionPreference = $prevEa
   }
@@ -599,24 +595,20 @@ if ($Action) {
 
 while ($true) {
   $items = Show-SamMenu
-  $prompt = T -Ar "  اختر رقمًا (أو L للغة)" -En "  Choose a number (or L for language)"
+  $prompt = "  Choose a number"
   $choice = Read-Host $prompt
   $id = Resolve-SamMenuChoice -Choice $choice -Items $items
-  if ($id -eq "__toggle_lang__") {
-    if ($script:SamHarnessLang -eq "ar") { Set-SamLang "en" } else { Set-SamLang "ar" }
-    continue
-  }
   if (-not $id) {
-    Write-Host (T -Ar "  اختيار غير صالح" -En "  Invalid choice") -ForegroundColor Yellow
+    Write-Host ("  Invalid choice") -ForegroundColor Yellow
     continue
   }
   if ($id -eq "exit") {
-    Write-Host (T -Ar "  إلى اللقاء." -En "  Goodbye.") -ForegroundColor Green
+    Write-Host ("  Goodbye.") -ForegroundColor Green
     exit 0
   }
   $exitCode = ConvertTo-SamExitCode (Invoke-SamAction -Id $id)
   if (-not $NonInteractive) {
     Write-Host ""
-    Read-Host (T -Ar "  اضغط Enter للعودة للقائمة" -En "  Press Enter to return to menu") | Out-Null
+    Read-Host ("  Press Enter to return to menu") | Out-Null
   }
 }
