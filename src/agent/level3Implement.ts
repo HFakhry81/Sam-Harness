@@ -315,8 +315,6 @@ export async function runImplementationCrew(
     } else {
       sys("Coder: empty plan — asking LLM for one focused write_file JSON");
       const coder = makeSpecialistModel({
-        cloudModel: "gemma4:cloud",
-        localModel: "qwen2.5-coder:1.5b",
         temperature: 0.1,
         numPredict: 700,
         role: "coder",

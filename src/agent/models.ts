@@ -20,6 +20,13 @@ import {
   type ModelRoute,
   type RouteInput,
 } from "../lib/cost/index.js";
+import {
+  getRoleConfig,
+  resolveRoleModels,
+  rolePrefersCloud,
+  loadTeamConfig,
+} from "../agency/teamConfig.js";
+import { AGENCY_ROLES } from "../agency/roles.js";
 
 export { CostCapExceededError };
 export type { ModelRoute };
@@ -103,10 +110,14 @@ function chatFromRoute(
 /** Local/fast model for CEO routing & short drafts */
 export function makeCeoModel() {
   const cfg = loadCostOptConfig();
+  const models = resolveRoleModels("ceo_router");
   const route = routeForTask({
     role: "ceo_router",
     forceCheap: true,
-    localModel: process.env.CEO_MODEL || cfg.localModel,
+    localModel: process.env.CEO_MODEL || models.local || cfg.localModel,
+    cloudModel: models.cloud,
+    freeModel: models.free || undefined,
+    prefersCloud: false,
   });
   return chatFromRoute(route, {
     temperature: 0.1,
@@ -116,37 +127,68 @@ export function makeCeoModel() {
 }
 
 /**
+ * Resolve local/cloud/free model names for a role from team.json + env,
+ * falling back to caller-provided overrides (preserve call-site defaults).
+ */
+export function modelsForRole(
+  role: string,
+  overrides?: { cloudModel?: string; localModel?: string; freeModel?: string }
+): { cloudModel: string; localModel: string; freeModel?: string } {
+  const fromTeam = resolveRoleModels(role);
+  return {
+    cloudModel: overrides?.cloudModel || fromTeam.cloud,
+    localModel: overrides?.localModel || fromTeam.local,
+    freeModel: overrides?.freeModel || fromTeam.free || undefined,
+  };
+}
+
+/**
  * Cloud (or local/free fallback) for heavy specialist agents.
  * Phase 5: difficulty routing + near-cap degradation to local/free.
+ * Phase 8: per-role models from team.json / SAM_ROLE_*_MODEL + hybrid roles map.
  * When hybrid mode is `cloud` and the daily cost cap is exhausted, throws CostCapExceededError.
  * When mode is `auto`, falls back to local once the cap is hit.
  */
 export function makeSpecialistModel(opts: {
-  cloudModel: string;
-  localModel: string;
+  cloudModel?: string;
+  localModel?: string;
+  freeModel?: string;
   temperature: number;
   numPredict?: number;
   /** Force local even if API key present (TLS / offline recovery) */
   forceLocal?: boolean;
-  /** Phase 5 routing hints */
+  /** Phase 5/8 routing hints */
   role?: string;
   prompt?: string;
   confidence?: number;
   verificationFailed?: boolean;
   explicitComplexity?: boolean;
+  prefersCloud?: boolean;
 }) {
   const cwd = process.cwd();
+  const role = opts.role || "strategist";
+  const resolved = modelsForRole(role, {
+    cloudModel: opts.cloudModel,
+    localModel: opts.localModel,
+    freeModel: opts.freeModel,
+  });
+  const roleCfg = getRoleConfig(role, cwd);
   const route = routeForTask({
     cwd,
-    role: opts.role,
+    role,
     prompt: opts.prompt,
     confidence: opts.confidence,
     verificationFailed: opts.verificationFailed,
     explicitComplexity: opts.explicitComplexity,
-    cloudModel: opts.cloudModel,
-    localModel: opts.localModel,
+    cloudModel: resolved.cloudModel,
+    localModel: resolved.localModel,
+    freeModel: resolved.freeModel,
     forceLocal: opts.forceLocal,
     forcePremium: Boolean(opts.explicitComplexity),
+    prefersCloud:
+      typeof opts.prefersCloud === "boolean"
+        ? opts.prefersCloud
+        : rolePrefersCloud(role, cwd),
   });
 
   if (route.cloud) {
@@ -165,8 +207,8 @@ export function makeSpecialistModel(opts: {
   }
 
   return chatFromRoute(route, {
-    temperature: opts.temperature,
-    numPredict: opts.numPredict ?? 1200,
+    temperature: opts.temperature ?? roleCfg?.temperature ?? 0.2,
+    numPredict: opts.numPredict ?? roleCfg?.numPredict ?? 1200,
     numCtx: 8192,
   });
 }
@@ -315,4 +357,50 @@ export function costStatus(cwd: string = process.cwd()) {
     routingEnabled: cfg.routingEnabled,
     cacheEnabled: cfg.cacheEnabled,
   };
+}
+
+export type EffectiveRoleDecision = {
+  role: string;
+  title?: string;
+  prefersCloud: boolean;
+  models: { local: string; cloud: string; free?: string | null };
+  route: ModelRoute;
+};
+
+/**
+ * Effective routing decision per role — for Control Plane API + doctor.
+ * Cap / near-cap / hybrid roles map / prefersCloud are all reflected.
+ */
+export function effectiveRoutingDecisions(
+  cwd: string = process.cwd(),
+  roleIds?: string[]
+): EffectiveRoleDecision[] {
+  let ids = roleIds;
+  if (!ids) {
+    try {
+      ids = loadTeamConfig(cwd).roles.map((r) => r.id);
+    } catch {
+      ids = AGENCY_ROLES.map((r) => r.id);
+    }
+  }
+  return ids.map((role) => {
+    const models = resolveRoleModels(role, cwd);
+    const cfg = getRoleConfig(role, cwd);
+    const route = routeForTask({
+      cwd,
+      role,
+      cloudModel: models.cloud,
+      localModel: models.local,
+      freeModel: models.free || undefined,
+      prefersCloud: rolePrefersCloud(role, cwd),
+      forceCheap: role === "ceo_router" || role === "operator" || role === "evidence",
+    });
+    return {
+      role,
+      title: cfg?.title,
+      prefersCloud: rolePrefersCloud(role, cwd),
+      models,
+      route,
+    };
+  });
 }

@@ -18,6 +18,11 @@ import {
 } from "../agent/models.js";
 import { taskConfig } from "../../task.js";
 import { AGENCY_ROLES } from "./roles.js";
+import {
+  resolveDownstreamPipeline,
+  resolveRoleModels,
+  type TeamRoleConfig,
+} from "./teamConfig.js";
 import { scanRepoEvidence } from "./evidence.js";
 import { MAX_LOOPS, runReviewGraph } from "./reviewGraph.js";
 import { syncDeliveryBoardFromBacklog } from "./delivery/sync.js";
@@ -30,6 +35,11 @@ import {
 import { learningContextBlock } from "../controlplane/projectMemory.js";
 import { withLanguageDirective } from "../lib/i18n/index.js";
 import type { AgencyRunResult, Engagement } from "./types.js";
+
+function labelForRole(roleId: string): string {
+  const m = resolveRoleModels(roleId);
+  return specialistLabel(m.cloud, m.local);
+}
 
 function clip(text: string, max = 6000): string {
   if (!text) return "";
@@ -194,38 +204,109 @@ export async function runAgencyArchitecture(task: string): Promise<AgencyRunResu
   let marketingCampaign = "(skipped — audit gate closed)";
   let finalReport = "";
 
-  const architect = makeSpecialistModel({
-    cloudModel: "gemma4:cloud",
-    localModel: "qwen2.5:1.5b",
-    temperature: 0.2,
-    numPredict: 1400,
-    role: "architect",
-  });
-  const helpAgent = makeSpecialistModel({
-    cloudModel: "gemma4:cloud",
-    localModel: "qwen2.5:1.5b",
-    temperature: 0.3,
-    numPredict: 1000,
-    role: "help",
-  });
-  const marketer = makeSpecialistModel({
-    cloudModel: "gemma4:cloud",
-    localModel: "qwen2.5:1.5b",
-    temperature: 0.7,
-    numPredict: 900,
-    role: "marketer",
-  });
+  /** Phase 8 — specialist factory from team.json (defaults match prior hardcodes). */
+  function specialist(role: string, temperature: number, numPredict: number) {
+    return makeSpecialistModel({ role, temperature, numPredict });
+  }
+
   const ceo = makeCeoModel();
-  const strategist = makeSpecialistModel({
-    cloudModel: "gemma4:cloud",
-    localModel: process.env.CEO_MODEL || "qwen2.5-coder:1.5b",
-    temperature: 0.15,
-    numPredict: 1200,
-    role: "strategist",
-  });
+  const strategist = specialist("strategist", 0.15, 1200);
+  const downstream = resolveDownstreamPipeline(process.cwd());
+  sys(
+    `Downstream pipeline: ${downstream.map((r) => r.id).join(" → ") || "(none enabled)"}`
+  );
+
+  async function runDownstreamStep(
+    role: TeamRoleConfig,
+    ctx: {
+      layeredBlueprint: string;
+      helpSystemSpec: string;
+      marketingCampaign: string;
+      finalReport: string;
+    }
+  ): Promise<typeof ctx> {
+    const model = makeSpecialistModel({
+      role: role.id,
+      temperature: role.temperature ?? 0.3,
+      numPredict: role.numPredict ?? 1000,
+    });
+    const outName = (role.outputs && role.outputs[0]) || `${role.id}-output.md`;
+
+    if (role.id === "architect") {
+      live(`Architect (${labelForRole("architect")})`, "Blueprint from APPROVED strategy + evidence...");
+      ctx.layeredBlueprint = await invoke(
+        model,
+        `N-tier production blueprint for the client project.
+Cite evidence paths when claiming existing code; mark gaps honestly.
+APPROVED strategy:
+${clip(review.strategy, 8000)}
+EVIDENCE:
+${clip(evidence.summaryMarkdown, 4000)}
+BRIEF:
+${clip(brief, 4000)}`,
+        task
+      );
+      fs.writeFileSync("execution-plan.md", ctx.layeredBlueprint, "utf-8");
+      ok("Architect", "execution-plan.md");
+      return ctx;
+    }
+    if (role.id === "help") {
+      live(`Help (${labelForRole("help")})`, "Help spec...");
+      ctx.helpSystemSpec = await invoke(
+        model,
+        `In-app help for multi-purpose ops desk + customer (not clinic-only).\nArchitecture:\n${clip(ctx.layeredBlueprint, 7000)}`
+      );
+      fs.writeFileSync("help-system-spec.md", ctx.helpSystemSpec, "utf-8");
+      return ctx;
+    }
+    if (role.id === "marketer") {
+      live(`Marketer (${labelForRole("marketer")})`, "GTM...");
+      ctx.marketingCampaign = await invoke(
+        model,
+        `Honest GTM + short video script. No over-claim.\n${clip(ctx.layeredBlueprint, 5000)}\n${clip(task, 2000)}`
+      );
+      fs.writeFileSync("marketing-campaign.md", ctx.marketingCampaign, "utf-8");
+      return ctx;
+    }
+    if (role.id === "verifier") {
+      live("CEO Verifier", "Verify deliverables...");
+      ctx.finalReport = await invoke(
+        ceo,
+        `Verify agency pack vs task. Audit gate=APPROVED.
+Task: ${clip(task, 2500)}
+Strategy: ${clip(review.strategy, 1000)}
+Audit: ${clip(review.auditReport, 600)}
+Blueprint: ${clip(ctx.layeredBlueprint, 1000)}
+Reply [VERIFIED] or [GAPS] + checklist.`
+      );
+      fs.writeFileSync("final-report.md", ctx.finalReport, "utf-8");
+      return ctx;
+    }
+
+    // Custom specialist step
+    const prompt =
+      role.prompt ||
+      `You are ${role.title}. ${role.mission || ""}\nProduce the deliverable for this engagement.`;
+    live(`${role.title} (${labelForRole(role.id)})`, `Custom specialist → ${outName}`);
+    const text = await invoke(
+      model,
+      `${prompt}
+
+APPROVED strategy:
+${clip(review.strategy, 5000)}
+Architecture (if any):
+${clip(ctx.layeredBlueprint, 4000)}
+BRIEF:
+${clip(brief, 3000)}`,
+      task
+    );
+    fs.writeFileSync(outName, text, "utf-8");
+    ok(role.title, outName);
+    return ctx;
+  }
 
   if (!review.auditPassed) {
-    warn("Gate", "Auditor never APPROVED — Architect/Help/Marketer SKIPPED");
+    warn("Gate", "Auditor never APPROVED — downstream specialists SKIPPED");
     finalReport = [
       `# Final report — AUDIT GATE FAILED`,
       `[FAILED_AUDIT_GATE]`,
@@ -240,55 +321,28 @@ export async function runAgencyArchitecture(task: string): Promise<AgencyRunResu
       "utf-8"
     );
   } else {
-    live(
-      `Architect (${specialistLabel("gemma4:cloud", "qwen2.5:1.5b")})`,
-      "Blueprint from APPROVED strategy + evidence..."
-    );
-    layeredBlueprint = await invoke(
-      architect,
-      `N-tier production blueprint for the client project.
-Cite evidence paths when claiming existing code; mark gaps honestly.
-APPROVED strategy:
-${clip(review.strategy, 8000)}
-EVIDENCE:
-${clip(evidence.summaryMarkdown, 4000)}
-BRIEF:
-${clip(brief, 4000)}`,
-      task
-    );
-    fs.writeFileSync("execution-plan.md", layeredBlueprint, "utf-8");
-    ok("Architect", "execution-plan.md");
+    let ctx = {
+      layeredBlueprint,
+      helpSystemSpec,
+      marketingCampaign,
+      finalReport,
+    };
+    for (const step of downstream) {
+      ctx = await runDownstreamStep(step, ctx);
+    }
+    layeredBlueprint = ctx.layeredBlueprint;
+    helpSystemSpec = ctx.helpSystemSpec;
+    marketingCampaign = ctx.marketingCampaign;
+    finalReport = ctx.finalReport;
 
-    live(`Help (${specialistLabel("gemma4:cloud", "qwen2.5:1.5b")})`, "Help spec...");
-    helpSystemSpec = await invoke(
-      helpAgent,
-      `In-app help for multi-purpose ops desk + customer (not clinic-only).\nArchitecture:\n${clip(layeredBlueprint, 7000)}`
-    );
-    fs.writeFileSync("help-system-spec.md", helpSystemSpec, "utf-8");
-
-    live(`Marketer (${specialistLabel("gemma4:cloud", "qwen2.5:1.5b")})`, "GTM...");
-    marketingCampaign = await invoke(
-      marketer,
-      `Honest GTM + short video script. No over-claim.\n${clip(layeredBlueprint, 5000)}\n${clip(task, 2000)}`
-    );
-    fs.writeFileSync("marketing-campaign.md", marketingCampaign, "utf-8");
-
-    live("CEO Verifier", "Verify deliverables...");
-    finalReport = await invoke(
-      ceo,
-      `Verify agency pack vs task. Audit gate=APPROVED.
-Task: ${clip(task, 2500)}
-Strategy: ${clip(review.strategy, 1000)}
-Audit: ${clip(review.auditReport, 600)}
-Blueprint: ${clip(layeredBlueprint, 1000)}
-Reply [VERIFIED] or [GAPS] + checklist.`
-    );
-    fs.writeFileSync("final-report.md", finalReport, "utf-8");
-
-    live("Architect", "Gap matrix + backlog...");
-    const gapMatrix = await invoke(
-      architect,
-      `CODE_VS_PLAN_GAP_MATRIX.md
+    // Gap matrix + backlog when architect ran (still part of delivery OS after GO gate)
+    const architectEnabled = downstream.some((r) => r.id === "architect");
+    if (architectEnabled) {
+      const architect = specialist("architect", 0.2, 1400);
+      live("Architect", "Gap matrix + backlog...");
+      const gapMatrix = await invoke(
+        architect,
+        `CODE_VS_PLAN_GAP_MATRIX.md
 Table: Requirement | Evidence path (from pack or "not found") | Gap | Severity | Ticket
 ONLY cite paths from EVIDENCE or mark not found. Do not invent Nest/Prisma paths.
 EVIDENCE:
@@ -297,36 +351,47 @@ Strategy:
 ${clip(review.strategy, 3000)}
 Blueprint:
 ${clip(layeredBlueprint, 3000)}`
-    );
-    fs.writeFileSync("CODE_VS_PLAN_GAP_MATRIX.md", gapMatrix, "utf-8");
-    const backlog = await invoke(
-      architect,
-      `IMPLEMENTATION_BACKLOG.md P0 then P1 from:\n${clip(gapMatrix, 6000)}\nReal paths under ${engagement.targetRepo}`
-    );
-    fs.writeFileSync("IMPLEMENTATION_BACKLOG.md", backlog, "utf-8");
-    const nextSprint = await invoke(
-      strategist,
-      `NEXT_SPRINT.md short from:\n${clip(gapMatrix, 2500)}`
-    );
-    fs.writeFileSync("NEXT_SPRINT.md", nextSprint, "utf-8");
-    const ticket = await invoke(
-      architect,
-      `TICKET_P0_STARTER.md for first P0:\n${clip(backlog, 5000)}`
-    );
-    fs.writeFileSync("TICKET_P0_STARTER.md", ticket, "utf-8");
+      );
+      fs.writeFileSync("CODE_VS_PLAN_GAP_MATRIX.md", gapMatrix, "utf-8");
+      const backlog = await invoke(
+        architect,
+        `IMPLEMENTATION_BACKLOG.md P0 then P1 from:\n${clip(gapMatrix, 6000)}\nReal paths under ${engagement.targetRepo}`
+      );
+      fs.writeFileSync("IMPLEMENTATION_BACKLOG.md", backlog, "utf-8");
+      const nextSprint = await invoke(
+        strategist,
+        `NEXT_SPRINT.md short from:\n${clip(gapMatrix, 2500)}`
+      );
+      fs.writeFileSync("NEXT_SPRINT.md", nextSprint, "utf-8");
+      const ticket = await invoke(
+        architect,
+        `TICKET_P0_STARTER.md for first P0:\n${clip(backlog, 5000)}`
+      );
+      fs.writeFileSync("TICKET_P0_STARTER.md", ticket, "utf-8");
+      ok("Architect", "gap matrix + backlog saved");
+
+      syncDeliveryBoardFromBacklog({
+        engagementId: engagement.id,
+        targetRepo: engagement.targetRepo,
+      });
+      writeGoNoGoTemplate();
+    }
+
+    if (!finalReport) {
+      finalReport = [
+        `# Final report`,
+        `Audit gate OPEN. Downstream steps: ${downstream.map((r) => r.id).join(", ")}`,
+        ``,
+        clip(layeredBlueprint, 2000),
+      ].join("\n");
+      fs.writeFileSync("final-report.md", finalReport, "utf-8");
+    }
+
     fs.writeFileSync(
       "execution-result.md",
-      `# Agency Result\n- engine: LangGraph\n- auditPassed: true\n- goalPassed: ${review.goalPassed}\n- goalFidelityScore: ${review.goalFidelityScore.toFixed(3)}\n- gate: OPEN\n- loops: ${review.loop}\n`,
+      `# Agency Result\n- engine: LangGraph\n- auditPassed: true\n- goalPassed: ${review.goalPassed}\n- goalFidelityScore: ${review.goalFidelityScore.toFixed(3)}\n- gate: OPEN\n- loops: ${review.loop}\n- downstream: ${downstream.map((r) => r.id).join(",")}\n`,
       "utf-8"
     );
-    ok("Architect", "gap matrix + backlog saved");
-
-    // P3 Delivery OS — living board from backlog
-    syncDeliveryBoardFromBacklog({
-      engagementId: engagement.id,
-      targetRepo: engagement.targetRepo,
-    });
-    writeGoNoGoTemplate();
   }
 
   let packDir: string | undefined;

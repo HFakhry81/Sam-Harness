@@ -50,14 +50,28 @@ export function loadHybridProfile(cwd: string): HybridProfile {
 
 export function saveHybridProfile(
   cwd: string,
-  patch: Partial<{ mode: HybridMode; costCapUsd: number; notes: string }>
+  patch: Partial<{
+    mode: HybridMode;
+    costCapUsd: number;
+    notes: string;
+    roles: Partial<Record<string, HybridMode>>;
+  }>
 ): HybridProfile {
   const cur = loadHybridProfile(cwd);
+  let roles = cur.roles ? { ...cur.roles } : { ...DEFAULT.roles };
+  if (patch.roles) {
+    roles = { ...roles };
+    for (const [k, v] of Object.entries(patch.roles)) {
+      if (v === "local" || v === "cloud" || v === "auto") roles[k] = v;
+      else if (v == null) delete roles[k];
+    }
+  }
   const next: HybridProfile = {
     ...cur,
     mode: patch.mode || cur.mode,
     costCapUsd: Math.max(0, Number(patch.costCapUsd ?? cur.costCapUsd) || 0),
     notes: patch.notes ?? cur.notes,
+    roles,
     updatedAt: new Date().toISOString(),
   };
   if (!["local", "cloud", "auto"].includes(next.mode)) {

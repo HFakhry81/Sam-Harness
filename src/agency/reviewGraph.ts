@@ -87,10 +87,11 @@ async function invoke(
 async function invokeWithCloudFallback(
   primary: ReturnType<typeof makeSpecialistModel>,
   localOpts: {
-    cloudModel: string;
-    localModel: string;
+    cloudModel?: string;
+    localModel?: string;
     temperature: number;
     numPredict?: number;
+    role?: string;
   },
   prompt: string
 ): Promise<string> {
@@ -126,16 +127,13 @@ export const ReviewState = Annotation.Root({
 export type ReviewStateType = typeof ReviewState.State;
 
 function buildGraph() {
+  // Phase 8: models from team.json / SAM_ROLE_* env (defaults preserve prior hardcodes)
   const strategistOpts = {
-    cloudModel: "gemma4:cloud",
-    localModel: process.env.CEO_MODEL || "qwen2.5-coder:1.5b",
     temperature: 0.15,
     numPredict: 1600,
     role: "strategist",
   };
   const auditorOpts = {
-    cloudModel: "gemma4:cloud",
-    localModel: "gemma3:1b",
     temperature: 0,
     numPredict: 1200,
     role: "auditor",
