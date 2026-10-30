@@ -102,35 +102,38 @@ function Invoke-SamAction {
   $code = 0
 
   try {
+    $raw = $null
     switch ($Id) {
-      "install"        { $code = Invoke-ActionInstall }
-      "setup-prereqs"  { $code = Invoke-ActionSetupPrereqs }
-      "install-deps"   { $code = Invoke-ActionInstallDeps }
-      "update"         { $code = Invoke-ActionUpdate }
-      "build-check"    { $code = Invoke-ActionBuildCheck }
-      "start-ui"       { $code = Invoke-ActionStartUi }
-      "pull-models"    { $code = Invoke-ActionPullModels }
-      "doctor"         { $code = Invoke-ActionDoctor }
-      "help"           { $code = Invoke-ActionHelp }
-      "backup"         { $code = Invoke-ActionBackup }
-      "restore"        { $code = Invoke-ActionRestore }
-      "repair"         { $code = Invoke-ActionRepair }
-      "uninstall"      { $code = Invoke-ActionUninstall }
-      "view-logs"      { $code = Invoke-ActionViewLogs }
-      "cleanup-logs"   { $code = Invoke-ActionCleanupLogs }
-      "health"         { $code = Invoke-ActionHealth }
+      "install"        { $raw = Invoke-ActionInstall }
+      "setup-prereqs"  { $raw = Invoke-ActionSetupPrereqs }
+      "install-deps"   { $raw = Invoke-ActionInstallDeps }
+      "update"         { $raw = Invoke-ActionUpdate }
+      "build-check"    { $raw = Invoke-ActionBuildCheck }
+      "start-ui"       { $raw = Invoke-ActionStartUi }
+      "pull-models"    { $raw = Invoke-ActionPullModels }
+      "doctor"         { $raw = Invoke-ActionDoctor }
+      "help"           { $raw = Invoke-ActionHelp }
+      "backup"         { $raw = Invoke-ActionBackup }
+      "restore"        { $raw = Invoke-ActionRestore }
+      "repair"         { $raw = Invoke-ActionRepair }
+      "uninstall"      { $raw = Invoke-ActionUninstall }
+      "view-logs"      { $raw = Invoke-ActionViewLogs }
+      "cleanup-logs"   { $raw = Invoke-ActionCleanupLogs }
+      "health"         { $raw = Invoke-ActionHealth }
       default {
         Write-SamFail (T -Ar "إجراء غير معروف: $Id" -En "Unknown action: $Id")
-        $code = 2
+        $raw = 2
       }
     }
+    # Belt-and-suspenders: never let Object[] reach Write-SamSummary -ExitCode
+    $code = ConvertTo-SamExitCode $raw
   } catch {
     Write-SamFail $_.Exception.Message
     $code = 1
   }
 
   if ($code -ne 0 -and $script:SamHarnessFail -eq 0) {
-    Write-SamFail (T -Ar "انتهى بفشل (exit $code)" -En "Finished with failure (exit $code)")
+    Write-SamFail (T -Ar ("انتهى بفشل (exit {0})" -f $code) -En ("Finished with failure (exit {0})" -f $code))
   }
   Write-SamSummary -ExitCode $code
   return $code
@@ -155,8 +158,8 @@ function Invoke-ActionInstall {
     $target = Join-Path $parent "Sam-Harness"
     if (-not (Test-Path -LiteralPath $target)) {
       Write-SamInfo "git clone $CloneUrl → $target"
-      & git clone $CloneUrl $target
-      if ($LASTEXITCODE -ne 0) { Write-SamFail "git clone failed"; return $LASTEXITCODE }
+      $cloneEc = Invoke-SamNative -FilePath "git" -ArgumentList @("clone", $CloneUrl, $target)
+      if ($cloneEc -ne 0) { Write-SamFail "git clone failed"; return $cloneEc }
     }
     $script:ProjectRoot = $target
     $ProjectRoot = $target
@@ -168,13 +171,12 @@ function Invoke-ActionInstall {
     Write-SamFail "scripts/install/install.ps1 missing"
     return 1
   }
-  $installerArgs = @()
+  $installerArgs = @("-NoProfile", "-ExecutionPolicy", "Bypass", "-File", $installer)
   if ($NonInteractive) { $installerArgs += "-NonInteractive" }
-  Write-SamInfo "→ $installer $($installerArgs -join ' ')"
+  Write-SamInfo "→ $installer"
   $ps51 = Join-Path $env:SystemRoot "System32\WindowsPowerShell\v1.0\powershell.exe"
   if (-not (Test-Path -LiteralPath $ps51)) { $ps51 = "powershell" }
-  & $ps51 -NoProfile -ExecutionPolicy Bypass -File $installer @installerArgs
-  $ec = [int]$LASTEXITCODE
+  $ec = Invoke-SamNative -FilePath $ps51 -ArgumentList $installerArgs
   if ($ec -eq 0) { Write-SamOk (T -Ar "التثبيت اكتمل" -En "Install finished") }
   else { Write-SamFail "install.ps1 exit $ec" }
   return $ec
@@ -186,31 +188,43 @@ function Invoke-ActionSetupPrereqs {
   if (-not (Test-SamCommand "git")) {
     Write-SamWarn "Git missing — trying winget"
     if (Test-SamCommand "winget") {
-      & winget install -e --id Git.Git --accept-package-agreements --accept-source-agreements
+      [void](Invoke-SamNative -FilePath "winget" -ArgumentList @("install", "-e", "--id", "Git.Git", "--accept-package-agreements", "--accept-source-agreements"))
       $env:Path = [System.Environment]::GetEnvironmentVariable("Path", "Machine") + ";" +
                   [System.Environment]::GetEnvironmentVariable("Path", "User")
     }
   }
-  if (Test-SamCommand "git") { Write-SamOk (& git --version) } else { Write-SamFail "Git not in PATH" }
+  if (Test-SamCommand "git") {
+    $gv = Invoke-SamNativeCapture -FilePath "git" -ArgumentList @("--version")
+    Write-SamOk $gv.Text
+  } else { Write-SamFail "Git not in PATH" }
 
   if (-not (Test-SamCommand "node")) {
     Write-SamWarn "Node missing — trying winget OpenJS.NodeJS.LTS"
     if (Test-SamCommand "winget") {
-      & winget install -e --id OpenJS.NodeJS.LTS --accept-package-agreements --accept-source-agreements
+      [void](Invoke-SamNative -FilePath "winget" -ArgumentList @("install", "-e", "--id", "OpenJS.NodeJS.LTS", "--accept-package-agreements", "--accept-source-agreements"))
       $env:Path = [System.Environment]::GetEnvironmentVariable("Path", "Machine") + ";" +
                   [System.Environment]::GetEnvironmentVariable("Path", "User")
     }
   }
-  if (Test-SamCommand "node") { Write-SamOk ("Node " + (& node -v)) } else { Write-SamFail "Node >= 20 required"; return 1 }
+  if (Test-SamCommand "node") {
+    $nv = Invoke-SamNativeCapture -FilePath "node" -ArgumentList @("-v")
+    Write-SamOk ("Node " + $nv.Text.Trim())
+  } else { Write-SamFail "Node >= 20 required"; return 1 }
 
   $pnpmVer = Get-SamPinnedPnpm -ProjectRoot $ProjectRoot
   Write-SamStep "Corepack / pnpm@$pnpmVer"
-  try { & corepack enable 2>$null } catch { }
-  try { & corepack prepare "pnpm@$pnpmVer" --activate } catch {
-    Write-SamWarn "corepack prepare failed — npm i -g pnpm"
-    & npm install -g pnpm
+  if (Test-SamCommand "corepack") {
+    [void](Invoke-SamNative -FilePath "corepack" -ArgumentList @("enable") -Quiet)
+    $prep = Invoke-SamNative -FilePath "corepack" -ArgumentList @("prepare", "pnpm@$pnpmVer", "--activate")
+    if ($prep -ne 0) {
+      Write-SamWarn "corepack prepare failed — npm i -g pnpm"
+      [void](Invoke-SamNative -FilePath "npm" -ArgumentList @("install", "-g", "pnpm"))
+    }
   }
-  if (Test-SamCommand "pnpm") { Write-SamOk ("pnpm " + (& pnpm -v)) } else { Write-SamFail "pnpm missing"; return 1 }
+  if (Test-SamCommand "pnpm") {
+    $pv = Invoke-SamNativeCapture -FilePath "pnpm" -ArgumentList @("-v")
+    Write-SamOk ("pnpm " + $pv.Text.Trim())
+  } else { Write-SamFail "pnpm missing"; return 1 }
 
   if (Test-SamCommand "ollama") {
     Write-SamOk "Ollama CLI found"
@@ -239,8 +253,7 @@ function Invoke-ActionInstallDeps {
     Write-SamFail (T -Ar "pnpm مفقود — شغّل setup-prereqs أولاً" -En "pnpm missing — run setup-prereqs first")
     return 1
   }
-  & pnpm install
-  $ec = [int]$LASTEXITCODE
+  $ec = Invoke-SamNative -FilePath "pnpm" -ArgumentList @("install")
   if ($ec -eq 0) { Write-SamOk "Dependencies installed" } else { Write-SamFail "pnpm install failed" }
   return $ec
 }
@@ -249,15 +262,17 @@ function Invoke-ActionUpdate {
   Write-SamStep (T -Ar "تحديث آمن للفرع الحالي" -En "Safe update of current branch")
   if (-not (Test-SamCommand "git")) { Write-SamFail "git missing"; return 1 }
 
-  $dirty = & git status --porcelain
-  if ($dirty) {
+  $dirtyCap = Invoke-SamNativeCapture -FilePath "git" -ArgumentList @("status", "--porcelain")
+  $dirty = @($dirtyCap.Lines | Where-Object { $_.Trim() -ne "" })
+  if ($dirty.Count -gt 0) {
     Write-SamFail (T -Ar "شجرة العمل غير نظيفة — ارفض التحديث. احفظ/التزم التغييرات أولاً." -En "Dirty working tree — refusing update. Commit or stash first.")
     Write-SamInfo ($dirty -join "`n")
     return 1
   }
   Write-SamOk (T -Ar "شجرة العمل نظيفة" -En "Working tree clean")
 
-  $branch = (& git rev-parse --abbrev-ref HEAD).Trim()
+  $branchCap = Invoke-SamNativeCapture -FilePath "git" -ArgumentList @("rev-parse", "--abbrev-ref", "HEAD")
+  $branch = ($branchCap.Text).Trim()
   Write-SamInfo "branch=$branch"
   if ($branch -eq "HEAD") {
     Write-SamFail (T -Ar "detached HEAD — ارفض السحب" -En "detached HEAD — refusing pull")
@@ -265,47 +280,47 @@ function Invoke-ActionUpdate {
   }
 
   Write-SamStep "git pull --ff-only origin $branch"
-  & git pull --ff-only origin $branch
-  if ($LASTEXITCODE -ne 0) {
+  $pullEc = Invoke-SamNative -FilePath "git" -ArgumentList @("pull", "--ff-only", "origin", $branch)
+  if ($pullEc -ne 0) {
     Write-SamWarn "ff-only failed — trying git pull --ff-only"
-    & git pull --ff-only
-    if ($LASTEXITCODE -ne 0) {
+    $pullEc = Invoke-SamNative -FilePath "git" -ArgumentList @("pull", "--ff-only")
+    if ($pullEc -ne 0) {
       Write-SamFail "git pull failed"
-      return $LASTEXITCODE
+      return $pullEc
     }
   }
   Write-SamOk "git pull OK"
 
-  $ec = Invoke-ActionInstallDeps
+  $ec = ConvertTo-SamExitCode (Invoke-ActionInstallDeps)
   if ($ec -ne 0) { return $ec }
 
   Write-SamStep "pnpm run migrate"
-  & pnpm run migrate
-  if ($LASTEXITCODE -ne 0) { Write-SamFail "migrate failed"; return $LASTEXITCODE }
+  $mig = Invoke-SamNative -FilePath "pnpm" -ArgumentList @("run", "migrate")
+  if ($mig -ne 0) { Write-SamFail "migrate failed"; return $mig }
   Write-SamOk "migrate OK"
 
-  return (Invoke-ActionDoctor)
+  return (ConvertTo-SamExitCode (Invoke-ActionDoctor))
 }
 
 function Invoke-ActionBuildCheck {
   if (-not (Test-SamCommand "pnpm")) { Write-SamFail "pnpm missing"; return 1 }
   Write-SamStep "pnpm run typecheck"
-  & pnpm run typecheck
-  if ($LASTEXITCODE -ne 0) { Write-SamFail "typecheck failed"; return $LASTEXITCODE }
+  $tc = Invoke-SamNative -FilePath "pnpm" -ArgumentList @("run", "typecheck")
+  if ($tc -ne 0) { Write-SamFail "typecheck failed"; return $tc }
   Write-SamOk "typecheck"
 
   Write-SamStep "pnpm test"
-  & pnpm test
-  if ($LASTEXITCODE -ne 0) { Write-SamFail "tests failed"; return $LASTEXITCODE }
+  $ts = Invoke-SamNative -FilePath "pnpm" -ArgumentList @("test")
+  if ($ts -ne 0) { Write-SamFail "tests failed"; return $ts }
   Write-SamOk "tests"
 
-  return (Invoke-ActionDoctor)
+  return (ConvertTo-SamExitCode (Invoke-ActionDoctor))
 }
 
 function Invoke-ActionStartUi {
   Write-SamStep (T -Ar "تشغيل Control Plane" -En "Start Control Plane")
   if (-not (Test-Path (Join-Path $ProjectRoot "node_modules"))) {
-    $ec = Invoke-ActionInstallDeps
+    $ec = ConvertTo-SamExitCode (Invoke-ActionInstallDeps)
     if ($ec -ne 0) { return $ec }
   }
   Ensure-SamEnvFile -ProjectRoot $ProjectRoot
@@ -316,8 +331,7 @@ function Invoke-ActionStartUi {
   }
   if (-not $env:CONTROL_PLANE_PORT) { $env:CONTROL_PLANE_PORT = "8787" }
   Write-SamInfo "http://127.0.0.1:$($env:CONTROL_PLANE_PORT)/"
-  & pnpm run ui
-  return [int]$LASTEXITCODE
+  return (Invoke-SamNative -FilePath "pnpm" -ArgumentList @("run", "ui"))
 }
 
 function Invoke-ActionPullModels {
@@ -331,8 +345,8 @@ function Invoke-ActionPullModels {
   $failed = 0
   foreach ($m in $models) {
     Write-SamInfo "ollama pull $m"
-    & ollama pull $m
-    if ($LASTEXITCODE -ne 0) {
+    $pec = Invoke-SamNative -FilePath "ollama" -ArgumentList @("pull", $m)
+    if ($pec -ne 0) {
       Write-SamWarn "pull failed: $m"
       $failed++
     } else {
@@ -346,8 +360,7 @@ function Invoke-ActionPullModels {
 function Invoke-ActionDoctor {
   Write-SamStep "pnpm run doctor"
   if (-not (Test-SamCommand "pnpm")) { Write-SamFail "pnpm missing"; return 1 }
-  & pnpm run doctor
-  $ec = [int]$LASTEXITCODE
+  $ec = Invoke-SamNative -FilePath "pnpm" -ArgumentList @("run", "doctor")
   if ($ec -eq 0) { Write-SamOk "doctor PASS" } else { Write-SamFail "doctor reported issues" }
   return $ec
 }
@@ -355,9 +368,9 @@ function Invoke-ActionDoctor {
 function Invoke-ActionHelp {
   Write-SamStep "pnpm run help"
   if (-not (Test-SamCommand "pnpm")) { Write-SamFail "pnpm missing"; return 1 }
-  & pnpm run help
+  $ec = Invoke-SamNative -FilePath "pnpm" -ArgumentList @("run", "help")
   Write-SamInfo (T -Ar "مدير الأدوات: Tools\Sam-Harness-Manager.cmd" -En "Tools manager: Tools\Sam-Harness-Manager.cmd")
-  return [int]$LASTEXITCODE
+  return $ec
 }
 
 function Invoke-ActionBackup {
@@ -456,7 +469,9 @@ function Invoke-ActionRestore {
       Write-SamOk "Restored state/ DB files"
     }
     Write-SamStep "pnpm run migrate"
-    if (Test-SamCommand "pnpm") { & pnpm run migrate }
+    if (Test-SamCommand "pnpm") {
+      [void](Invoke-SamNative -FilePath "pnpm" -ArgumentList @("run", "migrate"))
+    }
     Write-SamOk (T -Ar "الاستعادة اكتملت" -En "Restore complete")
     return 0
   } catch {
@@ -469,27 +484,26 @@ function Invoke-ActionRestore {
 
 function Invoke-ActionRepair {
   Write-SamStep (T -Ar "إصلاح التثبيت" -En "Repair installation")
-  $ec = Invoke-ActionSetupPrereqs
+  $ec = ConvertTo-SamExitCode (Invoke-ActionSetupPrereqs)
   if ($ec -ne 0) { return $ec }
-  $ec = Invoke-ActionInstallDeps
+  $ec = ConvertTo-SamExitCode (Invoke-ActionInstallDeps)
   if ($ec -ne 0) { return $ec }
   Write-SamStep "pnpm run migrate"
-  & pnpm run migrate
-  if ($LASTEXITCODE -ne 0) { Write-SamFail "migrate failed"; return $LASTEXITCODE }
+  $mig = Invoke-SamNative -FilePath "pnpm" -ArgumentList @("run", "migrate")
+  if ($mig -ne 0) { Write-SamFail "migrate failed"; return $mig }
   Write-SamOk "migrate"
-  return (Invoke-ActionDoctor)
+  return (ConvertTo-SamExitCode (Invoke-ActionDoctor))
 }
 
 function Invoke-ActionUninstall {
   Write-SamStep (T -Ar "إلغاء التثبيت عبر scripts/install/uninstall.ps1" -En "Uninstall via scripts/install/uninstall.ps1")
   $u = Join-Path $ProjectRoot "scripts\install\uninstall.ps1"
   if (-not (Test-Path -LiteralPath $u)) { Write-SamFail "uninstall.ps1 missing"; return 1 }
-  $uninstallArgs = @()
-  if ($NonInteractive) { $uninstallArgs += "-NonInteractive" }
+  $psArgs = @("-NoProfile", "-ExecutionPolicy", "Bypass", "-File", $u)
+  if ($NonInteractive) { $psArgs += "-NonInteractive" }
   $ps51 = Join-Path $env:SystemRoot "System32\WindowsPowerShell\v1.0\powershell.exe"
   if (-not (Test-Path -LiteralPath $ps51)) { $ps51 = "powershell" }
-  & $ps51 -NoProfile -ExecutionPolicy Bypass -File $u @uninstallArgs
-  $ec = [int]$LASTEXITCODE
+  $ec = Invoke-SamNative -FilePath $ps51 -ArgumentList $psArgs
   if ($ec -eq 0) { Write-SamOk "uninstall finished" } else { Write-SamFail "uninstall exit $ec" }
   return $ec
 }
@@ -548,19 +562,24 @@ function Invoke-ActionCleanupLogs {
 
 function Invoke-ActionHealth {
   Write-SamStep (T -Ar "فحص حي" -En "Live health")
-  $ec = Invoke-ActionDoctor
+  # Doctor result is authoritative; /healthz unreachable is WARN only (UI may be stopped).
+  $ec = ConvertTo-SamExitCode (Invoke-ActionDoctor)
   $port = if ($env:CONTROL_PLANE_PORT) { $env:CONTROL_PLANE_PORT } else { "8787" }
   $url = "http://127.0.0.1:$port/healthz"
   Write-SamInfo "GET $url"
+  $prevEa = $ErrorActionPreference
+  $ErrorActionPreference = "Continue"
   try {
-    $resp = Invoke-WebRequest -Uri $url -UseBasicParsing -TimeoutSec 3 -ErrorAction Stop
-    if ($resp.StatusCode -ge 200 -and $resp.StatusCode -lt 300) {
+    $resp = Invoke-WebRequest -Uri $url -UseBasicParsing -TimeoutSec 3 -ErrorAction SilentlyContinue
+    if ($resp -and $resp.StatusCode -ge 200 -and $resp.StatusCode -lt 300) {
       Write-SamOk "/healthz OK ($($resp.StatusCode))"
     } else {
-      Write-SamWarn "/healthz status $($resp.StatusCode)"
+      Write-SamWarn (T -Ar "Control Plane غير متاح على $url (شغّل start-ui)" -En "Control Plane not reachable at $url (start-ui)")
     }
   } catch {
     Write-SamWarn (T -Ar "Control Plane غير متاح على $url (شغّل start-ui)" -En "Control Plane not reachable at $url (start-ui)")
+  } finally {
+    $ErrorActionPreference = $prevEa
   }
   return $ec
 }
@@ -568,7 +587,7 @@ function Invoke-ActionHealth {
 # —— entry ——
 $exitCode = 0
 if ($Action) {
-  $exitCode = Invoke-SamAction -Id $Action.Trim().ToLowerInvariant()
+  $exitCode = ConvertTo-SamExitCode (Invoke-SamAction -Id $Action.Trim().ToLowerInvariant())
   exit $exitCode
 }
 
@@ -589,7 +608,7 @@ while ($true) {
     Write-Host (T -Ar "  إلى اللقاء." -En "  Goodbye.") -ForegroundColor Green
     exit 0
   }
-  $exitCode = Invoke-SamAction -Id $id
+  $exitCode = ConvertTo-SamExitCode (Invoke-SamAction -Id $id)
   if (-not $NonInteractive) {
     Write-Host ""
     Read-Host (T -Ar "  اضغط Enter للعودة للقائمة" -En "  Press Enter to return to menu") | Out-Null

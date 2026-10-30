@@ -37,6 +37,8 @@ bash Tools/sam-harness-manager.sh --action health
 | تحتاج لقطة | `backup` / `restore` (قاعدة البيانات + config + `.env`) |
 | `ParserError` في PowerShell 5.1 | ملفات `.ps1` يجب أن تكون UTF-8 **مع BOM** (المستودع يحفظ BOM). لا تعِد الحفظ كـ UTF-8 بدون BOM. استخدم `Tools\Sam-Harness-Manager.cmd` |
 | `Cannot overwrite variable HOME` / `VariableNotWritable` | لا تعيّن `$home`/`$HOME`/`$args` في `.ps1` — استخدم `$outputHome` و`$installerArgs` إلخ |
+| `ExitCode` من نوع Object[] | مخرجات أمر أصلي تسربت إلى قيمة الإرجاع — المدير يستخدم `Invoke-SamNative` |
+| `health` يظهر WARN لـ healthz ثم FAIL | عدم وصول `/healthz` تحذير فقط؛ الخروج يتبع `doctor` |
 | `bash` يفشل على ويندوز (`execvpe(/bin/bash)`) | WSL بدون توزيعة — استخدم المدير `.cmd`/`.ps1` أو ثبّت Git for Windows |
 
 سجلات المدير: `SAM_OUTPUT_HOME/logs/manager-*.log` (احتياطي `Tools/logs/`). العرض عبر **view-logs**.

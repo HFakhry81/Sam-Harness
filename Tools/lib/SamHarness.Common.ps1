@@ -207,20 +207,109 @@ function Get-SamTeamLocalModels {
 }
 
 function Invoke-SamNative {
+  <#
+  .SYNOPSIS
+    Run a native/exe command without polluting the PowerShell pipeline.
+  .DESCRIPTION
+    Captures stdout/stderr, prints via Write-Host (host stream, not pipeline),
+    and returns ONLY an [int] exit code. Avoids:
+      - function return becoming Object[] (stdout lines + exit code)
+      - NativeCommandError terminating under $ErrorActionPreference = 'Stop'
+  #>
+  param(
+    [Parameter(Mandatory = $true)][string]$FilePath,
+    [string[]]$ArgumentList = @(),
+    [string]$WorkingDirectory = "",
+    [switch]$Quiet
+  )
+  $prevEa = $ErrorActionPreference
+  $ErrorActionPreference = "Continue"
+  $pushed = $false
+  if ($WorkingDirectory) {
+    Push-Location $WorkingDirectory
+    $pushed = $true
+  }
+  try {
+    $lines = @(& $FilePath @ArgumentList 2>&1)
+    $ec = 0
+    if (Test-Path variable:/LASTEXITCODE) {
+      if ($null -ne $LASTEXITCODE) { $ec = [int]$LASTEXITCODE }
+    }
+    if (-not $Quiet) {
+      foreach ($line in $lines) {
+        if ($null -eq $line) { continue }
+        $text = if ($line -is [System.Management.Automation.ErrorRecord]) {
+          [string]$line
+        } else {
+          [string]$line
+        }
+        Write-Host ("  " + $text)
+      }
+    }
+    # Emit ONLY the int on the success pipeline.
+    return $ec
+  } finally {
+    $ErrorActionPreference = $prevEa
+    if ($pushed) { Pop-Location }
+  }
+}
+
+function Invoke-SamNativeCapture {
+  <#
+  .SYNOPSIS
+    Like Invoke-SamNative but also returns captured stdout lines (no host print).
+  #>
   param(
     [Parameter(Mandatory = $true)][string]$FilePath,
     [string[]]$ArgumentList = @(),
     [string]$WorkingDirectory = ""
   )
+  $prevEa = $ErrorActionPreference
+  $ErrorActionPreference = "Continue"
+  $pushed = $false
   if ($WorkingDirectory) {
     Push-Location $WorkingDirectory
+    $pushed = $true
   }
   try {
-    & $FilePath @ArgumentList
-    return [int]$LASTEXITCODE
+    $raw = @(& $FilePath @ArgumentList 2>&1)
+    $ec = 0
+    if (Test-Path variable:/LASTEXITCODE) {
+      if ($null -ne $LASTEXITCODE) { $ec = [int]$LASTEXITCODE }
+    }
+    $outLines = New-Object System.Collections.Generic.List[string]
+    foreach ($line in $raw) {
+      if ($null -eq $line) { continue }
+      if ($line -is [System.Management.Automation.ErrorRecord]) {
+        [void]$outLines.Add([string]$line)
+      } else {
+        [void]$outLines.Add([string]$line)
+      }
+    }
+    return @{
+      ExitCode = $ec
+      Lines    = $outLines.ToArray()
+      Text     = ($outLines -join "`n")
+    }
   } finally {
-    if ($WorkingDirectory) { Pop-Location }
+    $ErrorActionPreference = $prevEa
+    if ($pushed) { Pop-Location }
   }
+}
+
+function ConvertTo-SamExitCode {
+  <#
+  .SYNOPSIS
+    Coerce a possibly-polluted pipeline return value to a single [int].
+  #>
+  param([Parameter(ValueFromPipeline = $true)]$Value)
+  if ($null -eq $Value) { return 0 }
+  if ($Value -is [int] -or $Value -is [long]) { return [int]$Value }
+  if ($Value -is [Array] -or $Value -is [System.Collections.IList]) {
+    $last = $Value | Select-Object -Last 1
+    try { return [int]$last } catch { return 1 }
+  }
+  try { return [int]$Value } catch { return 1 }
 }
 
 function Test-SamCommand([string]$Name) {
