@@ -21,7 +21,7 @@
 | ٤) محلي / سحابة / هجين والسقف $0.50 | [`hybrid-mode`](hybrid-mode.md) |
 | ٥) التخصص وحدود القدرات | [`specialty-capabilities`](specialty-capabilities.md) |
 | ٦) التحكم بالجهاز وأدوات سطح المكتب | [`desktop-control`](desktop-control.md) |
-| ٧) تعديل سير العمل والفريق | [`customize`](customize.md) |
+| ٧) تعديل سير العمل والفريق (جدول + محرّر رسومي مرحلة 9) | [`customize`](customize.md) |
 | تثبيت | [`install`](install.md) |
 | أمان / موافقات / تدقيق | [`security`](security.md) |
 | تكلفة | [`cost`](cost.md) |

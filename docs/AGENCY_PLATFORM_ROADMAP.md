@@ -80,9 +80,10 @@
 - [x] Phase 6 — Verifiable gates & trust: step acceptance gates, HITL approvals, hash-chained `audit_log`, evidence bundles, `/api/trust/*` + `pnpm run trust:*` (see `docs/PHASE6_GATES_TRUST.md`)
 - [x] Phase 7 — Arabic-first i18n (RTL UI, locale env, agent/report Arabic) + one-click install (Windows/macOS/Linux) + `pnpm run doctor` (see `docs/PHASE7_ARABIC_INSTALL.md`)
 - [x] Phase 8 — Per-role models (`config/team.json`), live hybrid `roles`+`prefersCloud` routing (cap wins), Linux/macOS desktop backends, team CRUD API/UI + pipeline reorder (see `docs/PHASE8_TEAM_DESKTOP.md`)
+- [x] Phase 9 — Visual workflow editor (SVG canvas, locked review/GO, draft/apply, layout file, `/api/workflow*`) (see `docs/PHASE9_VISUAL_EDITOR.md`)
 
-**Test-ready today:** Control Plane + agency packs + `pnpm test` + smokes + `/healthz` + desktop mock + Windows Notepad + Linux/macOS command builders + near-zero cost + gates/trust + Arabic/install/doctor + Phase 8 team/routing.  
-**Next (Phase 9+):** wider connectors / packaging polish.
+**Test-ready today:** Control Plane + agency packs + `pnpm test` + smokes + `/healthz` + desktop mock + Windows Notepad + Linux/macOS command builders + near-zero cost + gates/trust + Arabic/install/doctor + Phase 8 team/routing + Phase 9 visual editor.  
+**Next (Phase 10+):** wider connectors / packaging polish.
 
 ## Success metrics (منافسة حقيقية)
 - تكلفة توكن لكل تقرير ناجح → أقرب ما يكون للصفر عبر المحلي.
