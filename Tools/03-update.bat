@@ -1,20 +1,10 @@
 @echo off
-setlocal
-title Sam-Harness — update from git
-cd /d "%~dp0.."
-echo   cwd=%CD%
-where git >nul 2>&1
-if errorlevel 1 (
-  echo   [X] git missing.
-  pause
-  exit /b 1
-)
-git pull
-if errorlevel 1 (
-  echo   [!] git pull had issues — resolve then retry.
-)
-where pnpm >nul 2>&1
-if not errorlevel 1 call pnpm install
-echo   [OK] Update pass finished.
+setlocal EnableExtensions
+chcp 65001 >nul
+title Sam-Harness — update
+cd /d "%~dp0"
+set "SAM_TOOLS_NOPAUSE=1"
+call "%~dp0Sam-Harness-Manager.cmd" -Action update %*
+set "ERR=%ERRORLEVEL%"
 pause
-endlocal
+endlocal & exit /b %ERR%

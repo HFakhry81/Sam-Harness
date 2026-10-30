@@ -1,0 +1,25 @@
+# Default: normalize to LF in the repo
+* text=auto eol=lf
+
+# Windows Tools launchers / PowerShell — CRLF in working tree.
+# .ps1 files that contain Arabic MUST be committed as UTF-8 WITH BOM so
+# Windows PowerShell 5.1 does not mis-decode them as ANSI (ParserError).
+# Tests assert BOM on Tools/**/*.ps1 and scripts/install/*.ps1.
+*.bat text eol=crlf
+*.cmd text eol=crlf
+*.ps1 text eol=crlf
+*.psm1 text eol=crlf
+
+# Unix shell — LF
+*.sh text eol=lf
+
+# Keep lockfiles and binaries untouched
+pnpm-lock.yaml text eol=lf
+*.png binary
+*.jpg binary
+*.jpeg binary
+*.gif binary
+*.webp binary
+*.ico binary
+*.sqlite binary
+*.zip binary

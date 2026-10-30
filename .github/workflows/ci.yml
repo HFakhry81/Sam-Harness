@@ -42,6 +42,83 @@ jobs:
       - name: Unit tests
         run: pnpm test
 
+      # Tools manager — Windows PowerShell 5.1 (not pwsh 7) must parse Arabic .ps1 (UTF-8 BOM)
+      - name: PowerShell 5.1 parse + Tools manager smoke
+        if: runner.os == 'Windows'
+        shell: powershell
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $ps51 = Join-Path $env:SystemRoot 'System32\WindowsPowerShell\v1.0\powershell.exe'
+          if (-not (Test-Path -LiteralPath $ps51)) { throw "powershell.exe 5.1 missing: $ps51" }
+          Write-Host "Using $ps51"
+          $files = @()
+          $files += Get-ChildItem -Path Tools -Recurse -Filter *.ps1 -File
+          $files += Get-ChildItem -Path scripts\install -Filter *.ps1 -File
+          foreach ($f in $files) {
+            $bytes = [System.IO.File]::ReadAllBytes($f.FullName)
+            if ($bytes.Length -lt 3 -or $bytes[0] -ne 0xEF -or $bytes[1] -ne 0xBB -or $bytes[2] -ne 0xBF) {
+              throw "Missing UTF-8 BOM (required for PS 5.1 + Arabic): $($f.FullName)"
+            }
+            $tokens = $null
+            $errs = $null
+            [void][System.Management.Automation.Language.Parser]::ParseFile($f.FullName, [ref]$tokens, [ref]$errs)
+            if ($errs -and $errs.Count -gt 0) {
+              $errs | ForEach-Object { Write-Host $_ }
+              throw "Parse failed under Windows PowerShell 5.1: $($f.FullName)"
+            }
+            Write-Host "OK parse $($f.FullName)"
+          }
+          if (-not (Test-Path .env) -and (Test-Path .env.example)) {
+            Copy-Item .env.example .env
+          }
+          function Invoke-SamManager51 {
+            param([string[]]$ManagerArgs, [string]$Label)
+            $log = Join-Path $env:RUNNER_TEMP ("sam-tools-" + $Label + ".log")
+            $err = "$log.err"
+            $argList = @('-NoProfile','-ExecutionPolicy','Bypass','-File','Tools\Sam-Harness-Manager.ps1') + $ManagerArgs
+            $p = Start-Process -FilePath $ps51 -ArgumentList $argList -Wait -PassThru -NoNewWindow -RedirectStandardOutput $log -RedirectStandardError $err
+            $stdout = ''
+            $stderr = ''
+            if (Test-Path $log) { $stdout = Get-Content -LiteralPath $log -Raw -ErrorAction SilentlyContinue }
+            if (Test-Path $err) { $stderr = Get-Content -LiteralPath $err -Raw -ErrorAction SilentlyContinue }
+            $all = "$stdout`n$stderr"
+            Write-Host "---- $Label exit=$($p.ExitCode) ----"
+            Write-Host $all
+            if ($all -match 'VariableNotWritable|Cannot overwrite variable|ParserError|ParameterArgumentTransformationError|Cannot convert.*Object\[\]') {
+              throw "$Label hit PowerShell engine error"
+            }
+            if ($p.ExitCode -ne 0) { throw "$Label exit $($p.ExitCode)" }
+            # Success proof: summary exit=0 and/or at least one [OK] (help used to only print [INFO])
+            if ($all -notmatch 'exit=0' -and $all -notmatch '\[OK\]') {
+              throw "$Label missing success markers (need exit=0 summary or [OK])"
+            }
+            if ($all -match '\[FAIL\].*exit System\.Object') { throw "$Label leaked Object[] into exit summary" }
+            return $all
+          }
+          # Safe end-to-end menu actions under Windows PowerShell 5.1
+          Invoke-SamManager51 -Label 'doctor-en' -ManagerArgs @('-Action','doctor','-Lang','en','-NonInteractive') | Out-Null
+          $healthOut = Invoke-SamManager51 -Label 'health-ar' -ManagerArgs @('-Action','health','-Lang','ar','-NonInteractive')
+          if ($healthOut -notmatch '\[WARN\].*healthz|/healthz') {
+            Write-Host 'NOTE: healthz WARN may be absent if UI is somehow up'
+          }
+          Invoke-SamManager51 -Label 'help-en' -ManagerArgs @('-Action','help','-Lang','en','-NonInteractive') | Out-Null
+          Invoke-SamManager51 -Label 'view-logs' -ManagerArgs @('-Action','view-logs','-Lang','en','-NonInteractive') | Out-Null
+          Invoke-SamManager51 -Label 'cleanup-logs' -ManagerArgs @('-Action','cleanup-logs','-Lang','en','-NonInteractive') | Out-Null
+          $bak = Join-Path $env:RUNNER_TEMP 'sam-harness-ci-backup.zip'
+          Invoke-SamManager51 -Label 'backup' -ManagerArgs @('-Action','backup','-Lang','en','-NonInteractive','-BackupPath',$bak) | Out-Null
+          if (-not (Test-Path -LiteralPath $bak)) { throw "backup zip missing: $bak" }
+          Invoke-SamManager51 -Label 'build-check' -ManagerArgs @('-Action','build-check','-Lang','en','-NonInteractive') | Out-Null
+          # .cmd wrapper path (double-click equivalent → powershell.exe 5.1)
+          $env:SAM_TOOLS_NOPAUSE = '1'
+          $cmdLog = Join-Path $env:RUNNER_TEMP 'sam-tools-cmd-doctor.log'
+          cmd /c "Tools\Sam-Harness-Manager.cmd -Action doctor -Lang en -NonInteractive > `"$cmdLog`" 2>&1"
+          $ecCmd = $LASTEXITCODE
+          $cmdOut = Get-Content -LiteralPath $cmdLog -Raw -ErrorAction SilentlyContinue
+          Write-Host "---- cmd-doctor exit=$ecCmd ----"
+          Write-Host $cmdOut
+          if ($cmdOut -match 'VariableNotWritable|Cannot overwrite variable|ParserError|ParameterArgumentTransformationError') { throw 'cmd doctor hit PowerShell engine error' }
+          if ($ecCmd -ne 0) { throw "cmd doctor exit $ecCmd" }
+
       - name: Smoke (offline gates)
         run: pnpm run smoke
 
