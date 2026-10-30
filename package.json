@@ -27,7 +27,14 @@
     "eval:goal-fidelity": "tsx scripts/eval-goal-fidelity.ts",
     "eval:evidence-scout": "tsx scripts/eval-evidence-scout.ts",
     "eval:pack-home": "tsx scripts/eval-pack-home.ts",
-    "smoke:prod-gates": "tsx scripts/smoke-prod-gates.ts"
+    "smoke:prod-gates": "tsx scripts/smoke-prod-gates.ts",
+    "trust": "tsx scripts/trust-cli.ts",
+    "trust:verify": "tsx scripts/trust-cli.ts verify",
+    "trust:approvals": "tsx scripts/trust-cli.ts approvals",
+    "trust:approve": "tsx scripts/trust-cli.ts approve",
+    "trust:deny": "tsx scripts/trust-cli.ts deny",
+    "trust:evidence": "tsx scripts/trust-cli.ts evidence",
+    "trust:policy": "tsx scripts/trust-cli.ts policy"
   },
   "keywords": [],
   "author": "",

@@ -105,6 +105,38 @@ export async function requestCommSend(
     return d;
   }
 
+  // Phase 6 — trust approval + audit for outbound email
+  try {
+    const { requireEmailSendApproval, appendAudit } = await import(
+      "../lib/trust/index.js"
+    );
+    const decision = requireEmailSendApproval({
+      draftId: d.id,
+      to: d.to,
+      subject: d.subject,
+      approved: approved || allow,
+    });
+    if (!decision.ok) {
+      d.status = "blocked";
+      d.note = decision.message || "Trust approval required for email send";
+      save(cwd, store);
+      return d;
+    }
+    appendAudit({
+      category: "action",
+      action: "email_send",
+      detail: {
+        draftId: d.id,
+        to: d.to,
+        subject: d.subject,
+        approvalId: decision.approvalId,
+        channel: d.channel,
+      },
+    });
+  } catch {
+    /* trust layer optional if DB unavailable */
+  }
+
   if (d.channel === "desktop-notify") {
     d.status = "sent-dry-run";
     d.note = "Desktop notify recorded (no OS toast in this build)";

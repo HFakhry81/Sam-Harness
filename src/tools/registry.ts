@@ -102,6 +102,41 @@ async function deletePathTool(params: Record<string, unknown>): Promise<ToolResu
   }
   const abs = resolveUserPath(asString(params.path, "path"));
   assertAllowedPath(abs);
+  // Phase 6 — HITL when deleting outside agent output home / cwd
+  {
+    const { requireDestructiveFsApproval, appendAudit } = await import(
+      "../lib/trust/index.js"
+    );
+    const decision = requireDestructiveFsApproval({
+      tool: "delete_path",
+      path: abs,
+      approved:
+        params.approved === true || params.approved === "true"
+          ? true
+          : typeof params.approved === "string"
+            ? params.approved
+            : undefined,
+      runId: typeof params.runId === "string" ? params.runId : undefined,
+    });
+    if (!decision.ok) {
+      return {
+        ok: false,
+        tool: "delete_path",
+        message: decision.message || "Approval required for destructive delete outside output home",
+        data: {
+          requiresApproval: true,
+          approvalId: decision.approvalId,
+          pendingApproval: true,
+        },
+      };
+    }
+    appendAudit({
+      category: "action",
+      action: "delete_path",
+      runId: typeof params.runId === "string" ? params.runId : null,
+      detail: { path: abs, approvalId: decision.approvalId },
+    });
+  }
   if (isDriveRoot(abs)) {
     return { ok: false, tool: "delete_path", message: `Refusing to delete drive/root: ${abs}` };
   }
@@ -146,6 +181,33 @@ async function moveFileTool(params: Record<string, unknown>): Promise<ToolResult
   }
   assertAllowedPath(source);
   assertAllowedPath(destination);
+  // Phase 6 — moving a source out of / deleting from outside home is destructive
+  {
+    const { requireDestructiveFsApproval } = await import("../lib/trust/index.js");
+    const decision = requireDestructiveFsApproval({
+      tool: "move_file",
+      path: source,
+      approved:
+        params.approved === true || params.approved === "true"
+          ? true
+          : typeof params.approved === "string"
+            ? params.approved
+            : undefined,
+      runId: typeof params.runId === "string" ? params.runId : undefined,
+    });
+    if (!decision.ok) {
+      return {
+        ok: false,
+        tool: "move_file",
+        message: decision.message || "Approval required for move outside output home",
+        data: {
+          requiresApproval: true,
+          approvalId: decision.approvalId,
+          pendingApproval: true,
+        },
+      };
+    }
+  }
   if (!fs.existsSync(source)) {
     return { ok: false, tool: "move_file", message: `Source not found: ${source}` };
   }

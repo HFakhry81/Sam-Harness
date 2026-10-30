@@ -77,9 +77,10 @@
 - [x] Phase 3 — SQLite (`node:sqlite`) + optional Postgres, LangGraph checkpointer, durable runs, tenant groundwork, pino/OTel/`/healthz`, timeline UI; `EMAIL_PROVIDER=smtp` default (see `docs/PHASE3_PRODUCTION_OPS.md`)
 - [x] Phase 4 — Windows desktop operator: UIA-first (`src/tools/desktop/`), verify-after-act, approvals, dry-run, kill switch, timeline screenshots; macOS/Linux stubs; Notepad CI on `windows-latest` (see `docs/PHASE4_DESKTOP_OPERATOR.md`)
 - [x] Phase 5 — Near-zero cost: difficulty routing (`src/lib/cost/`), SQLite prompt cache, context compaction, near-cap local degradation tied to $0.50 daily ledger (see `docs/PHASE5_NEAR_ZERO_COST.md`)
+- [x] Phase 6 — Verifiable gates & trust: step acceptance gates, HITL approvals, hash-chained `audit_log`, evidence bundles, `/api/trust/*` + `pnpm run trust:*` (see `docs/PHASE6_GATES_TRUST.md`)
 
-**Test-ready today:** Control Plane + agency packs + `pnpm test` + smokes + `/healthz` + desktop mock + Windows Notepad integration + near-zero cost unit tests.  
-**Next (Phase 6+):** Trust packs, Arabic-first distribution.
+**Test-ready today:** Control Plane + agency packs + `pnpm test` + smokes + `/healthz` + desktop mock + Windows Notepad integration + near-zero cost + gates/trust unit tests.  
+**Next (Phase 7+):** Arabic-first distribution.
 
 ## Success metrics (منافسة حقيقية)
 - تكلفة توكن لكل تقرير ناجح → أقرب ما يكون للصفر عبر المحلي.

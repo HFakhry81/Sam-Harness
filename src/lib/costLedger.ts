@@ -7,6 +7,8 @@ import { loadStoreDoc, saveStoreDoc } from "./db/storeBridge.js";
 import { getActiveTenantId } from "./tenant/context.js";
 import { getDriver, getPersistence } from "./db/index.js";
 import { recordCost } from "./observability/metrics.js";
+import { requireSpendApproval } from "./trust/approvals.js";
+import { appendAudit } from "./trust/auditLog.js";
 import * as crypto from "crypto";
 
 const FILE = "cost-ledger.json";
@@ -258,6 +260,32 @@ export function recordUsage(
 
   if (cloud && costUsd > 0) {
     assertWithinCostCap(cwd, costUsd);
+    // Phase 6 — spend-above-threshold approval (in addition to hard cap)
+    const decision = requireSpendApproval({
+      amountUsd: costUsd,
+      model: entry.model,
+      runId: entry.runId || activeRunId || undefined,
+    });
+    if (!decision.ok) {
+      throw new CostCapExceededError(
+        decision.message ||
+          `Spend approval required for cloud charge $${round4(costUsd)}`,
+        getCostBudget(cwd).spentUsd,
+        getCostBudget(cwd).capUsd,
+        "run"
+      );
+    }
+    appendAudit({
+      category: "cost",
+      action: decision.required ? "spend_approved" : "spend_recorded",
+      runId: entry.runId || activeRunId,
+      detail: {
+        amountUsd: costUsd,
+        model: entry.model,
+        approvalId: decision.approvalId,
+        cloud: true,
+      },
+    });
   }
 
   const ledger = loadCostLedger(cwd);

@@ -7,6 +7,7 @@ import { getDriver, getPersistence } from "../../lib/db/index.js";
 import { runsRepo } from "../../lib/db/index.js";
 import type { ApprovalRecord } from "../../lib/db/types.js";
 import { getActiveTenantId } from "../../lib/tenant/context.js";
+import { appendAudit } from "../../lib/trust/auditLog.js";
 import type {
   DesktopActionName,
   DesktopActionRisk,
@@ -148,7 +149,24 @@ function recordApprovalDecision(
       runId: request.runId,
     },
   };
-  return runsRepo.upsertApproval(getDriver(), record);
+  const saved = runsRepo.upsertApproval(getDriver(), record);
+  appendAudit({
+    category: "approval",
+    action:
+      status === "pending"
+        ? "approval_requested"
+        : status === "approved"
+          ? "approval_granted"
+          : "approval_denied",
+    runId: request.runId || null,
+    detail: {
+      approvalId: saved.id,
+      kind: saved.kind,
+      subject: saved.subject,
+      status: saved.status,
+    },
+  });
+  return saved;
 }
 
 export function approveDesktopAction(
@@ -163,5 +181,18 @@ export function approveDesktopAction(
     status: approve ? "approved" : "rejected",
     decidedAt: new Date().toISOString(),
   };
-  return runsRepo.upsertApproval(getDriver(), updated);
+  const saved = runsRepo.upsertApproval(getDriver(), updated);
+  appendAudit({
+    category: "approval",
+    action: approve ? "approval_granted" : "approval_denied",
+    runId:
+      typeof updated.meta?.runId === "string" ? (updated.meta.runId as string) : null,
+    detail: {
+      approvalId: saved.id,
+      kind: saved.kind,
+      subject: saved.subject,
+      status: saved.status,
+    },
+  });
+  return saved;
 }
