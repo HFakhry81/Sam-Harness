@@ -56,6 +56,7 @@
       <button type="button" class="active" data-view="compose" data-i18n="nav.compose">المهمة</button>
       <button type="button" data-view="daily" data-i18n="nav.daily">المهام اليومية</button>
       <button type="button" data-view="profiles" data-i18n="nav.profiles">الهجين</button>
+      <button type="button" data-view="team" data-i18n="nav.team">الفريق</button>
       <button type="button" data-view="memory" data-i18n="nav.memory">الذاكرة</button>
       <button type="button" data-view="timeline" data-i18n="nav.timeline">التشغيلات</button>
       <button type="button" data-view="rollback" data-i18n="nav.rollback">التراجع</button>
@@ -239,6 +240,56 @@
             </div>
             <p class="lede-sm" id="profileStatus">—</p>
             <p class="lede-sm" id="costUsageStatus">—</p>
+          </div>
+        </section>
+
+        <section class="stage hidden" id="stageTeam">
+          <p class="eyebrow" data-i18n="team.eyebrow">Phase 8 · الفريق</p>
+          <h1 class="hero-title">
+            <span data-i18n="team.hero">تخصيص الفريق.</span><br />
+            <em data-i18n="team.heroEm">أدوار · نماذج · مسار.</em>
+          </h1>
+          <p class="lede" data-i18n="team.lede">
+            أضف أو عطّل أدواراً، عيّن نموذجاً لكل دور، وأعد ترتيب خطوات المتخصصين بعد الموافقة — دون تعديل الكود. حلقة المراجعة وبوابة GO ثابتة.
+          </p>
+          <div class="platform-panel">
+            <div class="actions" style="margin-bottom:1rem">
+              <button type="button" class="btn ghost" id="btnTeamRefresh" data-i18n="team.refresh">تحديث</button>
+              <button type="button" class="btn primary" id="btnTeamSavePipeline" data-i18n="team.savePipeline">حفظ ترتيب المسار</button>
+            </div>
+            <p class="lede-sm" id="teamStatus">—</p>
+            <p class="workspace-title" data-i18n="team.pipeline">ترتيب ما بعد الموافقة</p>
+            <input id="teamPipelineOrder" type="text" class="composer" style="min-height:auto;padding:0.6rem 0.8rem" placeholder="architect,help,marketer,verifier" />
+            <table class="ops-table" id="teamRolesTable" style="margin-top:1rem">
+              <thead>
+                <tr>
+                  <th data-i18n="team.col.id">المعرّف</th>
+                  <th data-i18n="team.col.title">العنوان</th>
+                  <th data-i18n="team.col.enabled">مفعّل</th>
+                  <th data-i18n="team.col.local">محلي</th>
+                  <th data-i18n="team.col.paid">سحابة</th>
+                  <th data-i18n="team.col.route">التوجيه الحي</th>
+                  <th data-i18n="team.col.actions">إجراءات</th>
+                </tr>
+              </thead>
+              <tbody id="teamRolesBody"></tbody>
+            </table>
+            <h3 class="workspace-title" style="margin-top:1.25rem" data-i18n="team.addRole">إضافة دور مخصّص</h3>
+            <div class="ops-form">
+              <div class="field">
+                <label for="teamRoleId" data-i18n="team.customId">معرّف الدور</label>
+                <input id="teamRoleId" type="text" placeholder="research_analyst" />
+              </div>
+              <div class="field">
+                <label for="teamRoleTitle" data-i18n="team.customTitle">العنوان</label>
+                <input id="teamRoleTitle" type="text" placeholder="Research Analyst" />
+              </div>
+              <div class="field" style="grid-column: span 1">
+                <label for="teamRolePrompt" data-i18n="team.customPrompt">المطالبة</label>
+                <input id="teamRolePrompt" type="text" placeholder="Write a research brief…" />
+              </div>
+              <button type="button" class="btn primary" id="btnTeamAddRole" data-i18n="team.addRole">إضافة دور مخصّص</button>
+            </div>
           </div>
         </section>
 

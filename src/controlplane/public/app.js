@@ -455,6 +455,7 @@ const PLATFORM_STAGES = {
   compose: "stageCompose",
   daily: "stageDaily",
   profiles: "stageProfiles",
+  team: "stageTeam",
   memory: "stageMemory",
   timeline: "stageTimeline",
   rollback: "stageRollback",
@@ -468,6 +469,7 @@ function hideAllMainPanels() {
     els.stageDone,
     $("stageDaily"),
     $("stageProfiles"),
+    $("stageTeam"),
     $("stageMemory"),
     $("stageTimeline"),
     $("stageRollback"),
@@ -498,10 +500,83 @@ function showPlatformPanel(view) {
   if (id) $(id)?.classList.remove("hidden");
   if (view === "daily") loadDailyOps();
   if (view === "profiles") loadProfiles();
+  if (view === "team") loadTeamUi();
   if (view === "memory") loadMemoryUi();
   if (view === "timeline") loadRunsTimeline();
   if (view === "rollback") loadRollback();
   if (view === "help") loadHelpUi();
+}
+
+async function loadTeamUi() {
+  const body = $("teamRolesBody");
+  const status = $("teamStatus");
+  if (!body) return;
+  try {
+    const data = await api("/api/team").then((r) => r.json());
+    const cfg = data.config || {};
+    const routing = data.routing || [];
+    const routeByRole = Object.fromEntries(
+      (routing || []).map((d) => [d.role, d.route])
+    );
+    if ($("teamPipelineOrder")) {
+      $("teamPipelineOrder").value = (cfg.pipeline?.downstreamOrder || []).join(",");
+    }
+    body.innerHTML = "";
+    (cfg.roles || []).forEach((role) => {
+      const route = routeByRole[role.id];
+      const tr = document.createElement("tr");
+      const routeLabel = route
+        ? `${route.tier}${route.degraded ? "*" : ""} · ${route.model}`
+        : "—";
+      tr.innerHTML = `
+        <td><code>${escapeHtml(role.id)}</code>${role.builtin ? "" : " · custom"}</td>
+        <td>${escapeHtml(role.title || "")}</td>
+        <td>${role.enabled ? "✓" : "—"}</td>
+        <td><code>${escapeHtml(role.models?.local || "")}</code></td>
+        <td><code>${escapeHtml(role.models?.cloud || "")}</code></td>
+        <td>${escapeHtml(routeLabel)}</td>
+        <td class="ops-actions"></td>`;
+      const actions = tr.querySelector(".ops-actions");
+      if (role.stage === "downstream" || !role.builtin) {
+        const toggle = document.createElement("button");
+        toggle.type = "button";
+        toggle.className = "btn ghost tiny";
+        toggle.textContent = role.enabled
+          ? t("team.disable") || "Disable"
+          : t("team.enable") || "Enable";
+        toggle.addEventListener("click", async () => {
+          await api("/api/team/roles", {
+            method: "POST",
+            body: JSON.stringify({ id: role.id, enabled: !role.enabled }),
+          });
+          loadTeamUi();
+        });
+        actions.appendChild(toggle);
+      }
+      if (!role.builtin) {
+        const del = document.createElement("button");
+        del.type = "button";
+        del.className = "btn ghost tiny";
+        del.textContent = t("team.delete") || "Delete";
+        del.addEventListener("click", async () => {
+          await api(`/api/team/roles/${encodeURIComponent(role.id)}`, {
+            method: "DELETE",
+          });
+          loadTeamUi();
+        });
+        actions.appendChild(del);
+      }
+      body.appendChild(tr);
+    });
+    if (!(cfg.roles || []).length) {
+      body.innerHTML = `<tr><td colspan="7">${escapeHtml(t("team.empty") || "No roles")}</td></tr>`;
+    }
+    if (status) {
+      status.textContent = `roles=${(cfg.roles || []).length} · pipeline=${(cfg.pipeline?.downstreamOrder || []).join("→")}`;
+    }
+  } catch (e) {
+    if (status) status.textContent = e.message || String(e);
+  }
 }
 
 async function loadHelpUi(topicId) {
@@ -1435,6 +1510,55 @@ $("btnSaveProfile")?.addEventListener("click", async () => {
       : data.error || "فشل الحفظ";
   }
   if (data.ok) renderCostUsage(data.cost);
+});
+
+$("btnTeamRefresh")?.addEventListener("click", () => loadTeamUi());
+$("btnTeamSavePipeline")?.addEventListener("click", async () => {
+  const raw = $("teamPipelineOrder")?.value || "";
+  const downstreamOrder = raw
+    .split(",")
+    .map((s) => s.trim())
+    .filter(Boolean);
+  const res = await api("/api/team/pipeline", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ downstreamOrder }),
+  });
+  const data = await res.json();
+  if ($("teamStatus")) {
+    $("teamStatus").textContent = data.ok
+      ? `pipeline saved · ${downstreamOrder.join("→")}`
+      : data.error || "failed";
+  }
+  if (data.ok) loadTeamUi();
+});
+$("btnTeamAddRole")?.addEventListener("click", async () => {
+  const id = $("teamRoleId")?.value?.trim() || "";
+  const title = $("teamRoleTitle")?.value?.trim() || "";
+  const prompt = $("teamRolePrompt")?.value?.trim() || "";
+  const res = await api("/api/team/roles", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      id,
+      title,
+      prompt,
+      stage: "downstream",
+      prefersCloud: false,
+      enabled: true,
+      models: { local: "qwen2.5:1.5b", cloud: "gemma4:cloud", free: null },
+    }),
+  });
+  const data = await res.json();
+  if ($("teamStatus")) {
+    $("teamStatus").textContent = data.ok ? `added ${id}` : data.error || "failed";
+  }
+  if (data.ok) {
+    if ($("teamRoleId")) $("teamRoleId").value = "";
+    if ($("teamRoleTitle")) $("teamRoleTitle").value = "";
+    if ($("teamRolePrompt")) $("teamRolePrompt").value = "";
+    loadTeamUi();
+  }
 });
 
 $("btnLogin")?.addEventListener("click", async () => {
