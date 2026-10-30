@@ -13,6 +13,7 @@ import {
   type OpsIntent,
 } from "../agent/heuristic.js";
 import { resolveUserPath } from "../lib/paths.js";
+import { isSamHarnessWorkspace } from "../lib/reviewPackDir.js";
 import type { UiRoute } from "./taskWriter.js";
 
 export type TaskRisk = "low" | "medium" | "high" | "destructive";
@@ -89,7 +90,7 @@ export type SpecBuildInput = {
 /** Prefer this workspace when Control Plane runs from Sam-Harness; Maw3ed only when goal asks. */
 function defaultArchitectureRepo(): string {
   const cwd = process.cwd();
-  if (/sam-harness/i.test(path.basename(cwd))) return cwd;
+  if (isSamHarnessWorkspace(cwd)) return cwd;
   return "E:\\UpNexa.com\\maw3ed";
 }
 
@@ -663,7 +664,7 @@ export function buildTaskSpec(input: SpecBuildInput): TaskSpec {
       const absLooksFile = absFile ? /\.\w+$/.test(absFile) : false;
       const dirPath = absFile && !absLooksFile
         ? absFile
-        : absLooksFile
+        : absFile && absLooksFile
           ? path.dirname(absFile)
           : hasDesktop(prompt) && folder
             ? `Desktop\\${folder}`

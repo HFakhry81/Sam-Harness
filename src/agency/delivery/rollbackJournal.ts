@@ -43,6 +43,32 @@ export function loadRollbackJournal(harnessRoot: string): RollbackStore {
   return load(harnessRoot);
 }
 
+/**
+ * Record a batch of Level-3 writes into the rollback journal (one entry per file).
+ * Used by the implementer after applying a pack of file changes.
+ */
+export function appendRollbackEntry(
+  harnessRoot: string,
+  opts: {
+    targetRepo: string;
+    files: Array<{ path: string; action?: "write" | "restore" }>;
+    summary?: string;
+  }
+): RollbackEntry[] {
+  const entries: RollbackEntry[] = [];
+  for (const f of opts.files) {
+    if ((f.action || "write") !== "write") continue;
+    entries.push(
+      recordWriteWithBackup(harnessRoot, {
+        targetRepo: opts.targetRepo,
+        filePath: f.path,
+        note: opts.summary,
+      })
+    );
+  }
+  return entries;
+}
+
 export function listRollback(harnessRoot: string): RollbackEntry[] {
   return load(harnessRoot).entries;
 }

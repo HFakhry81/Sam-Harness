@@ -159,7 +159,7 @@ async function main() {
   if (useOllamaCloudNow()) {
     sys("OLLAMA_API_KEY loaded — Level-2 specialists will use Ollama Cloud");
   } else {
-    warn("OLLAMA_API_KEY missing — Level-2 specialists fall back to local models");
+    warn("Models", "OLLAMA_API_KEY missing — Level-2 specialists fall back to local models");
   }
 
   console.log(
@@ -236,7 +236,11 @@ async function main() {
       }
 
       if ("packDir" in result && result.packDir) {
-        ok("Pack", `Sam-Harness no.${result.reviewNo} → ${result.packDir}`);
+        const reviewNo =
+          "reviewNo" in result && typeof (result as { reviewNo?: unknown }).reviewNo === "number"
+            ? (result as { reviewNo: number }).reviewNo
+            : "?";
+        ok("Pack", `Sam-Harness no.${reviewNo} → ${result.packDir}`);
       }
 
       if (result.auditPassed && shouldRunLevel3(task, argv)) {

@@ -34,10 +34,21 @@ function clip(text: string, max = 6000): string {
   return text.length <= max ? text : text.slice(0, max) + "\n...(truncated)";
 }
 
-function parseApproved(report: string): boolean {
+/** Parse auditor report gate marker. Exported for unit tests. */
+export function parseApproved(report: string): boolean {
   if (/^\s*\[REJECTED\]/m.test(report) || /\n\[REJECTED\]/.test(report)) return false;
   if (/^\s*\[APPROVED\]/m.test(report) || /\n\[APPROVED\]/.test(report)) return true;
   return false;
+}
+
+/** LangGraph conditional edge after audit — caps remediations at MAX_LOOPS. */
+export function routeAfterAudit(state: {
+  auditPassed?: boolean;
+  loop?: number;
+}): "approved" | "failed" | "remediate" {
+  if (state.auditPassed) return "approved";
+  if ((state.loop || 0) >= MAX_LOOPS) return "failed";
+  return "remediate";
 }
 
 function extractFixes(report: string): string[] {
@@ -291,12 +302,6 @@ ${REJECTION_FORMAT}`
       goalFidelityScore: fidelity.score,
       history: [auditDoc],
     };
-  };
-
-  const routeAfterAudit = (state: ReviewStateType): string => {
-    if (state.auditPassed) return "approved";
-    if ((state.loop || 0) >= MAX_LOOPS) return "failed";
-    return "remediate";
   };
 
   const graph = new StateGraph(ReviewState)

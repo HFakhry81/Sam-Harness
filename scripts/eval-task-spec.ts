@@ -2,11 +2,26 @@
  * Golden evals for Task Spec Engine (compose quality before execute).
  * Exit 1 if accuracy below threshold.
  */
+import * as path from "path";
 import {
   buildTaskSpec,
   needsClarify,
   planToolsFromSpec,
 } from "../src/controlplane/taskSpec.js";
+import { isSamHarnessWorkspace } from "../src/lib/reviewPackDir.js";
+
+/** Path includes needle, or needle means harness workspace and path is this repo. */
+function pathIncludesHarnessAware(candidate: string, needle: string): boolean {
+  if (candidate.toLowerCase().includes(needle.toLowerCase())) return true;
+  if (
+    /sam-?harness/i.test(needle) &&
+    isSamHarnessWorkspace() &&
+    path.resolve(candidate) === path.resolve(process.cwd())
+  ) {
+    return true;
+  }
+  return false;
+}
 
 type Case = {
   name: string;
@@ -270,7 +285,7 @@ for (const c of cases) {
       c.expectStepsCovered.every((t) => stepsCrit.tools.includes(t)));
   const okTargetIn =
     !c.expectTargetIncludes ||
-    spec.targetRepo.toLowerCase().includes(c.expectTargetIncludes.toLowerCase());
+    pathIncludesHarnessAware(spec.targetRepo, c.expectTargetIncludes);
   const okTargetEx =
     !c.expectTargetExcludes ||
     !spec.targetRepo.toLowerCase().includes(c.expectTargetExcludes.toLowerCase());
