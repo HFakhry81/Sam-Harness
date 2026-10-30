@@ -1,6 +1,7 @@
 .env
 .env.*
 !.env.example
+.sam-harness-installed
 .controlplane-token
 workspace-roots.json
 mcp.json
