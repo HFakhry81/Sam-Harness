@@ -1,16 +1,10 @@
 @echo off
-setlocal
+setlocal EnableExtensions
+chcp 65001 >nul
 title Sam-Harness — pull Ollama models
-echo   Pulling default local models (may take a while)...
-where ollama >nul 2>&1
-if errorlevel 1 (
-  echo   [X] ollama not in PATH. Install from https://ollama.com/download
-  pause
-  exit /b 1
-)
-ollama pull qwen2.5-coder:1.5b
-ollama pull gemma3:1b
-echo.
-echo   [OK] Models requested. Optional cloud: set OLLAMA_API_KEY in .env
+cd /d "%~dp0"
+set "SAM_TOOLS_NOPAUSE=1"
+call "%~dp0Sam-Harness-Manager.cmd" -Action pull-models %*
+set "ERR=%ERRORLEVEL%"
 pause
-endlocal
+endlocal & exit /b %ERR%
