@@ -457,6 +457,55 @@ body {
   line-height: 1.45;
 }
 
+.path-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.75rem 1rem;
+  margin: 0.35rem 0 1.1rem;
+}
+
+.path-badge,
+.path-chip {
+  display: inline-flex;
+  align-items: center;
+  border: 1px solid var(--line-strong);
+  border-radius: 999px;
+  padding: 0.2rem 0.65rem;
+  font-size: 0.75rem;
+  font-weight: 650;
+  letter-spacing: 0.02em;
+  background: color-mix(in oklab, var(--panel) 80%, transparent);
+}
+
+.path-badge[data-path="quick"],
+.path-chip[data-path="quick"] {
+  border-color: color-mix(in oklab, #2f9e44 55%, var(--line-strong));
+  color: #2f9e44;
+}
+
+.path-badge[data-path="web"],
+.path-chip[data-path="web"] {
+  border-color: color-mix(in oklab, #1971c2 55%, var(--line-strong));
+  color: #1971c2;
+}
+
+.path-badge[data-path="agency"],
+.path-chip[data-path="agency"] {
+  border-color: color-mix(in oklab, #e8590c 45%, var(--line-strong));
+  color: #e8590c;
+}
+
+.path-hint {
+  color: var(--muted);
+  font-size: 0.82rem;
+}
+
+.check.force-agency {
+  margin: 0;
+  font-size: 0.82rem;
+}
+
 .actions {
   display: flex;
   flex-wrap: wrap;

@@ -17,6 +17,7 @@ export type TrustApprovalKind =
   | "destructive_fs"
   | "email_send"
   | "spend"
+  | "network_egress"
   | "desktop_sensitive"
   | "desktop:destructive"
   | "desktop:financial"
@@ -211,6 +212,37 @@ export function requireEmailSendApproval(input: {
     autoEnvFlags: ["APPROVE_COMMS", "APPROVE_TRUST"],
     runId: input.runId,
     meta: { draftId: input.draftId, to: input.to, subject: input.subject },
+  });
+}
+
+/**
+ * Outbound HTTP for quick-path web research.
+ * Blocked entirely when allowNetworkEgress=false; optional HITL when
+ * requireApprovalNetworkEgress=true.
+ */
+export function requireNetworkEgressApproval(input: {
+  purpose: string;
+  approved?: boolean | string;
+  runId?: string;
+}): ApprovalDecision {
+  const policy = getEffectiveTrustPolicy();
+  if (policy.allowNetworkEgress === false) {
+    return {
+      ok: false,
+      required: true,
+      message: "Network egress disabled by trust policy (SAM_ALLOW_NETWORK_EGRESS=0)",
+    };
+  }
+  if (!policy.requireApprovalNetworkEgress) {
+    return { ok: true, required: false };
+  }
+  return resolveWithFlags({
+    kind: "network_egress",
+    subject: `network:${input.purpose.slice(0, 120)}`,
+    approved: input.approved,
+    autoEnvFlags: ["APPROVE_NETWORK", "APPROVE_TRUST"],
+    runId: input.runId,
+    meta: { purpose: input.purpose },
   });
 }
 

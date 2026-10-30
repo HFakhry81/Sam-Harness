@@ -35,6 +35,7 @@ export {
 export {
   requireDestructiveFsApproval,
   requireEmailSendApproval,
+  requireNetworkEgressApproval,
   requireSpendApproval,
   requireDesktopSensitiveApproval,
   isOutsideAgentHome,

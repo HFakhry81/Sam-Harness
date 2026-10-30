@@ -18,6 +18,9 @@ Under `SAM_OUTPUT_HOME` — usually `Documents/Sam-Harness`, with numbered packs
 **Difference between help role and product Help?**  
 Role `help` writes `help-system-spec.md` inside an analysis pack. Product Help is `docs/help` + `pnpm run help` + the UI tab.
 
+**Why did a greeting run the full agency?**  
+It used to. Now greetings and simple questions take the **Quick** path (local model). Check **Run as full agency task** to force the pipeline. See [`quick-path`](quick-path.md).
+
 **Can it exceed the $0.50 cap?**  
 Not automatically. Raise the cap in the hybrid profile if you want; the system refuses charges that would exceed the cap.
 

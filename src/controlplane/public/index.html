@@ -144,6 +144,15 @@
             السماح لاحقاً بتنفيذ على كود العميل (مع GO صريح عند التشغيل)
           </label>
 
+          <div class="path-row" id="pathRow">
+            <span class="path-badge" id="pathBadge" data-path="agency" title="">Agency</span>
+            <span class="path-hint" id="pathHint" data-i18n="compose.pathHint">المسار المتوقع بعد المعاينة</span>
+            <label class="check force-agency" for="forceAgency">
+              <input type="checkbox" id="forceAgency" />
+              <span data-i18n="compose.forceAgency">تشغيل كوكالة كاملة</span>
+            </label>
+          </div>
+
           <div class="actions">
             <button type="button" class="btn ghost" id="btnPreview" data-i18n="compose.preview">معاينة Spec</button>
             <button type="button" class="btn ghost" id="btnSave" data-i18n="compose.save">احفظ Task</button>
