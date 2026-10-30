@@ -15,6 +15,7 @@ import {
   teamConfigSummary,
   validateTeamConfig,
 } from "../../agency/teamConfig.js";
+import { validateTeamModelPolicy } from "../../agency/modelPolicy.js";
 import { effectiveRoutingDecisions } from "../../agent/models.js";
 import { loadHybridProfile } from "../../controlplane/hybridProfile.js";
 import {
@@ -299,11 +300,18 @@ function checkTeamConfig(cwd: string): DoctorCheck {
       };
     }
     const summary = teamConfigSummary(cwd);
+    const modelIssues = validateTeamModelPolicy(cwd);
+    const modelWarn = modelIssues.length
+      ? ` | WARN long-form tiny models: ${modelIssues
+          .slice(0, 3)
+          .map((i) => `${i.roleId}=${i.model}`)
+          .join(", ")}`
+      : "";
     return {
       id: "team",
       title: "Team config",
-      severity: "ok",
-      detail: `${summary.enabledCount}/${summary.roleCount} roles | pipeline ${summary.downstreamOrder.join("->")}`,
+      severity: modelWarn ? "warn" : "ok",
+      detail: `${summary.enabledCount}/${summary.roleCount} roles | pipeline ${summary.downstreamOrder.join("->")}${modelWarn}`,
     };
   } catch (e: any) {
     return {

@@ -23,7 +23,7 @@ import {
   resolveRoleModels,
   type TeamRoleConfig,
 } from "./teamConfig.js";
-import { scanRepoEvidence } from "./evidence.js";
+import { scanRepoEvidence, scanRepoEvidenceAsync } from "./evidence.js";
 import { MAX_LOOPS, runReviewGraph } from "./reviewGraph.js";
 import { syncDeliveryBoardFromBacklog } from "./delivery/sync.js";
 import { writeGoNoGoTemplate } from "./delivery/goNoGo.js";
@@ -32,6 +32,12 @@ import {
   goalWantsBookingBlueprint,
   isSamHarnessSelfGoal,
 } from "./goalFidelity.js";
+import {
+  extractGoalPaths,
+  primarySpecRoot,
+  primaryTargetRepo,
+} from "./pathExtract.js";
+import { chooseNonDegenerateDraft } from "./repetitionGuard.js";
 import { learningContextBlock } from "../controlplane/projectMemory.js";
 import { withLanguageDirective } from "../lib/i18n/index.js";
 import type { AgencyRunResult, Engagement } from "./types.js";
@@ -114,7 +120,15 @@ export async function runAgencyArchitecture(task: string): Promise<AgencyRunResu
       ? taskConfig.body
       : ""
   );
-  let targetRepoAbs = resolveTargetRepoPath(taskConfig.targetRepo);
+  const fullGoalText =
+    (typeof taskConfig.body === "string" && taskConfig.body.trim()
+      ? taskConfig.body
+      : "") || task;
+  const goalPaths = extractGoalPaths(fullGoalText || userGoalEarly || task);
+  let targetRepoAbs = resolveTargetRepoPath(
+    primaryTargetRepo(goalPaths, taskConfig.targetRepo) || taskConfig.targetRepo
+  );
+  const specRoot = primarySpecRoot(goalPaths);
   // Hard guard: self-goals never archive under a foreign client docs tree
   if (
     isSamHarnessSelfGoal(userGoalEarly || taskConfig.title || "") &&
@@ -133,26 +147,66 @@ export async function runAgencyArchitecture(task: string): Promise<AgencyRunResu
       targetRepoAbs = process.cwd();
     }
   }
+  const userGoal =
+    extractUserGoal(task) ||
+    userGoalEarly ||
+    goalPaths.goalText ||
+    taskConfig.title;
+
   const engagement: Engagement = {
     id: `eng-${Date.now().toString(36)}`,
     clientName: "UpNexa",
     projectName: path.basename(targetRepoAbs) || "client-project",
     targetRepo: targetRepoAbs,
-    docsRoot: defaultProjectDocsRoot(targetRepoAbs),
-    goal: taskConfig.title,
+    docsRoot: specRoot || defaultProjectDocsRoot(targetRepoAbs),
+    goal: userGoal.slice(0, 2000),
     route: "architecture",
     createdAt: new Date().toISOString(),
+    goalPaths: {
+      targetRepos: goalPaths.targetRepos.map((p) => p.normalized),
+      specRoots: goalPaths.specRoots.map((p) => p.normalized),
+      other: goalPaths.other.map((p) => p.normalized),
+    },
+    specRoot: specRoot || undefined,
   };
   fs.writeFileSync("engagement.json", JSON.stringify(engagement, null, 2), "utf-8");
-  ok("Intake", `engagement ${engagement.id} → ${engagement.targetRepo}`);
+  ok(
+    "Intake",
+    `engagement ${engagement.id} → repo=${engagement.targetRepo}` +
+      (specRoot ? ` spec=${specRoot}` : "")
+  );
 
-  const userGoal = extractUserGoal(task) || userGoalEarly;
-
-  // Evidence scout (local, $0) — goal-aware for Control Plane / memory / UI asks
-  live("Evidence Scout", "Scanning target repo for citable paths...");
-  const evidence = scanRepoEvidence(engagement.targetRepo, { goal: userGoal });
+  // Evidence scout v2 (local) — repo index + spec REQs + locale/currency
+  live("Evidence Scout", "Indexing repo + ingesting spec (grounded v2)...");
+  let evidence = await scanRepoEvidenceAsync(engagement.targetRepo, {
+    goal: userGoal,
+    specRoot: specRoot || undefined,
+  });
+  // Fallback to sync if async somehow empty
+  if (!evidence.hits.length && !evidence.spec?.requirements.length) {
+    evidence = scanRepoEvidence(engagement.targetRepo, {
+      goal: userGoal,
+      specRoot: specRoot || undefined,
+    });
+  }
+  if (evidence.localeCurrency) {
+    engagement.locale = evidence.localeCurrency.locale;
+    engagement.currency = evidence.localeCurrency.currency;
+    fs.writeFileSync("engagement.json", JSON.stringify(engagement, null, 2), "utf-8");
+  }
   fs.writeFileSync("evidence-pack.md", evidence.summaryMarkdown, "utf-8");
-  ok("Evidence Scout", `${evidence.hits.length} hits → evidence-pack.md`);
+  fs.writeFileSync("evidence.json", JSON.stringify(evidence.json, null, 2), "utf-8");
+  if (evidence.reqMatrix) {
+    fs.writeFileSync(
+      "REQ_TRACEABILITY.md",
+      evidence.reqMatrix.markdown,
+      "utf-8"
+    );
+  }
+  ok(
+    "Evidence Scout",
+    `${evidence.hits.length} hits · REQs=${evidence.spec?.requirements.length || 0} · currency=${evidence.localeCurrency?.currency || "?"} → evidence-pack.md + evidence.json`
+  );
 
   const brief = `${task}\n${loadBriefExtras(task)}`;
   const loopDir = path.join(process.cwd(), "review-loop");
@@ -169,6 +223,8 @@ export async function runAgencyArchitecture(task: string): Promise<AgencyRunResu
     evidenceMarkdown: evidence.summaryMarkdown,
     loopDir,
     userGoal,
+    targetRepo: engagement.targetRepo,
+    reqCoverage: evidence.reqMatrix?.coverageRatio ?? 1,
   });
 
   fs.writeFileSync(
@@ -270,15 +326,23 @@ ${clip(brief, 4000)}`,
     }
     if (role.id === "verifier") {
       live("CEO Verifier", "Verify deliverables...");
-      ctx.finalReport = await invoke(
+      const draft = await invoke(
         ceo,
         `Verify agency pack vs task. Audit gate=APPROVED.
 Task: ${clip(task, 2500)}
 Strategy: ${clip(review.strategy, 1000)}
 Audit: ${clip(review.auditReport, 600)}
 Blueprint: ${clip(ctx.layeredBlueprint, 1000)}
-Reply [VERIFIED] or [GAPS] + checklist.`
+Reply [VERIFIED] or [GAPS] + checklist. Be concise — no repeated lines.`
       );
+      const picked = chooseNonDegenerateDraft(draft, review.strategy);
+      ctx.finalReport = picked.usedFallback
+        ? `${draft}\n\n---\n[DEGENERATION_GUARD] Regenerated text was repetitive; kept prior strategy excerpt + flag.\n\n${picked.text.slice(0, 2000)}`
+        : picked.text;
+      if (!picked.report.ok) {
+        warn("Verifier", `final-report degeneration: ${picked.report.reason}`);
+        ctx.finalReport += `\n\n[DEGENERATION_FLAG] ${picked.report.reason}\n`;
+      }
       fs.writeFileSync("final-report.md", ctx.finalReport, "utf-8");
       return ctx;
     }
