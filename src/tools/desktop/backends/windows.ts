@@ -62,8 +62,8 @@ try {
       $name = $child.Current.Name
       $h = [string]$child.Current.NativeWindowHandle
       if ($name -and $h -and $h -ne '0') {
-        $pid = 0; try { $pid = $child.Current.ProcessId } catch {}
-        $proc = ''; try { $proc = (Get-Process -Id $pid -ErrorAction SilentlyContinue).ProcessName } catch {}
+        $procId = 0; try { $procId = $child.Current.ProcessId } catch {}
+        $proc = ''; try { $proc = (Get-Process -Id $procId -ErrorAction SilentlyContinue).ProcessName } catch {}
         $rect = $child.Current.BoundingRectangle
         if ($seen.ContainsKey($h)) {
           for ($i = 0; $i -lt $out.Count; $i++) {
@@ -78,7 +78,7 @@ try {
             handle = $h
             title = $name
             processName = $proc
-            pid = $pid
+            pid = $procId
             bounds = @{ x=[int]$rect.X; y=[int]$rect.Y; width=[int]$rect.Width; height=[int]$rect.Height }
           }
         }
@@ -161,13 +161,13 @@ public class WinFocus {
   [WinFocus]::SetForegroundWindow([IntPtr]$target.Current.NativeWindowHandle) | Out-Null
 }
 $rect = $target.Current.BoundingRectangle
-$pid = 0; try { $pid = $target.Current.ProcessId } catch {}
-$proc = ''; try { $proc = (Get-Process -Id $pid -ErrorAction SilentlyContinue).ProcessName } catch {}
+$procId = 0; try { $procId = $target.Current.ProcessId } catch {}
+$proc = ''; try { $proc = (Get-Process -Id $procId -ErrorAction SilentlyContinue).ProcessName } catch {}
 @{
   handle = [string]$target.Current.NativeWindowHandle
   title = $target.Current.Name
   processName = $proc
-  pid = $pid
+  pid = $procId
   bounds = @{ x=[int]$rect.X; y=[int]$rect.Y; width=[int]$rect.Width; height=[int]$rect.Height }
 } | ConvertTo-Json -Compress
 `.trim();
