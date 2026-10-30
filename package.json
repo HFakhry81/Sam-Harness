@@ -4,7 +4,11 @@
   "description": "Hybrid AI agency — Control Plane, LangGraph review, Windows desktop operator",
   "main": "index.js",
   "scripts": {
-    "test": "echo \"Error: no test specified\" && exit 1",
+    "ensure-task": "tsx scripts/ensure-task.ts",
+    "typecheck": "tsx scripts/ensure-task.ts && tsc --noEmit",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "smoke": "tsx scripts/ensure-task.ts && tsx scripts/smoke-agency.ts && tsx scripts/smoke-delivery.ts && tsx scripts/smoke-capabilities.ts && tsx scripts/smoke-ops-planner.ts && tsx scripts/smoke-controlplane.ts",
     "start": "tsx index.ts",
     "agency": "tsx index.ts --yes",
     "ui": "tsx src/controlplane/server.ts",
@@ -23,11 +27,15 @@
   "keywords": [],
   "author": "",
   "license": "ISC",
+  "engines": {
+    "node": ">=20",
+    "pnpm": ">=9.0.0"
+  },
   "devEngines": {
     "packageManager": {
       "name": "pnpm",
       "version": "11.23.0",
-      "onFail": "download"
+      "onFail": "warn"
     }
   },
   "packageManager": "pnpm@11.23.0",
@@ -42,6 +50,7 @@
   "devDependencies": {
     "@types/node": "^26.6.5",
     "tsx": "^4.23.15",
-    "typescript": "^7.0.2"
+    "typescript": "^7.0.2",
+    "vitest": "^3.2.4"
   }
 }

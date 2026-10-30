@@ -2,6 +2,26 @@ import * as fs from "fs";
 import * as path from "path";
 
 /**
+ * True when cwd (or given root) is the Sam-Harness project itself.
+ * Detects by folder name, package.json name, or SamHarness.bat — so CI
+ * checkouts named `workspace` / `Sam-Harness` / clones all work.
+ */
+export function isSamHarnessWorkspace(root = process.cwd()): boolean {
+  const abs = path.normalize(root);
+  if (/sam-harness/i.test(path.basename(abs))) return true;
+  if (fs.existsSync(path.join(abs, "SamHarness.bat"))) return true;
+  try {
+    const pkg = JSON.parse(fs.readFileSync(path.join(abs, "package.json"), "utf-8")) as {
+      name?: string;
+    };
+    if (/sam-harness/i.test(String(pkg.name || ""))) return true;
+  } catch {
+    /* ignore */
+  }
+  return false;
+}
+
+/**
  * Next review pack folder under a project's docs/metadata directory:
  *   "Sam-Harness no.1", "Sam-Harness no.2", ...
  */

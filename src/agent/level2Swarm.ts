@@ -124,6 +124,8 @@ export type Level2Result = {
   helpSystemSpec: string;
   marketingCampaign: string;
   finalReport: string;
+  packDir?: string;
+  reviewNo?: number;
 };
 
 /**
@@ -548,9 +550,13 @@ ${clip(backlog, 5000)}`
     ok("Architect", "Gap matrix + backlog + sprint + P0 ticket saved");
   }
 
+  let archivedPackDir: string | undefined;
+  let archivedReviewNo: number | undefined;
   try {
     const docsRoot = defaultProjectDocsRoot(taskConfig.targetRepo);
     const { dir: packDir, reviewNo } = resolveNextSamHarnessReviewDir(docsRoot);
+    archivedPackDir = packDir;
+    archivedReviewNo = reviewNo;
     const packFiles = [
       "ceo-draft.md",
       "audit-report.md",
@@ -621,5 +627,7 @@ Target repo: \`${taskConfig.targetRepo}\`
     helpSystemSpec,
     marketingCampaign,
     finalReport,
+    packDir: archivedPackDir,
+    reviewNo: archivedReviewNo,
   };
 }

@@ -5,12 +5,25 @@ import * as path from "path";
 import { buildTaskSpec } from "../src/controlplane/taskSpec.js";
 import {
   defaultProjectDocsRoot,
+  isSamHarnessWorkspace,
   resolveTargetRepoPath,
 } from "../src/lib/reviewPackDir.js";
 import {
   extractUserGoal,
   isSamHarnessSelfGoal,
 } from "../src/agency/goalFidelity.js";
+
+function docsIncludesHarnessAware(docs: string, needle: string): boolean {
+  if (docs.toLowerCase().includes(needle.toLowerCase())) return true;
+  if (
+    /sam-?harness/i.test(needle) &&
+    isSamHarnessWorkspace() &&
+    path.resolve(docs).startsWith(path.resolve(process.cwd()))
+  ) {
+    return true;
+  }
+  return false;
+}
 
 type Case = {
   name: string;
@@ -54,7 +67,7 @@ for (const c of cases) {
   const abs = resolveTargetRepoPath(spec.targetRepo);
   const docs = defaultProjectDocsRoot(abs);
   const okSelf = self === c.expectSelf;
-  const okIn = docs.toLowerCase().includes(c.expectDocsIncludes.toLowerCase());
+  const okIn = docsIncludesHarnessAware(docs, c.expectDocsIncludes);
   const okEx =
     !c.expectDocsExcludes ||
     !docs.toLowerCase().includes(c.expectDocsExcludes.toLowerCase());

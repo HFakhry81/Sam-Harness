@@ -1,34 +1,40 @@
 /**
  * Production hardening gates — run critical evals in one shot.
+ * Cross-platform: invokes local tsx via node (no pnpm subprocess).
  * Usage: pnpm run smoke:prod-gates
  */
 import { spawnSync } from "child_process";
+import { createRequire } from "module";
 import * as path from "path";
+import { fileURLToPath } from "url";
 
-const root = process.cwd();
-const gates = [
-  "eval:task-spec",
-  "eval:goal-fidelity",
-  "eval:evidence-scout",
-  "eval:pack-home",
+const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
+const require = createRequire(import.meta.url);
+const tsxCli = require.resolve("tsx/cli");
+
+const gates: Array<{ name: string; script: string }> = [
+  { name: "eval:task-spec", script: "scripts/eval-task-spec.ts" },
+  { name: "eval:goal-fidelity", script: "scripts/eval-goal-fidelity.ts" },
+  { name: "eval:evidence-scout", script: "scripts/eval-evidence-scout.ts" },
+  { name: "eval:pack-home", script: "scripts/eval-pack-home.ts" },
 ];
 
 console.log("smoke:prod-gates — Sam-Harness production hardening\n");
 let failed = 0;
 for (const g of gates) {
-  console.log(`── ${g} ──`);
-  const r = spawnSync(
-    process.platform === "win32" ? "pnpm.cmd" : "pnpm",
-    ["run", g],
-    { cwd: root, encoding: "utf-8", shell: true }
-  );
+  console.log(`── ${g.name} ──`);
+  const r = spawnSync(process.execPath, [tsxCli, path.join(root, g.script)], {
+    cwd: root,
+    encoding: "utf-8",
+    env: process.env,
+  });
   if (r.stdout) process.stdout.write(r.stdout);
   if (r.stderr) process.stderr.write(r.stderr);
   if (r.status !== 0) {
     failed += 1;
-    console.error(`GATE FAIL: ${g} (exit ${r.status})\n`);
+    console.error(`GATE FAIL: ${g.name} (exit ${r.status})\n`);
   } else {
-    console.log(`GATE OK: ${g}\n`);
+    console.log(`GATE OK: ${g.name}\n`);
   }
 }
 

@@ -122,6 +122,7 @@ function serveStatic(reqPath: string, res: http.ServerResponse) {
 }
 
 async function readTaskConfig(): Promise<{
+  id: string | null;
   route: UiRoute | null;
   title: string | null;
   targetRepo: string | null;
@@ -133,13 +134,14 @@ async function readTaskConfig(): Promise<{
     );
     const cfg = mod.taskConfig || mod.default;
     return {
+      id: cfg?.id ?? null,
       route: cfg?.route ?? null,
       title: cfg?.title ?? null,
       targetRepo: cfg?.targetRepo ?? null,
       body: cfg?.body,
     };
   } catch {
-    return { route: null, title: null, targetRepo: null };
+    return { id: null, route: null, title: null, targetRepo: null };
   }
 }
 
@@ -452,13 +454,38 @@ async function handleRun(req: http.IncomingMessage, res: http.ServerResponse) {
     const cfg = await readTaskConfig();
     if (cfg.title) {
       currentDraft = {
-        id: "from-disk",
+        id: cfg.id || "from-disk",
         route: (cfg.route as UiRoute) || "architecture",
         title: cfg.title,
         targetRepo: cfg.targetRepo || "",
         packDir: "",
         body: cfg.body || "",
         allowClientCodeEdits: false,
+        spec: {
+          id: cfg.id || "from-disk",
+          locale: "mixed",
+          route: (cfg.route as UiRoute) || "architecture",
+          intent: "unknown",
+          confidence: 1,
+          title: cfg.title,
+          goal: cfg.body || "",
+          rawPrompt: cfg.body || "",
+          entities: { sources: [], destinations: [], names: [], constraints: [] },
+          planSteps: [],
+          workspaceMode: "code",
+          roots: [],
+          risk: "low",
+          successCriteria: [],
+          forbidden: [],
+          assumptions: [],
+          needsClarification: [],
+          targetRepo: cfg.targetRepo || "",
+          packDir: "",
+          allowClientCodeEdits: false,
+        },
+        needsClarification: [],
+        confidence: 1,
+        ready: true,
       };
     }
   }
@@ -834,7 +861,7 @@ const server = http.createServer(async (req, res) => {
       };
       try {
         const r = openArtifactInOs(ROOT, body.path || "", body.mode || "file");
-        sendJson(res, 200, { ok: true, ...r });
+        sendJson(res, 200, r);
       } catch (e: any) {
         sendJson(res, 400, { ok: false, error: e?.message || String(e) });
       }
