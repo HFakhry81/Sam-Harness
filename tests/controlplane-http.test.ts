@@ -2,17 +2,16 @@
  * HTTP-level auth checks against a real Control Plane server process.
  */
 import { spawn, type ChildProcess } from "child_process";
-import * as fs from "fs";
-import * as os from "os";
 import * as path from "path";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import { makeIsolatedCpEnv } from "./helpers/isolatedCpEnv.js";
 
 const PORT = 18787;
 const TOKEN = "phase1-test-owner-token-0123456789abcdef";
 const ROOT = process.cwd();
 
 let child: ChildProcess | null = null;
-let tmpEnvDir = "";
+let cpIso: ReturnType<typeof makeIsolatedCpEnv> | null = null;
 
 async function waitForHealth(ms = 15000): Promise<void> {
   const start = Date.now();
@@ -29,17 +28,14 @@ async function waitForHealth(ms = 15000): Promise<void> {
 }
 
 beforeAll(async () => {
-  tmpEnvDir = fs.mkdtempSync(path.join(os.tmpdir(), "sh-cp-"));
-  // Use project root but isolated token via env (no write to repo token file needed)
+  cpIso = makeIsolatedCpEnv({
+    CONTROL_PLANE_PORT: String(PORT),
+    CONTROL_PLANE_TOKEN: TOKEN,
+  });
   const tsxBin = path.join(ROOT, "node_modules", "tsx", "dist", "cli.mjs");
   child = spawn(process.execPath, [tsxBin, path.join(ROOT, "src/controlplane/server.ts")], {
     cwd: ROOT,
-    env: {
-      ...process.env,
-      CONTROL_PLANE_PORT: String(PORT),
-      CONTROL_PLANE_TOKEN: TOKEN,
-      CONTROL_PLANE_NO_BROWSER: "1",
-    },
+    env: cpIso.env,
     stdio: ["ignore", "pipe", "pipe"],
   });
   await waitForHealth();
@@ -55,7 +51,7 @@ afterAll(async () => {
       /* ignore */
     }
   }
-  if (tmpEnvDir) fs.rmSync(tmpEnvDir, { recursive: true, force: true });
+  cpIso?.cleanup();
 });
 
 describe("Control Plane HTTP auth", () => {

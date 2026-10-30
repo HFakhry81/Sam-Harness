@@ -34,7 +34,11 @@ export function openSqlite(filePath: string): SqlDriver {
   }
   const db = new DatabaseSync(filePath);
   try {
+    // WAL + busy_timeout: parallel Vitest workers / CP children must not
+    // fail immediately with SQLITE_BUSY ("database is locked").
     db.exec("PRAGMA journal_mode = WAL;");
+    db.exec("PRAGMA busy_timeout = 8000;");
+    db.exec("PRAGMA synchronous = NORMAL;");
     db.exec("PRAGMA foreign_keys = ON;");
   } catch {
     /* memory / restricted */

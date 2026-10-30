@@ -18,6 +18,7 @@ import {
   searchHelp,
   verifyHelpIntegrity,
 } from "../src/lib/help/index.js";
+import { makeIsolatedCpEnv } from "./helpers/isolatedCpEnv.js";
 
 const ROOT = process.cwd();
 
@@ -135,17 +136,17 @@ describe("Help API", () => {
   const PORT = 18797;
   const TOKEN = "help-system-test-token-0123456789abcdef";
   let child: ChildProcess | null = null;
+  let cpIso: ReturnType<typeof makeIsolatedCpEnv> | null = null;
 
   beforeAll(async () => {
+    cpIso = makeIsolatedCpEnv({
+      CONTROL_PLANE_PORT: String(PORT),
+      CONTROL_PLANE_TOKEN: TOKEN,
+    });
     const tsxBin = path.join(ROOT, "node_modules", "tsx", "dist", "cli.mjs");
     child = spawn(process.execPath, [tsxBin, path.join(ROOT, "src/controlplane/server.ts")], {
       cwd: ROOT,
-      env: {
-        ...process.env,
-        CONTROL_PLANE_PORT: String(PORT),
-        CONTROL_PLANE_TOKEN: TOKEN,
-        CONTROL_PLANE_NO_BROWSER: "1",
-      },
+      env: cpIso.env,
       stdio: ["ignore", "pipe", "pipe"],
     });
     const start = Date.now();
@@ -171,6 +172,7 @@ describe("Help API", () => {
         /* ignore */
       }
     }
+    cpIso?.cleanup();
   });
 
   it("GET /api/help lists topics without auth", async () => {

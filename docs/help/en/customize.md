@@ -27,6 +27,26 @@ Audit log entries: `team_config.save`, `team_role.upsert`, `team_role.delete`.
 
 Env model overrides: `SAM_ROLE_<ROLE>_MODEL` / `_CLOUD_MODEL` / `_FREE_MODEL`.
 
+## 1b) Visual workflow editor (Phase 9)
+
+Control Plane → **Workflow graph** tab: offline SVG canvas (no CDN) showing router, operational path, intake, evidence, review loop, GO gate, specialists, delivery, and Level-3.
+
+- Drag nodes, reorder specialists, add custom roles, enable/disable, delete custom only
+- Side panel edits prompt / models / prefersCloud / tools with validation
+- **Locked:** review loop and GO gate — clear errors on bypass attempts
+- Draft vs apply, undo/redo, export/import JSON, reset to defaults
+- Layout file `config/workflow-layout.json` is separate from semantic `team.json`
+- Live routing badges from `/api/routing/effective`
+
+```bash
+curl -H "Authorization: Bearer $TOKEN" http://127.0.0.1:8787/api/workflow
+curl -X PUT -H "Authorization: Bearer $TOKEN" -H "Content-Type: application/json" \
+  http://127.0.0.1:8787/api/workflow/graph \
+  -d '{"graph":{…}}'
+```
+
+See `docs/PHASE9_VISUAL_EDITOR.md`.
+
 ## 2) Environment (`.env`)
 
 Copy `.env.example` → `.env`. Key knobs:
@@ -91,5 +111,5 @@ From the Control Plane — no code changes needed.
 
 ## Still not implemented
 
-- Graphical LangGraph node editor (drag-and-drop graph canvas)  
 - Full AT-SPI / Accessibility parity with Windows UIA on every distro without installing OS packages
+- Free-form editing of every LangGraph edge outside the allowed post-GO specialist chain

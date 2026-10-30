@@ -33,14 +33,46 @@ export type Persistence = {
 let hub: Persistence | null = null;
 let initPromise: Promise<Persistence> | null = null;
 
+function underVitestOrTestIsolation(): boolean {
+  return (
+    process.env.VITEST === "true" ||
+    process.env.SAM_TEST_ISOLATION === "1" ||
+    Boolean(process.env.VITEST_WORKER_ID)
+  );
+}
+
 function resolveSqlitePath(tenantId: string): string {
   const envPath = String(process.env.SAM_DATABASE_PATH || "").trim();
   if (envPath === ":memory:") return ":memory:";
   if (envPath) {
-    fs.mkdirSync(path.dirname(path.resolve(envPath)), { recursive: true });
-    return path.resolve(envPath);
+    const resolved = path.resolve(envPath);
+    // Soft guard: never open the owner's classic data-dir DB during tests
+    // even if a stale env pointed there before isolation was pinned.
+    if (underVitestOrTestIsolation() && looksLikeOwnerDataDb(resolved)) {
+      throw new Error(
+        `Refusing to open owner data-dir SQLite under Vitest: ${resolved}. ` +
+          `Set SAM_DATABASE_PATH to :memory: or a temp path (tests/setup.ts).`
+      );
+    }
+    fs.mkdirSync(path.dirname(resolved), { recursive: true });
+    return resolved;
+  }
+  if (underVitestOrTestIsolation()) {
+    throw new Error(
+      "SAM_DATABASE_PATH must be set under Vitest/SAM_TEST_ISOLATION " +
+        "(tests/setup.ts). Refusing to open the user data dir."
+    );
   }
   return tenantDbPath(tenantId);
+}
+
+/** Heuristic: classic ~/Documents/Sam-Harness/state/sam-harness.sqlite layout. */
+function looksLikeOwnerDataDb(resolved: string): boolean {
+  const norm = resolved.replace(/\\/g, "/").toLowerCase();
+  return (
+    norm.includes("/documents/sam-harness/state/") &&
+    norm.endsWith("sam-harness.sqlite")
+  );
 }
 
 function ensureTenant(driver: SqlDriver, tenantId: string): void {

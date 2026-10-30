@@ -21,6 +21,8 @@ From `AGENCY_ROLES` — eleven roles:
 | `operator` | Desktop Operator | desktop tool results (L1 operational path) |
 
 > **Phase 8:** `prefersCloud` and the hybrid profile `roles` map are consulted by live routing (cost cap still wins). Per-role models and downstream step order come from `config/team.json`. Real tool ACL lives in `ROLE_CAPABILITIES` / `OPERATOR_CAPABILITIES` (custom roles may declare tools).
+>
+> **Phase 9:** Control Plane **Workflow graph** tab draws the same spine and writes `team.json`, with positions in `workflow-layout.json`. Review loop and GO gate stay locked. See `docs/PHASE9_VISUAL_EDITOR.md`.
 
 The agency `help` role writes a help **spec artifact** after auditor approval — that is **not** the same as this in-product Help system (`docs/help` + CLI/API/UI).
 
