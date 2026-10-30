@@ -154,6 +154,46 @@ CREATE INDEX IF NOT EXISTS idx_prompt_cache_expires
   ON prompt_cache (expires_at);
 `,
   },
+  {
+    version: 3,
+    name: "phase6_audit_gates",
+    sql: `
+CREATE TABLE IF NOT EXISTS audit_log (
+  id TEXT PRIMARY KEY,
+  tenant_id TEXT NOT NULL,
+  seq INTEGER NOT NULL,
+  at TEXT NOT NULL,
+  category TEXT NOT NULL,
+  action TEXT NOT NULL,
+  run_id TEXT,
+  actor TEXT NOT NULL DEFAULT 'system',
+  detail TEXT NOT NULL DEFAULT '{}',
+  prev_hash TEXT NOT NULL,
+  entry_hash TEXT NOT NULL,
+  UNIQUE (tenant_id, seq)
+);
+
+CREATE INDEX IF NOT EXISTS idx_audit_tenant_seq ON audit_log (tenant_id, seq);
+CREATE INDEX IF NOT EXISTS idx_audit_run ON audit_log (run_id);
+CREATE INDEX IF NOT EXISTS idx_audit_category ON audit_log (tenant_id, category);
+
+CREATE TABLE IF NOT EXISTS gate_results (
+  id TEXT PRIMARY KEY,
+  tenant_id TEXT NOT NULL,
+  run_id TEXT NOT NULL,
+  step_id TEXT NOT NULL,
+  gate_id TEXT NOT NULL,
+  kind TEXT NOT NULL,
+  passed INTEGER NOT NULL,
+  attempts INTEGER NOT NULL DEFAULT 1,
+  at TEXT NOT NULL,
+  detail TEXT NOT NULL DEFAULT '{}',
+  escalated INTEGER NOT NULL DEFAULT 0
+);
+
+CREATE INDEX IF NOT EXISTS idx_gate_results_run ON gate_results (tenant_id, run_id, at);
+`,
+  },
 ];
 
 function pgAdapt(sql: string): string {

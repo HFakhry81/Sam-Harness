@@ -22,6 +22,8 @@ Filesystem tools use a **desktop-controller** sandbox: normal user environment (
 
 **Phase 5:** Near-zero model cost — difficulty-based routing (local → free → paid), exact SQLite prompt cache + provider cache hints, context compaction, accurate per-run/daily accounting with near-cap degradation (never exceed the $0.50 default daily cloud cap). See `docs/PHASE5_NEAR_ZERO_COST.md`.
 
+**Phase 6:** Verifiable gates & trust — acceptance gates per step (never silent success), HITL approvals for destructive FS / email / spend / sensitive desktop apps, hash-chained SQLite audit log + `pnpm run trust:verify`, run evidence bundles under `SAM_OUTPUT_HOME`. See `docs/PHASE6_GATES_TRUST.md`.
+
 ## Layout
 
 | Path | Role |
@@ -59,5 +61,6 @@ State defaults to SQLite under `SAM_OUTPUT_HOME/state/sam-harness.sqlite`. Set `
 - `docs/PHASE3_PRODUCTION_OPS.md`
 - `docs/PHASE4_DESKTOP_OPERATOR.md`
 - `docs/PHASE5_NEAR_ZERO_COST.md`
+- `docs/PHASE6_GATES_TRUST.md`
 - `docs/AGENCY_OPS.md`
 - `docs/engagements/EXAMPLE-CLIENT.md`
