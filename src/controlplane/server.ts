@@ -19,6 +19,15 @@ import {
 } from "./taskWriter.js";
 import { readTaskSpec } from "./taskSpec.js";
 import { listAllowlistRoots } from "../lib/paths.js";
+import { beginCostRun, endCostRun, getCostBudget } from "../lib/costLedger.js";
+import {
+  beginOutputRun,
+  cleanOutputTemp,
+  endOutputRun,
+  ensureOutputHome,
+  getOutputHome,
+  mirrorRunArtifacts,
+} from "../lib/outputHome.js";
 import {
   loadSession,
   readExecutionArtifacts,
@@ -49,11 +58,25 @@ import {
   readArtifactText,
 } from "./artifacts.js";
 import { appendRunLesson, parseRunQualityFlags } from "./runLessons.js";
+import {
+  authenticateRequest,
+  clearSessionCookieHeader,
+  createSession,
+  destroySession,
+  isAllowedHost,
+  isAllowedOrigin,
+  loadOrCreateOwnerToken,
+  parseCookies,
+  SESSION_COOKIE,
+  sessionCookieHeader,
+  timingSafeEqualString,
+} from "./auth.js";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const ROOT = path.resolve(__dirname, "..", "..");
 const PUBLIC = path.join(__dirname, "public");
 const PORT = Number(process.env.CONTROL_PLANE_PORT || 8787);
+const OWNER_TOKEN = loadOrCreateOwnerToken(ROOT);
 
 type RunMode = "agency" | "implement" | "smoke" | "legacy";
 type UiPhase = "idle" | "running" | "done";
@@ -263,6 +286,13 @@ function appendLog(text: string) {
 }
 
 async function finalizeRun(mode: RunMode, exitCode: number | null) {
+  try {
+    mirrorRunArtifacts(ROOT);
+  } catch {
+    /* non-fatal */
+  }
+  endCostRun();
+  endOutputRun();
   const endedAt = new Date().toISOString();
   if (lastRun) {
     lastRun.running = false;
@@ -513,6 +543,23 @@ async function handleRun(req: http.IncomingMessage, res: http.ServerResponse) {
     }
   }
 
+  // Cost-cap gate: cloud-only profile cannot start when daily budget is exhausted
+  const profile = loadHybridProfile(ROOT);
+  const budget = getCostBudget(ROOT);
+  if (profile.mode === "cloud" && budget.blocked) {
+    sendJson(res, 402, {
+      ok: false,
+      error:
+        budget.blockReason ||
+        `Cost cap exceeded ($${budget.spentUsd} / $${budget.capUsd}). Cloud runs are blocked.`,
+      code: "COST_CAP_EXCEEDED",
+      cost: budget,
+    });
+    return;
+  }
+
+  const runId = beginCostRun();
+  const outputRun = beginOutputRun(runId);
   const { cmd, args, env } = runArgsForMode(mode);
   runLogBuffer = "";
   smokePending = mode === "smoke" ? 2 : 0;
@@ -522,11 +569,25 @@ async function handleRun(req: http.IncomingMessage, res: http.ServerResponse) {
     running: true,
     phase: "running",
   };
-  broadcast("run", { type: "start", ...lastRun, cmd, args, phase: "running" });
+  broadcast("run", {
+    type: "start",
+    ...lastRun,
+    cmd,
+    args,
+    phase: "running",
+    runId,
+    cost: budget,
+    outputDir: outputRun.runDir,
+  });
 
   const child = spawn(cmd, args, {
     cwd: ROOT,
-    env: env || process.env,
+    env: {
+      ...(env || process.env),
+      SAM_HARNESS_RUN_ID: runId,
+      SAM_RUN_DIR: outputRun.runDir,
+      SAM_OUTPUT_HOME: getOutputHome(),
+    },
     shell: true,
   });
   activeChild = child;
@@ -626,11 +687,84 @@ function handleSse(_req: http.IncomingMessage, res: http.ServerResponse) {
   _req.on("close", () => sseClients.delete(id));
 }
 
+const PUBLIC_API = new Set(["/api/login", "/api/auth/status", "/api/logout"]);
+
 const server = http.createServer(async (req, res) => {
   try {
     const url = new URL(req.url || "/", `http://127.0.0.1:${PORT}`);
     const p = url.pathname;
     const method = req.method || "GET";
+
+    // —— Auth: login / status / logout (unauthenticated) ——
+    if (method === "POST" && p === "/api/login") {
+      if (!isAllowedHost(req.headers.host as string | undefined, PORT)) {
+        sendJson(res, 403, { ok: false, error: "Forbidden: invalid Host" });
+        return;
+      }
+      const origin = req.headers.origin as string | undefined;
+      if (origin && !isAllowedOrigin(origin, undefined, PORT)) {
+        sendJson(res, 403, { ok: false, error: "Forbidden: foreign Origin" });
+        return;
+      }
+      const body = JSON.parse((await readBody(req)) || "{}") as { token?: string };
+      const token = String(body.token || "").trim();
+      if (!token || !timingSafeEqualString(token, OWNER_TOKEN)) {
+        sendJson(res, 401, { ok: false, error: "Invalid owner token" });
+        return;
+      }
+      const sess = createSession();
+      res.writeHead(200, {
+        "Content-Type": "application/json; charset=utf-8",
+        "Cache-Control": "no-store",
+        "Set-Cookie": sessionCookieHeader(sess.id),
+      });
+      res.end(
+        JSON.stringify({
+          ok: true,
+          csrfToken: sess.csrfToken,
+          expiresAt: new Date(sess.expiresAt).toISOString(),
+        })
+      );
+      return;
+    }
+    if (method === "GET" && p === "/api/auth/status") {
+      const auth = authenticateRequest(req, OWNER_TOKEN, {
+        port: PORT,
+        requireCsrf: false,
+        allowMissingOriginWithBearer: true,
+      });
+      sendJson(res, 200, {
+        ok: true,
+        authenticated: auth.ok,
+        via: auth.ok ? auth.via : null,
+        csrfToken: auth.ok && auth.via === "session" ? auth.session?.csrfToken : null,
+      });
+      return;
+    }
+    if (method === "POST" && p === "/api/logout") {
+      const cookies = parseCookies(req.headers.cookie);
+      destroySession(cookies[SESSION_COOKIE]);
+      res.writeHead(200, {
+        "Content-Type": "application/json; charset=utf-8",
+        "Cache-Control": "no-store",
+        "Set-Cookie": clearSessionCookieHeader(),
+      });
+      res.end(JSON.stringify({ ok: true }));
+      return;
+    }
+
+    // —— Require auth for every other /api/* route ——
+    if (p.startsWith("/api/") && !PUBLIC_API.has(p)) {
+      const auth = authenticateRequest(req, OWNER_TOKEN, {
+        port: PORT,
+        requireCsrf: true,
+        allowMissingOriginWithBearer: true,
+      });
+      if (!auth.ok) {
+        sendJson(res, auth.status, { ok: false, error: auth.error, authRequired: true });
+        return;
+      }
+    }
 
     if (method === "GET" && p === "/api/health") {
       sendJson(res, 200, {
@@ -641,6 +775,7 @@ const server = http.createServer(async (req, res) => {
         lastRun,
         tasksInSession: session.entries.length,
         port: PORT,
+        auth: true,
       });
       return;
     }
@@ -664,9 +799,12 @@ const server = http.createServer(async (req, res) => {
     }
     if (method === "GET" && p === "/api/operator-context") {
       const spec = readTaskSpec(ROOT);
+      const layout = ensureOutputHome();
       sendJson(res, 200, {
         ok: true,
         allowlistRoots: listAllowlistRoots(),
+        outputHome: layout.home,
+        outputLayout: layout,
         workspaceMode: spec?.workspaceMode || (spec?.route === "operational" ? "operator" : "code"),
         taskRoots: spec?.roots || [],
         planSteps: spec?.planSteps || [],
@@ -755,9 +893,17 @@ const server = http.createServer(async (req, res) => {
       return;
     }
 
-    // —— P8 Hybrid profile ——
+    // —— P8 Hybrid profile + cost ledger ——
     if (method === "GET" && p === "/api/hybrid-profile") {
-      sendJson(res, 200, { ok: true, profile: loadHybridProfile(ROOT) });
+      sendJson(res, 200, {
+        ok: true,
+        profile: loadHybridProfile(ROOT),
+        cost: getCostBudget(ROOT),
+      });
+      return;
+    }
+    if (method === "GET" && p === "/api/cost-usage") {
+      sendJson(res, 200, { ok: true, cost: getCostBudget(ROOT) });
       return;
     }
     if (method === "POST" && p === "/api/hybrid-profile") {
@@ -767,7 +913,11 @@ const server = http.createServer(async (req, res) => {
         notes?: string;
       };
       const profile = saveHybridProfile(ROOT, body);
-      sendJson(res, 200, { ok: true, profile });
+      sendJson(res, 200, {
+        ok: true,
+        profile,
+        cost: getCostBudget(ROOT),
+      });
       return;
     }
 
@@ -902,10 +1052,30 @@ server.listen(PORT, "127.0.0.1", () => {
   } catch {
     /* ignore */
   }
+  const tokenHint =
+    process.env.CONTROL_PLANE_TOKEN?.trim()
+      ? "CONTROL_PLANE_TOKEN (env)"
+      : `.controlplane-token (${OWNER_TOKEN.slice(0, 8)}…)`;
+  try {
+    const layout = ensureOutputHome();
+    cleanOutputTemp();
+    console.log(`[Control Plane] Output home → ${layout.home}`);
+  } catch (e: any) {
+    console.warn(`[Control Plane] Output home init failed: ${e?.message || e}`);
+  }
   console.log(`[Control Plane] Sam-Harness UI → ${url}`);
   console.log(`[Control Plane] Project root → ${ROOT}`);
+  console.log(`[Control Plane] Auth required — owner token: ${tokenHint}`);
+  console.log(
+    `[Control Plane] Workspace roots (${listAllowlistRoots(ROOT).length}): ` +
+      listAllowlistRoots(ROOT)
+        .slice(0, 8)
+        .join(" | ") +
+      (listAllowlistRoots(ROOT).length > 8 ? " | …" : "")
+  );
   console.log(`[Control Plane] Session ${session.id} · ${session.entries.length} prior entries`);
   if (process.platform === "win32" && process.env.CONTROL_PLANE_NO_BROWSER !== "1") {
     spawn("cmd", ["/c", "start", "", url], { detached: true, stdio: "ignore" }).unref();
   }
 });
+

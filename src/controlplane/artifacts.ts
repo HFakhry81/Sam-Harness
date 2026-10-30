@@ -4,6 +4,7 @@
 import * as fs from "fs";
 import * as path from "path";
 import { spawn } from "child_process";
+import { getOutputLayout } from "../lib/outputHome.js";
 
 export type ArtifactKind = "report" | "plan" | "evidence" | "delivery" | "pack" | "log" | "other";
 
@@ -67,7 +68,11 @@ function toItem(root: string, abs: string): ArtifactItem | null {
   try {
     if (!fs.existsSync(abs) || !fs.statSync(abs).isFile()) return null;
     const st = fs.statSync(abs);
-    const rel = path.relative(root, abs).replace(/\\/g, "/");
+    let rel = path.relative(root, abs).replace(/\\/g, "/");
+    // Packs under SAM_OUTPUT_HOME may sit outside project root — keep absolute-safe id
+    if (rel.startsWith("..") || path.isAbsolute(rel)) {
+      rel = abs.replace(/\\/g, "/");
+    }
     const base = path.basename(abs);
     const known = ROOT_FILES.find((f) => f.name.toLowerCase() === base.toLowerCase());
     return {
@@ -84,19 +89,24 @@ function toItem(root: string, abs: string): ArtifactItem | null {
   }
 }
 
-/** Newest Sam-Harness no.X under docs/ (or packDir/docs). */
-export function findLatestPackDir(root: string): string | null {
-  const docs = path.join(root, "docs");
-  if (!fs.existsSync(docs)) return null;
+function newestPackUnder(parent: string): string | null {
+  if (!fs.existsSync(parent)) return null;
   const dirs = fs
-    .readdirSync(docs, { withFileTypes: true })
+    .readdirSync(parent, { withFileTypes: true })
     .filter((d) => d.isDirectory() && /^Sam-Harness no\.\d+/i.test(d.name))
     .map((d) => {
-      const full = path.join(docs, d.name);
+      const full = path.join(parent, d.name);
       return { full, mtime: fs.statSync(full).mtimeMs, name: d.name };
     })
     .sort((a, b) => b.mtime - a.mtime);
   return dirs[0]?.full || null;
+}
+
+/** Newest Sam-Harness no.X under output reports/ or project docs/. */
+export function findLatestPackDir(root: string): string | null {
+  const fromOutput = newestPackUnder(getOutputLayout().reports);
+  if (fromOutput) return fromOutput;
+  return newestPackUnder(path.join(root, "docs"));
 }
 
 function listFilesRecursive(dir: string, max = 40): string[] {
@@ -184,18 +194,33 @@ export function listRunArtifacts(root: string): {
     if (kr !== 0) return kr;
     return b.mtime.localeCompare(a.mtime);
   });
-  return { items, packDir: packDir ? path.relative(root, packDir).replace(/\\/g, "/") : null };
+  let packRel: string | null = null;
+  if (packDir) {
+    const rel = path.relative(root, packDir).replace(/\\/g, "/");
+    packRel = rel.startsWith("..") || path.isAbsolute(rel) ? packDir.replace(/\\/g, "/") : rel;
+  }
+  return { items, packDir: packRel };
 }
 
 function assertUnderRoot(root: string, relPath: string): string {
   const cleaned = String(relPath || "")
-    .replace(/^[/\\]+/, "")
     .replace(/\/+$/, "")
     .replace(/\0/g, "");
   if (!cleaned || cleaned.includes("..")) {
     throw new Error("مسار غير مسموح");
   }
-  const abs = path.normalize(path.join(root, cleaned));
+  // Absolute paths under output home (packs outside project cwd)
+  if (path.isAbsolute(cleaned) || /^[A-Za-z]:[\\/]/.test(cleaned)) {
+    const abs = path.normalize(cleaned);
+    const roots = [path.normalize(root), path.normalize(getOutputLayout().home)];
+    const ok = roots.some((r) => {
+      const rn = r.toLowerCase() + path.sep;
+      return abs.toLowerCase() === r.toLowerCase() || abs.toLowerCase().startsWith(rn);
+    });
+    if (!ok) throw new Error("خارج جذر المشروع / مجلد المخرجات");
+    return abs;
+  }
+  const abs = path.normalize(path.join(root, cleaned.replace(/^[/\\]+/, "")));
   const rootNorm = path.normalize(root) + path.sep;
   if (abs !== path.normalize(root) && !abs.toLowerCase().startsWith(rootNorm.toLowerCase())) {
     throw new Error("خارج جذر المشروع");

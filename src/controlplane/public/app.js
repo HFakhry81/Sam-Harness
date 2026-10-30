@@ -1,5 +1,83 @@
 const $ = (id) => document.getElementById(id);
 
+/** Session CSRF after /api/login — required on mutating requests */
+let csrfToken = sessionStorage.getItem("sh_csrf") || "";
+let authed = false;
+
+async function api(url, options = {}) {
+  const opts = { credentials: "same-origin", ...options };
+  const headers = new Headers(opts.headers || {});
+  const method = String(opts.method || "GET").toUpperCase();
+  if (csrfToken && method !== "GET" && method !== "HEAD") {
+    headers.set("X-CSRF-Token", csrfToken);
+  }
+  if (opts.body && !headers.has("Content-Type")) {
+    headers.set("Content-Type", "application/json");
+  }
+  opts.headers = headers;
+  const res = await fetch(url, opts);
+  if (res.status === 401 || res.status === 403) {
+    const data = await res.clone().json().catch(() => ({}));
+    if (data.authRequired || res.status === 401) {
+      showLogin(data.error || "يلزم تسجيل الدخول");
+    }
+  }
+  return res;
+}
+
+function showLogin(errMsg) {
+  authed = false;
+  const gate = $("loginGate");
+  const shell = $("appShell");
+  if (gate) gate.hidden = false;
+  if (shell) shell.dataset.locked = "1";
+  if (errMsg && $("loginError")) {
+    $("loginError").hidden = false;
+    $("loginError").textContent = errMsg;
+  }
+}
+
+function hideLogin() {
+  authed = true;
+  const gate = $("loginGate");
+  const shell = $("appShell");
+  if (gate) gate.hidden = true;
+  if (shell) delete shell.dataset.locked;
+  if ($("loginError")) $("loginError").hidden = true;
+}
+
+async function doLogin(token) {
+  const res = await fetch("/api/login", {
+    method: "POST",
+    credentials: "same-origin",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ token }),
+  });
+  const data = await res.json().catch(() => ({}));
+  if (!res.ok || !data.ok) {
+    throw new Error(data.error || "فشل الدخول");
+  }
+  csrfToken = data.csrfToken || "";
+  sessionStorage.setItem("sh_csrf", csrfToken);
+  hideLogin();
+  return data;
+}
+
+async function ensureAuth() {
+  const res = await fetch("/api/auth/status", { credentials: "same-origin" });
+  const data = await res.json().catch(() => ({}));
+  if (data.authenticated) {
+    if (data.csrfToken) {
+      csrfToken = data.csrfToken;
+      sessionStorage.setItem("sh_csrf", csrfToken);
+    }
+    hideLogin();
+    return true;
+  }
+  showLogin();
+  return false;
+}
+
 const els = {
   prompt: $("prompt"),
   title: $("title"),
@@ -252,7 +330,7 @@ function syncWorkspacePanels(routeHint, spec) {
 
 async function loadOperatorContext() {
   try {
-    const data = await fetch("/api/operator-context").then((r) => r.json());
+    const data = await api("/api/operator-context").then((r) => r.json());
     renderRootsList(els.allowlistRoots, data.allowlistRoots || [], "—");
     if (data.taskRoots?.length) renderRootsList(els.taskRoots, data.taskRoots);
     if (data.planSteps?.length) renderPlanSteps(data.planSteps);
@@ -312,7 +390,7 @@ async function loadDailyOps() {
   const body = $("dailyOpsBody");
   if (!body) return;
   try {
-    const data = await fetch("/api/daily-ops").then((r) => r.json());
+    const data = await api("/api/daily-ops").then((r) => r.json());
     body.innerHTML = "";
     (data.jobs || []).forEach((j) => {
       const tr = document.createElement("tr");
@@ -351,10 +429,24 @@ async function loadDailyOps() {
   }
 }
 
+function renderCostUsage(cost) {
+  const el = $("costUsageStatus");
+  if (!el || !cost) return;
+  const models = Object.entries(cost.byModel || {})
+    .map(([m, v]) => `${m}: $${v.costUsd}`)
+    .slice(0, 4)
+    .join(" · ");
+  el.textContent = cost.blocked
+    ? `⛔ السقف مستنفد — مصروف $${cost.spentUsd} / $${cost.capUsd} (${cost.day})`
+    : `التكلفة اليوم: $${cost.spentUsd} / سقف $${cost.capUsd} · متبقي $${cost.remainingUsd}` +
+      (models ? ` · ${models}` : "");
+}
+
 async function loadProfiles() {
   try {
-    const data = await fetch("/api/hybrid-profile").then((r) => r.json());
+    const data = await api("/api/hybrid-profile").then((r) => r.json());
     const mode = data.profile?.mode || "auto";
+    selectedProfile = mode;
     document.querySelectorAll(".profile-card").forEach((c) => {
       c.classList.toggle("selected", c.dataset.profile === mode);
     });
@@ -362,6 +454,7 @@ async function loadProfiles() {
     if ($("profileStatus")) {
       $("profileStatus").textContent = `الوضع الحالي: ${mode} · سقف $${data.profile?.costCapUsd ?? 0} · حُفظ ${data.profile?.updatedAt || "—"}`;
     }
+    renderCostUsage(data.cost);
   } catch (e) {
     if ($("profileStatus")) $("profileStatus").textContent = e.message || String(e);
   }
@@ -371,7 +464,7 @@ async function loadMemoryUi() {
   const list = $("memoryList");
   if (!list) return;
   try {
-    const data = await fetch("/api/memory").then((r) => r.json());
+    const data = await api("/api/memory").then((r) => r.json());
     list.innerHTML = "";
     (data.entries || []).forEach((e) => {
       const li = document.createElement("li");
@@ -392,7 +485,7 @@ async function loadRollback() {
   const empty = $("rollbackEmpty");
   if (!body) return;
   try {
-    const data = await fetch("/api/rollback").then((r) => r.json());
+    const data = await api("/api/rollback").then((r) => r.json());
     const entries = data.entries || [];
     if (!entries.length) {
       if (empty) empty.classList.remove("hidden");
@@ -470,7 +563,7 @@ function appendLog(text) {
 }
 
 async function compose(save, answers) {
-  const res = await fetch("/api/compose", {
+  const res = await api("/api/compose", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(payload(save, answers ? { answers } : {})),
@@ -588,7 +681,7 @@ function fillReport(entry) {
 }
 
 async function openArtifactOs(relPath, mode = "file") {
-  const res = await fetch("/api/artifacts/open", {
+  const res = await api("/api/artifacts/open", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ path: relPath, mode }),
@@ -611,7 +704,7 @@ async function openArtifactViewer(item) {
   els.viewerBody.textContent = "جاري التحميل…";
   els.artifactViewer.classList.remove("hidden");
   try {
-    const res = await fetch(
+    const res = await api(
       `/api/artifacts/content?path=${encodeURIComponent(item.relPath)}`
     );
     const data = await res.json();
@@ -695,7 +788,7 @@ function renderArtifactGrid(items, packDir) {
 
 async function loadArtifacts() {
   try {
-    const res = await fetch("/api/artifacts");
+    const res = await api("/api/artifacts");
     const data = await res.json();
     if (!data.ok) throw new Error(data.error || "فشل التحميل");
     artifactCache = { items: data.items || [], packDir: data.packDir || null };
@@ -741,7 +834,7 @@ async function resetForNewTask() {
     );
     if (!ok) return;
   }
-  await fetch("/api/ready", { method: "POST" });
+  await api("/api/ready", { method: "POST" });
   els.prompt.value = "";
   els.title.value = "";
   els.route.value = "auto";
@@ -802,7 +895,7 @@ async function runMode(mode) {
   busy = true;
   showStage("run");
 
-  const res = await fetch("/api/run", {
+  const res = await api("/api/run", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({
@@ -886,7 +979,7 @@ els.btnBack.addEventListener("click", () => {
 });
 
 els.btnStop.addEventListener("click", async () => {
-  await fetch("/api/stop", { method: "POST" });
+  await api("/api/stop", { method: "POST" });
 });
 
 els.btnNewTask.addEventListener("click", () => resetForNewTask());
@@ -948,7 +1041,7 @@ document.addEventListener("keydown", (ev) => {
 
 els.btnClearSession.addEventListener("click", async () => {
   if (!confirm("تفريغ سجل جلسة المهام؟")) return;
-  const res = await fetch("/api/session/reset", { method: "POST" });
+  const res = await api("/api/session/reset", { method: "POST" });
   const data = await res.json();
   if (data.session) renderSession(data.session);
 });
@@ -984,7 +1077,7 @@ $("btnDailyAdd")?.addEventListener("click", async () => {
   const title = $("dailyPrompt")?.value?.trim();
   const schedule = $("dailyCron")?.value?.trim() || "manual";
   if (!title) return alert("اكتب وصف المهمة");
-  await fetch("/api/daily-ops", {
+  await api("/api/daily-ops", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ title, schedule, prompt: title }),
@@ -998,7 +1091,7 @@ $("dailyOpsBody")?.addEventListener("click", async (ev) => {
   if (!btn) return;
   const id = btn.dataset.id;
   const act = btn.dataset.act;
-  await fetch(act === "toggle" ? "/api/daily-ops/toggle" : "/api/daily-ops/remove", {
+  await api(act === "toggle" ? "/api/daily-ops/toggle" : "/api/daily-ops/remove", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ id }),
@@ -1019,7 +1112,7 @@ document.querySelectorAll(".profile-card").forEach((card) => {
 $("btnSaveProfile")?.addEventListener("click", async () => {
   const costCapUsd = Number($("costCap")?.value || 0);
   const notes = $("profileNote")?.value?.trim() || undefined;
-  const res = await fetch("/api/hybrid-profile", {
+  const res = await api("/api/hybrid-profile", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ mode: selectedProfile, costCapUsd, notes }),
@@ -1030,13 +1123,45 @@ $("btnSaveProfile")?.addEventListener("click", async () => {
       ? `تم الحفظ · ${data.profile.mode} · سقف $${data.profile.costCapUsd}`
       : data.error || "فشل الحفظ";
   }
+  if (data.ok) renderCostUsage(data.cost);
+});
+
+$("btnLogin")?.addEventListener("click", async () => {
+  const token = $("loginToken")?.value?.trim() || "";
+  try {
+    await doLogin(token);
+    await bootApp();
+  } catch (e) {
+    showLogin(e?.message || String(e));
+  }
+});
+
+$("loginToken")?.addEventListener("keydown", (ev) => {
+  if (ev.key === "Enter") $("btnLogin")?.click();
+});
+
+$("btnLogout")?.addEventListener("click", async () => {
+  await api("/api/logout", { method: "POST" });
+  csrfToken = "";
+  sessionStorage.removeItem("sh_csrf");
+  showLogin();
+});
+
+$("footerSessionLink")?.addEventListener("click", async (ev) => {
+  ev.preventDefault();
+  const res = await api("/api/session");
+  const data = await res.json();
+  const w = window.open("", "_blank");
+  if (w) {
+    w.document.write(`<pre>${JSON.stringify(data, null, 2)}</pre>`);
+  }
 });
 
 $("btnMemAdd")?.addEventListener("click", async () => {
   const key = $("memKey")?.value?.trim();
   const value = $("memValue")?.value?.trim();
   if (!key || !value) return alert("المفتاح والملاحظة مطلوبان");
-  await fetch("/api/memory", {
+  await api("/api/memory", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ key, value }),
@@ -1049,7 +1174,7 @@ $("btnMemAdd")?.addEventListener("click", async () => {
 async function restoreActiveTask() {
   let restored = false;
   try {
-    const data = await fetch("/api/active-task").then((r) => r.json());
+    const data = await api("/api/active-task").then((r) => r.json());
     const prompt =
       data.draft?.prompt ||
       data.spec?.rawPrompt ||
@@ -1118,9 +1243,12 @@ async function restoreActiveTask() {
   return restored;
 }
 
-async function boot() {
+let sseStarted = false;
+let bootAppReady = false;
+
+async function bootApp() {
   try {
-    const h = await fetch("/api/health").then((r) => r.json());
+    const h = await api("/api/health").then((r) => r.json());
     els.healthMeta.textContent = h.running
       ? "run: active"
       : `ready · :${h.port} · ${h.tasksInSession || 0} tasks`;
@@ -1129,7 +1257,7 @@ async function boot() {
   }
 
   try {
-    const s = await fetch("/api/session").then((r) => r.json());
+    const s = await api("/api/session").then((r) => r.json());
     if (s.session) renderSession(s.session);
   } catch {
     /* ignore */
@@ -1139,61 +1267,81 @@ async function boot() {
   await restoreActiveTask();
   syncWorkspacePanels(els.route.value, lastDraft?.spec || null);
   showStage("compose");
+  await loadProfiles();
 
-  let draftTimer = null;
-  els.prompt.addEventListener("input", () => {
-    clearTimeout(draftTimer);
-    draftTimer = setTimeout(saveLocalDraft, 400);
-  });
+  if (!bootAppReady) {
+    bootAppReady = true;
+    let draftTimer = null;
+    els.prompt.addEventListener("input", () => {
+      clearTimeout(draftTimer);
+      draftTimer = setTimeout(saveLocalDraft, 400);
+    });
+  }
 
-  const es = new EventSource("/api/events");
-  es.addEventListener("log", (ev) => {
-    const data = JSON.parse(ev.data);
-    appendLog(data.text || "");
-  });
-  es.addEventListener("session", (ev) => {
-    renderSession(JSON.parse(ev.data));
-  });
-  es.addEventListener("ready", () => {
-    busy = false;
-    els.btnStop.disabled = true;
-    els.runGrid?.classList.remove("is-busy");
-  });
-  es.addEventListener("run", (ev) => {
-    const data = JSON.parse(ev.data);
-    if (data.type === "start") {
-      busy = true;
-      showStage("run");
-      els.runGrid?.classList.add("is-busy");
-      els.runState.textContent = `running:${data.mode || data.script || "?"}`;
-      els.btnStop.disabled = false;
-      els.healthMeta.textContent = "run: active";
-    }
-    if (data.type === "end") {
+  if (!sseStarted) {
+    sseStarted = true;
+    const es = new EventSource("/api/events", { withCredentials: true });
+    es.addEventListener("log", (ev) => {
+      const data = JSON.parse(ev.data);
+      appendLog(data.text || "");
+    });
+    es.addEventListener("session", (ev) => {
+      renderSession(JSON.parse(ev.data));
+    });
+    es.addEventListener("ready", () => {
       busy = false;
       els.btnStop.disabled = true;
       els.runGrid?.classList.remove("is-busy");
-      els.runState.textContent = `done · exit ${data.exitCode}`;
-      if (data.entry) showDone(data.entry);
-      else {
-        showDone({
-          success: data.exitCode === 0,
-          title: "Run",
-          route: "?",
-          mode: "?",
-          exitCode: data.exitCode,
-          summary: els.log.textContent.slice(-2000),
-          artifacts: [],
-          report: data.report,
-        });
+    });
+    es.addEventListener("run", (ev) => {
+      const data = JSON.parse(ev.data);
+      if (data.type === "start") {
+        busy = true;
+        showStage("run");
+        els.runGrid?.classList.add("is-busy");
+        els.runState.textContent = `running:${data.mode || data.script || "?"}`;
+        els.btnStop.disabled = false;
+        els.healthMeta.textContent = "run: active";
       }
-    }
-    if (data.type === "stopped") {
-      busy = false;
-      els.runState.textContent = "stopped";
-      els.btnStop.disabled = true;
-    }
-  });
+      if (data.type === "end") {
+        busy = false;
+        els.btnStop.disabled = true;
+        els.runGrid?.classList.remove("is-busy");
+        els.runState.textContent = `done · exit ${data.exitCode}`;
+        void loadProfiles();
+        if (data.entry) showDone(data.entry);
+        else {
+          showDone({
+            success: data.exitCode === 0,
+            title: "Run",
+            route: "?",
+            mode: "?",
+            exitCode: data.exitCode,
+            summary: els.log.textContent.slice(-2000),
+            artifacts: [],
+            report: data.report,
+          });
+        }
+      }
+      if (data.type === "stopped") {
+        busy = false;
+        els.runState.textContent = "stopped";
+        els.btnStop.disabled = true;
+      }
+    });
+    es.onerror = () => {
+      // cookie session may have expired
+      void ensureAuth().then((ok) => {
+        if (!ok) es.close();
+      });
+    };
+  }
+}
+
+async function boot() {
+  showLogin();
+  const ok = await ensureAuth();
+  if (ok) await bootApp();
 }
 
 boot();

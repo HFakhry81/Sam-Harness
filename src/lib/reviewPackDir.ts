@@ -1,5 +1,6 @@
 import * as fs from "fs";
 import * as path from "path";
+import { agentReportPath, ensureOutputHome } from "./outputHome.js";
 
 /**
  * True when cwd (or given root) is the Sam-Harness project itself.
@@ -76,6 +77,16 @@ export function resolveTargetRepoPath(targetRepo: string): string {
   return underCwd;
 }
 
+/**
+ * Pack / report root for a target repo.
+ * Sam-Harness self-reports go under SAM_OUTPUT_HOME/reports (Documents/Sam-Harness).
+ * External client repos keep packs under <repo>/docs.
+ */
 export function defaultProjectDocsRoot(targetRepo: string): string {
-  return path.join(resolveTargetRepoPath(targetRepo), "docs");
+  const repo = resolveTargetRepoPath(targetRepo);
+  if (isSamHarnessWorkspace(repo)) {
+    ensureOutputHome();
+    return agentReportPath();
+  }
+  return path.join(repo, "docs");
 }

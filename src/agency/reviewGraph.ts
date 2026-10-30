@@ -7,9 +7,11 @@ import * as path from "path";
 import { Annotation, END, START, StateGraph } from "@langchain/langgraph";
 import { live, ok, warn } from "../lib/colors.js";
 import {
+  invokeTracked,
   isTlsOrFetchError,
   makeSpecialistModel,
   specialistLabel,
+  useOllamaCloudNow,
 } from "../agent/models.js";
 import {
   extractUserGoal,
@@ -66,8 +68,11 @@ async function invoke(
   model: ReturnType<typeof makeSpecialistModel>,
   prompt: string
 ): Promise<string> {
-  const res = await model.invoke(prompt);
-  return String(res.content || "");
+  const modelName = String((model as { model?: string }).model || "specialist");
+  return invokeTracked(model, prompt, {
+    modelName,
+    cloud: useOllamaCloudNow(),
+  });
 }
 
 async function invokeWithCloudFallback(

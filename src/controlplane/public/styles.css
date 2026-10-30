@@ -1209,3 +1209,56 @@ body {
   color: var(--muted);
   font-size: 0.88rem;
 }
+
+.login-gate {
+  position: fixed;
+  inset: 0;
+  z-index: 100;
+  display: grid;
+  place-items: center;
+  padding: 1.5rem;
+  background: rgba(8, 10, 14, 0.72);
+  backdrop-filter: blur(10px);
+}
+
+.login-gate[hidden] {
+  display: none;
+}
+
+.login-card {
+  width: min(440px, 100%);
+  padding: 1.75rem 1.6rem 1.5rem;
+  border: 1px solid var(--line-strong);
+  border-radius: var(--radius);
+  background: var(--panel-solid);
+  box-shadow: var(--shadow);
+}
+
+.login-card .hero-title {
+  font-size: clamp(1.8rem, 4vw, 2.4rem);
+  margin: 0.2rem 0 0.6rem;
+}
+
+.login-token {
+  min-height: 2.8rem;
+  rows: 1;
+  font-family: var(--mono);
+  font-size: 0.9rem;
+}
+
+.login-error {
+  color: var(--danger);
+  font-size: 0.85rem;
+  margin: 0.5rem 0 0;
+}
+
+#appShell[data-locked="1"] {
+  filter: grayscale(0.35);
+  pointer-events: none;
+  user-select: none;
+}
+
+#costUsageStatus {
+  margin-top: 0.35rem;
+  color: var(--amber);
+}

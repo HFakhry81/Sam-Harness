@@ -150,6 +150,11 @@ function inventoryReportPath(task: string): string {
     extractGoalFocus(task).match(
       /(?:Desktop|سطح المكتب)\\?[/\\]?([\w.\u0600-\u06FF-]+\.txt)/i
     )?.[1] || "excel-report-D.txt";
+  // Prefer agent output home for generated inventory reports
+  const outHome = process.env.SAM_OUTPUT_HOME || "";
+  if (outHome) {
+    return `${outHome.replace(/[\\/]+$/, "")}\\documents\\${named}`;
+  }
   return `Desktop\\${named}`;
 }
 

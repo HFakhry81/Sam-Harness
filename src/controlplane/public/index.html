@@ -14,6 +14,22 @@
   </head>
   <body>
     <div class="atmosphere" aria-hidden="true"></div>
+
+    <div id="loginGate" class="login-gate" hidden>
+      <div class="login-card">
+        <p class="eyebrow">Owner auth</p>
+        <h1 class="hero-title">Sam-Harness</h1>
+        <p class="lede">أدخل توكن المالك لفتح لوحة التحكم. يُولَّد تلقائياً في <code>.controlplane-token</code> أو عبر <code>CONTROL_PLANE_TOKEN</code>.</p>
+        <label class="field-label" for="loginToken">Owner token</label>
+        <input id="loginToken" class="composer login-token" type="password" autocomplete="current-password" placeholder="الصق التوكن هنا" />
+        <p class="login-error" id="loginError" hidden></p>
+        <div class="actions">
+          <button type="button" class="btn primary" id="btnLogin">دخول</button>
+        </div>
+      </div>
+    </div>
+
+    <div id="appShell">
     <header class="top">
       <div class="brand">
         <span class="brand-mark">SH</span>
@@ -24,6 +40,7 @@
       </div>
       <div class="top-actions">
         <button type="button" class="btn ghost tiny" id="btnNewTaskTop">مهمة جديدة</button>
+        <button type="button" class="btn ghost tiny" id="btnLogout" title="تسجيل الخروج">خروج</button>
         <div class="top-meta" id="healthMeta">…</div>
       </div>
     </header>
@@ -197,8 +214,8 @@
             </div>
             <div class="meta-row">
               <div class="field">
-                <label for="costCap">سقف تكلفة تقديري (USD / يوم)</label>
-                <input id="costCap" type="number" min="0" step="0.5" value="2" />
+                <label for="costCap">سقف تكلفة يومي (USD) — يُفرض عند التشغيل · افتراضي $0.50 · $0 = منع السحابة</label>
+                <input id="costCap" type="number" min="0" step="0.1" value="0.5" />
               </div>
               <div class="field">
                 <label for="profileNote">ملاحظة</label>
@@ -209,6 +226,7 @@
               <button type="button" class="btn primary" id="btnSaveProfile">حفظ الملف</button>
             </div>
             <p class="lede-sm" id="profileStatus">—</p>
+            <p class="lede-sm" id="costUsageStatus">—</p>
           </div>
         </section>
 
@@ -375,9 +393,10 @@
     </div>
 
     <footer class="foot">
-      <span>محلي على 127.0.0.1 · controlplane-session.md</span>
-      <a href="/api/session" target="_blank" rel="noreferrer">session JSON</a>
+      <span>محلي على 127.0.0.1 · مصادقة مالك · sandbox جذور صريحة · سقف تكلفة مفروض</span>
+      <a href="#" id="footerSessionLink">session JSON</a>
     </footer>
+    </div><!-- #appShell -->
     <script src="/app.js" type="module"></script>
   </body>
 </html>

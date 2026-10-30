@@ -1,0 +1,8 @@
+{
+  "roots": [],
+  "deny": [
+    "D:\\Secrets",
+    "C:\\Users\\Public\\Confidential"
+  ],
+  "_comment": "Leave roots empty to use the default user-environment allowlist (home, Desktop/Documents/Downloads, accessible drives). Non-empty roots RESTRICT access to those paths (+ cwd + SAM_OUTPUT_HOME). deny extends the built-in sensitive-path blocklist."
+}

@@ -10,7 +10,9 @@ Hybrid AI agency for Windows: **Control Plane UI** + **LangGraph review** + **de
 4. Double-click **`SamHarness.bat`** → choose Control Plane UI  
    or run **`Tools\05-start-ui.bat`**
 
-UI: http://127.0.0.1:8787/
+UI: http://127.0.0.1:8787/ (owner token required — see `.controlplane-token` or `CONTROL_PLANE_TOKEN`)
+
+Filesystem tools use a **desktop-controller** sandbox: normal user environment (home, Desktop/Documents/Downloads, accessible drives) with a DENY list for OS/credential paths. Optional `WORKSPACE_ROOTS` restricts; `WORKSPACE_DENY` extends denies. Agent-generated packs/reports land under `~/Documents/Sam-Harness` (`SAM_OUTPUT_HOME`). Daily cloud cap defaults to **$0.50** (`$0` forbids cloud).
 
 ## Layout
 
@@ -26,12 +28,14 @@ UI: http://127.0.0.1:8787/
 ## Checks
 
 ```bat
+pnpm typecheck
+pnpm test
 pnpm run smoke:prod-gates
 ```
 
 ## Env
 
-Copy `.env.example` → `.env`. Never commit `.env`.
+Copy `.env.example` → `.env`. Never commit `.env`, `.controlplane-token`, or `cost-ledger.json`.
 
 ## Docs
 

@@ -1,6 +1,9 @@
 .env
 .env.*
 !.env.example
+.controlplane-token
+workspace-roots.json
+cost-ledger.json
 node_modules/
 *.log
 .DS_Store
