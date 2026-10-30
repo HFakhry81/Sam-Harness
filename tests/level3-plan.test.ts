@@ -100,7 +100,11 @@ describe("Level-3 generic plan", () => {
     expect(snap).not.toBeNull();
     fs.writeFileSync(path.join(dir, "f.txt"), "v2\n", "utf-8");
     rollbackToSnapshot(snap!);
-    expect(fs.readFileSync(path.join(dir, "f.txt"), "utf-8")).toBe("v1\n");
+    // Normalize CRLF (Windows git autocrlf) before comparing content
+    const restored = fs
+      .readFileSync(path.join(dir, "f.txt"), "utf-8")
+      .replace(/\r\n/g, "\n");
+    expect(restored).toBe("v1\n");
   });
 
   it("runRepoTests reports failure", () => {
