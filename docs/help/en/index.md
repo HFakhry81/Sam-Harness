@@ -21,7 +21,7 @@ Anything promised in roadmaps but not shipped is marked **planned / not yet impl
 | 4) Local / cloud / hybrid & $0.50 cap | [`hybrid-mode`](hybrid-mode.md) |
 | 5) Specialty & capability limits | [`specialty-capabilities`](specialty-capabilities.md) |
 | 6) Machine control & desktop tools | [`desktop-control`](desktop-control.md) |
-| 7) Customize workflow & team | [`customize`](customize.md) |
+| 7) Customize workflow & team (table + Phase 9 visual editor) | [`customize`](customize.md) |
 | Install | [`install`](install.md) |
 | Security / approvals / audit | [`security`](security.md) |
 | Cost | [`cost`](cost.md) |

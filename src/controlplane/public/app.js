@@ -456,11 +456,27 @@ const PLATFORM_STAGES = {
   daily: "stageDaily",
   profiles: "stageProfiles",
   team: "stageTeam",
+  workflow: "stageWorkflow",
   memory: "stageMemory",
   timeline: "stageTimeline",
   rollback: "stageRollback",
   help: "stageHelp",
 };
+
+/** Phase 9 — visual workflow editor (SVG, offline). */
+let workflowEditor = null;
+
+function ensureWorkflowEditor() {
+  if (workflowEditor) return workflowEditor;
+  const root = $("wfEditorRoot");
+  if (!root || !window.SamWorkflowEditor) return null;
+  workflowEditor = window.SamWorkflowEditor.createEditor({
+    root,
+    api,
+    t,
+  });
+  return workflowEditor;
+}
 
 function hideAllMainPanels() {
   [
@@ -470,6 +486,7 @@ function hideAllMainPanels() {
     $("stageDaily"),
     $("stageProfiles"),
     $("stageTeam"),
+    $("stageWorkflow"),
     $("stageMemory"),
     $("stageTimeline"),
     $("stageRollback"),
@@ -501,10 +518,26 @@ function showPlatformPanel(view) {
   if (view === "daily") loadDailyOps();
   if (view === "profiles") loadProfiles();
   if (view === "team") loadTeamUi();
+  if (view === "workflow") loadWorkflowUi();
   if (view === "memory") loadMemoryUi();
   if (view === "timeline") loadRunsTimeline();
   if (view === "rollback") loadRollback();
   if (view === "help") loadHelpUi();
+}
+
+async function loadWorkflowUi() {
+  const editor = ensureWorkflowEditor();
+  if (!editor) {
+    const st = $("wfStatus");
+    if (st) st.textContent = t("workflow.loadFailed") || "Workflow editor unavailable";
+    return;
+  }
+  try {
+    await editor.load();
+  } catch (e) {
+    const st = $("wfStatus");
+    if (st) st.textContent = e.message || String(e);
+  }
 }
 
 async function loadTeamUi() {

@@ -24,6 +24,26 @@ curl -X POST -H "Authorization: Bearer $TOKEN" -H "Content-Type: application/jso
 
 تجاوزات النماذج: `SAM_ROLE_<ROLE>_MODEL` / `_CLOUD_MODEL` / `_FREE_MODEL`.
 
+## ١‑ب) المحرّر الرسومي (المرحلة 9)
+
+لوحة التحكم → تبويب **المسار الرسومي**: لوحة SVG محلية (بدون CDN) تعرض الراوتر والمسار التشغيلي والاستقبال والأدلة وحلقة المراجعة وبوابة GO والمتخصصين والتسليم وLevel-3.
+
+- اسحب العقد، أعد ترتيب المتخصصين، أضف أدواراً مخصّصة، عطّل/احذف المخصّص
+- لوحة جانبية للخصائص (مطالبة، نماذج، prefersCloud، أدوات) مع تحقق
+- **مقفلة:** حلقة المراجعة وبوابة GO — أخطاء واضحة عند التجاوز
+- مسودة مقابل تطبيق، تراجع/إعادة، تصدير/استيراد JSON، إعادة للافتراضي
+- التخطيط في `config/workflow-layout.json` منفصل عن الدلالة في `team.json`
+- شارات التوجيه الحي من `/api/routing/effective`
+
+```bash
+curl -H "Authorization: Bearer $TOKEN" http://127.0.0.1:8787/api/workflow
+curl -X PUT -H "Authorization: Bearer $TOKEN" -H "Content-Type: application/json" \
+  http://127.0.0.1:8787/api/workflow/graph \
+  -d '{"graph":{…}}'
+```
+
+تفاصيل: `docs/PHASE9_VISUAL_EDITOR.md`.
+
 ## ٢) البيئة (`.env`)
 
 انسخ `.env.example` → `.env`. أهم المفاتيح: `AGENCY_MODE`, `HYBRID_MODE`, `SAM_ROLE_*`, `APPROVE_*`, `SAM_DESKTOP_*`, `SAM_LOCALE`.
@@ -42,5 +62,5 @@ Control Plane → الهجين، أو `/api/hybrid-profile`. خريطة `roles` 
 
 ## ما يزال غير منفّذ
 
-- محرّر رسومي لعقد LangGraph  
 - تكافؤ AT-SPI كامل مع Windows UIA على كل توزيعات لينكس دون تثبيت حزم النظام
+- تحرير حرّ لكل حافة LangGraph خارج عمود المسار المسموح (المتخصصون بعد GO فقط)

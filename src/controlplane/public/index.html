@@ -57,6 +57,7 @@
       <button type="button" data-view="daily" data-i18n="nav.daily">المهام اليومية</button>
       <button type="button" data-view="profiles" data-i18n="nav.profiles">الهجين</button>
       <button type="button" data-view="team" data-i18n="nav.team">الفريق</button>
+      <button type="button" data-view="workflow" data-i18n="nav.workflow">المسار الرسومي</button>
       <button type="button" data-view="memory" data-i18n="nav.memory">الذاكرة</button>
       <button type="button" data-view="timeline" data-i18n="nav.timeline">التشغيلات</button>
       <button type="button" data-view="rollback" data-i18n="nav.rollback">التراجع</button>
@@ -289,6 +290,43 @@
                 <input id="teamRolePrompt" type="text" placeholder="Write a research brief…" />
               </div>
               <button type="button" class="btn primary" id="btnTeamAddRole" data-i18n="team.addRole">إضافة دور مخصّص</button>
+            </div>
+          </div>
+        </section>
+
+        <section class="stage hidden" id="stageWorkflow">
+          <p class="eyebrow" data-i18n="workflow.eyebrow">Phase 9 · المسار الرسومي</p>
+          <h1 class="hero-title">
+            <span data-i18n="workflow.hero">محرّر سير العمل.</span><br />
+            <em data-i18n="workflow.heroEm">اسحب · اربط · طبّق.</em>
+          </h1>
+          <p class="lede" data-i18n="workflow.lede">
+            لوحة كاملة للوكالة: الراوتر، التشغيلي، الاستقبال، الأدلة، حلقة المراجعة، بوابة GO، المتخصصون، التسليم وLevel-3. حلقة المراجعة وبوابة GO مقفلتان.
+          </p>
+          <div class="platform-panel wf-shell" id="wfEditorRoot">
+            <div class="wf-toolbar">
+              <button type="button" class="btn ghost tiny" id="btnWfRefresh" data-i18n="workflow.refresh">تحديث</button>
+              <button type="button" class="btn ghost tiny" id="btnWfUndo" data-i18n="workflow.undo">تراجع</button>
+              <button type="button" class="btn ghost tiny" id="btnWfRedo" data-i18n="workflow.redo">إعادة</button>
+              <button type="button" class="btn ghost tiny" id="btnWfDraft" data-i18n="workflow.saveDraft">حفظ مسودة</button>
+              <button type="button" class="btn primary tiny" id="btnWfApply" data-i18n="workflow.apply">تطبيق على الفريق</button>
+              <button type="button" class="btn ghost tiny" id="btnWfExport" data-i18n="workflow.export">تصدير JSON</button>
+              <label class="btn ghost tiny wf-file-btn">
+                <span data-i18n="workflow.import">استيراد</span>
+                <input id="wfImportFile" type="file" accept="application/json,.json" hidden />
+              </label>
+              <button type="button" class="btn ghost tiny" id="btnWfAddRole" data-i18n="workflow.addRole">دور مخصّص</button>
+              <button type="button" class="btn ghost tiny" id="btnWfReset" data-i18n="workflow.reset">افتراضي</button>
+              <span class="wf-dirty" id="wfDirtyBadge" hidden>Draft</span>
+            </div>
+            <p class="lede-sm" id="wfStatus">—</p>
+            <p class="lede-sm" id="wfRouteNote"></p>
+            <div class="wf-errors" id="wfErrors" hidden></div>
+            <div class="wf-workspace">
+              <div class="wf-canvas-wrap" id="wfCanvas" aria-label="workflow canvas"></div>
+              <aside class="wf-side" id="wfSidePanel">
+                <p class="lede-sm" data-i18n="workflow.panelEmpty">اختر عقدة للتعديل.</p>
+              </aside>
             </div>
           </div>
         </section>
@@ -530,6 +568,7 @@
       <a href="#" id="footerSessionLink">session JSON</a>
     </footer>
     </div><!-- #appShell -->
+    <script src="/workflow-editor.js"></script>
     <script src="/app.js" type="module"></script>
   </body>
 </html>

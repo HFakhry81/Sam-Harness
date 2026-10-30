@@ -27,6 +27,7 @@ import {
 } from "../lib/cost/index.js";
 import { costStatus, effectiveRoutingDecisions } from "../agent/models.js";
 import {
+  defaultTeamConfig,
   deleteTeamRole,
   loadTeamConfig,
   saveTeamConfig,
@@ -37,6 +38,22 @@ import {
   type TeamConfig,
   type TeamRoleConfig,
 } from "../agency/teamConfig.js";
+import {
+  applyGraphToTeamConfig,
+  graphToTeamConfig,
+  teamConfigToGraph,
+  validateWorkflowGraph,
+  type WorkflowGraph,
+} from "../agency/workflowGraph.js";
+import {
+  defaultWorkflowLayout,
+  ensureLayoutForGraph,
+  loadWorkflowLayout,
+  saveWorkflowLayout,
+  validateWorkflowLayout,
+  type WorkflowLayout,
+} from "../agency/workflowLayout.js";
+import { appendAudit } from "../lib/trust/auditLog.js";
 import {
   detectLinuxCapabilities,
   detectMacCapabilities,
@@ -1568,6 +1585,230 @@ const server = http.createServer(async (req, res) => {
         }
         const config = setDownstreamOrder(ROOT, body.downstreamOrder, { actor: "owner" });
         sendJson(res, 200, { ok: true, config });
+      } catch (e: any) {
+        sendJson(res, 400, { ok: false, error: e?.message || String(e) });
+      }
+      return;
+    }
+
+    // —— Phase 9 — visual workflow editor (graph + layout) ——
+    if (method === "GET" && p === "/api/workflow") {
+      try {
+        const config = loadTeamConfig(ROOT);
+        const graph = teamConfigToGraph(config);
+        const layout = ensureLayoutForGraph(loadWorkflowLayout(ROOT), graph);
+        sendJson(res, 200, {
+          ok: true,
+          graph,
+          layout,
+          config,
+          summary: teamConfigSummary(ROOT),
+          routing: effectiveRoutingDecisions(ROOT),
+        });
+      } catch (e: any) {
+        sendJson(res, 500, { ok: false, error: e?.message || String(e) });
+      }
+      return;
+    }
+    if (method === "POST" && p === "/api/workflow/validate") {
+      const body = JSON.parse((await readBody(req)) || "{}") as {
+        graph?: unknown;
+        applyPreview?: boolean;
+      };
+      const graphRaw = body.graph ?? body;
+      const graphValidation = validateWorkflowGraph(graphRaw);
+      let teamIssues: ReturnType<typeof validateTeamConfig> | null = null;
+      let preview: TeamConfig | null = null;
+      if (graphValidation.ok) {
+        try {
+          const base = loadTeamConfig(ROOT);
+          const converted = graphToTeamConfig(graphRaw as WorkflowGraph, base);
+          teamIssues = converted.validation;
+          if (converted.validation.ok) preview = converted.config;
+        } catch (e: any) {
+          teamIssues = {
+            ok: false,
+            issues: [{ path: "", message: e?.message || String(e) }],
+          };
+        }
+      }
+      const ok = graphValidation.ok && (!teamIssues || teamIssues.ok);
+      sendJson(res, 200, {
+        ok,
+        valid: ok,
+        graphIssues: graphValidation.issues,
+        teamIssues: teamIssues?.issues || [],
+        preview: body.applyPreview ? preview : undefined,
+      });
+      return;
+    }
+    if (method === "PUT" && p === "/api/workflow/graph") {
+      try {
+        const body = JSON.parse((await readBody(req)) || "{}") as {
+          graph?: WorkflowGraph;
+          draft?: boolean;
+        };
+        const graph = (body.graph || body) as WorkflowGraph;
+        if (body.draft === true) {
+          // Draft validate-only — does not write team.json (Phase 6: no silent apply)
+          const graphValidation = validateWorkflowGraph(graph);
+          sendJson(res, 200, {
+            ok: graphValidation.ok,
+            draft: true,
+            applied: false,
+            issues: graphValidation.issues,
+            graph,
+          });
+          return;
+        }
+        const base = loadTeamConfig(ROOT);
+        const next = applyGraphToTeamConfig(graph, base);
+        const config = saveTeamConfig(ROOT, next, { actor: "owner" });
+        try {
+          appendAudit({
+            category: "system",
+            action: "workflow_graph.apply",
+            actor: "owner",
+            detail: {
+              roleCount: config.roles.length,
+              downstreamOrder: config.pipeline.downstreamOrder,
+              nodeCount: graph.nodes?.length,
+            },
+          });
+        } catch {
+          /* audit optional */
+        }
+        const appliedGraph = teamConfigToGraph(config);
+        sendJson(res, 200, {
+          ok: true,
+          draft: false,
+          applied: true,
+          config,
+          graph: appliedGraph,
+          routing: effectiveRoutingDecisions(ROOT),
+        });
+      } catch (e: any) {
+        sendJson(res, 400, { ok: false, error: e?.message || String(e) });
+      }
+      return;
+    }
+    if (method === "GET" && p === "/api/workflow/layout") {
+      try {
+        const config = loadTeamConfig(ROOT);
+        const graph = teamConfigToGraph(config);
+        const layout = ensureLayoutForGraph(loadWorkflowLayout(ROOT), graph);
+        sendJson(res, 200, { ok: true, layout });
+      } catch (e: any) {
+        sendJson(res, 500, { ok: false, error: e?.message || String(e) });
+      }
+      return;
+    }
+    if (method === "PUT" && p === "/api/workflow/layout") {
+      try {
+        const body = JSON.parse((await readBody(req)) || "{}") as WorkflowLayout & {
+          layout?: WorkflowLayout;
+        };
+        const layout = (body.layout || body) as WorkflowLayout;
+        const saved = saveWorkflowLayout(ROOT, layout, { actor: "owner" });
+        sendJson(res, 200, { ok: true, layout: saved });
+      } catch (e: any) {
+        sendJson(res, 400, { ok: false, error: e?.message || String(e) });
+      }
+      return;
+    }
+    if (method === "POST" && p === "/api/workflow/reset") {
+      try {
+        const config = saveTeamConfig(ROOT, defaultTeamConfig(), { actor: "owner" });
+        const graph = teamConfigToGraph(config);
+        const layout = saveWorkflowLayout(ROOT, defaultWorkflowLayout(graph), {
+          actor: "owner",
+        });
+        try {
+          appendAudit({
+            category: "system",
+            action: "workflow_graph.reset",
+            actor: "owner",
+            detail: { roleCount: config.roles.length },
+          });
+        } catch {
+          /* ignore */
+        }
+        sendJson(res, 200, {
+          ok: true,
+          config,
+          graph,
+          layout,
+          routing: effectiveRoutingDecisions(ROOT),
+        });
+      } catch (e: any) {
+        sendJson(res, 400, { ok: false, error: e?.message || String(e) });
+      }
+      return;
+    }
+    if (method === "POST" && p === "/api/workflow/import") {
+      try {
+        const body = JSON.parse((await readBody(req)) || "{}") as {
+          graph?: WorkflowGraph;
+          layout?: WorkflowLayout;
+          apply?: boolean;
+        };
+        if (!body.graph) {
+          sendJson(res, 400, { ok: false, error: "graph required" });
+          return;
+        }
+        const graphValidation = validateWorkflowGraph(body.graph);
+        if (!graphValidation.ok) {
+          sendJson(res, 400, {
+            ok: false,
+            error: "invalid graph",
+            issues: graphValidation.issues,
+          });
+          return;
+        }
+        if (body.layout) {
+          const lv = validateWorkflowLayout(body.layout);
+          if (!lv.ok) {
+            sendJson(res, 400, { ok: false, error: "invalid layout", issues: lv.issues });
+            return;
+          }
+        }
+        if (body.apply === false) {
+          sendJson(res, 200, {
+            ok: true,
+            draft: true,
+            applied: false,
+            graph: body.graph,
+            layout: body.layout || null,
+          });
+          return;
+        }
+        const base = loadTeamConfig(ROOT);
+        const next = applyGraphToTeamConfig(body.graph, base);
+        const config = saveTeamConfig(ROOT, next, { actor: "owner" });
+        let layout = body.layout
+          ? saveWorkflowLayout(ROOT, body.layout, { actor: "owner" })
+          : ensureLayoutForGraph(loadWorkflowLayout(ROOT), teamConfigToGraph(config));
+        if (!body.layout) {
+          layout = saveWorkflowLayout(ROOT, layout, { actor: "owner" });
+        }
+        try {
+          appendAudit({
+            category: "system",
+            action: "workflow_graph.import",
+            actor: "owner",
+            detail: { roleCount: config.roles.length },
+          });
+        } catch {
+          /* ignore */
+        }
+        sendJson(res, 200, {
+          ok: true,
+          applied: true,
+          config,
+          graph: teamConfigToGraph(config),
+          layout,
+          routing: effectiveRoutingDecisions(ROOT),
+        });
       } catch (e: any) {
         sendJson(res, 400, { ok: false, error: e?.message || String(e) });
       }
