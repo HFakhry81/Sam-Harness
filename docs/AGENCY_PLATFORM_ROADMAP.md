@@ -43,7 +43,7 @@
 | **P5** | Control plane | واجهة compose→task.ts→run + سجل حي | ✅ (+ تصميم أنيق) |
 | **P6** | Daily Ops Agent | جداول مهام يومية + سجل نتائج في UI/API | ✅ أساسي |
 | **P7** | Comms connectors | مسودات إيميل/إشعار + بوابة موافقة (stub إرسال) | ✅ أساسي |
-| **P8** | Hybrid client profiles | بروفايل `local` / `cloud` / `auto` + سقف تكلفة | ✅ أساسي |
+| **P8** | Hybrid client profiles | بروفايل `local` / `cloud` / `auto` + سقف تكلفة **مفروض** (Phase 1 ledger) | ✅ مفروض |
 | **P9** | Evals + memory | eval:task-spec + ذاكرة مشروع في UI | ✅ أساسي / روبريكات أوسع لاحقاً |
 | **P10** | Hardened implement | rollback journal بعد Level-3 (مسار تدقيق) | ✅ أساسي / snapshots لاحقاً |
 | **P0b** | Production hardening | عزل حزم الذات، evals انحدار، حقن ذاكرة، منع تلوث الهدف | ✅ أساسي — `pnpm run smoke:prod-gates` |
@@ -69,7 +69,8 @@
   - Golden evals: `pnpm run eval:task-spec` (target ≥95%)
 - [x] P6 Daily Ops — `daily-ops.json` + `/api/daily-ops*` + UI tab
 - [x] P7 Comms stubs — `comms-drafts.json` + approval-gated send stub
-- [x] P8 Hybrid profile — `hybrid-profile.json` + UI cards
+- [x] P8 Hybrid profile — `hybrid-profile.json` + UI cards + **runtime cost-cap ledger** (`cost-ledger.json`)
+- [x] Phase 1 security — Control Plane owner token/session + CSRF; filesystem sandbox via `WORKSPACE_ROOTS`
 - [x] P9 Memory — `project-memory.json` + UI (+ existing task-spec evals)
 - [x] P10 Rollback journal — `rollback-journal.json` wired from Level-3
 

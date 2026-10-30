@@ -4,6 +4,7 @@ import * as fs from "fs";
 import * as path from "path";
 import {
   assertAllowedPath,
+  assertShellCommandPathsAllowed,
   ensureParentDir,
   isDriveRoot,
   resolveUserPath,
@@ -343,6 +344,17 @@ async function runShellTool(params: Record<string, unknown>): Promise<ToolResult
       tool: "run_shell",
       message:
         "Shell blocked. For screenshots use tool screenshot. Allowed shell: dir, type, echo, where, powershell Get-* only.",
+    };
+  }
+
+  // Sandbox: every filesystem path referenced by the command must be under workspace roots
+  try {
+    assertShellCommandPathsAllowed(command);
+  } catch (e: any) {
+    return {
+      ok: false,
+      tool: "run_shell",
+      message: e?.message || String(e),
     };
   }
 
