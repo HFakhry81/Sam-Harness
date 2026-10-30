@@ -8,6 +8,7 @@ import * as path from "path";
 import { loadLocaleConfig } from "../i18n/index.js";
 import { assertTranslationCoverage } from "../i18n/index.js";
 import { getOutputHome, getOutputLayout } from "../outputHome.js";
+import { verifyHelpIntegrity } from "../help/index.js";
 
 export type DoctorSeverity = "ok" | "warn" | "fail";
 
@@ -229,6 +230,36 @@ function checkPlatform(): DoctorCheck {
   };
 }
 
+function checkHelpDocs(cwd: string): DoctorCheck {
+  try {
+    const result = verifyHelpIntegrity(cwd);
+    if (result.ok) {
+      return {
+        id: "help",
+        title: "Help docs",
+        severity: "ok",
+        detail: `${result.topics.length} topics × ar/en`,
+      };
+    }
+    return {
+      id: "help",
+      title: "Help docs",
+      severity: "fail",
+      detail: result.issues
+        .slice(0, 4)
+        .map((i) => `${i.locale}/${i.id || "?"}: ${i.problem}`)
+        .join("; "),
+    };
+  } catch (e: any) {
+    return {
+      id: "help",
+      title: "Help docs",
+      severity: "fail",
+      detail: e?.message || String(e),
+    };
+  }
+}
+
 /** Run diagnostic suite (no network). */
 export function runDoctor(opts: DoctorOptions = {}): DoctorReport {
   const cwd = opts.cwd || process.cwd();
@@ -251,6 +282,7 @@ export function runDoctor(opts: DoctorOptions = {}): DoctorReport {
       checkTaskSeed(cwd),
       checkOutputHome(env),
       checkLocale(env),
+      checkHelpDocs(cwd),
     ];
 
     if (opts.probeOllama) {

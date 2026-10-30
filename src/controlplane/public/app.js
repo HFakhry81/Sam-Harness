@@ -74,6 +74,8 @@ async function loadLocale() {
   }
 }
 
+let helpActiveTopicId = "";
+
 async function setLocale(locale) {
   const res = await fetch("/api/locale", {
     method: "POST",
@@ -93,6 +95,10 @@ async function setLocale(locale) {
   }
   applyDocumentDir(uiLocale, uiDir);
   applyI18nDom();
+  // Reload Help topic list/body so titles match the active locale.
+  if (!$("stageHelp")?.classList.contains("hidden")) {
+    await loadHelpUi(helpActiveTopicId || undefined);
+  }
   return data;
 }
 
@@ -452,6 +458,7 @@ const PLATFORM_STAGES = {
   memory: "stageMemory",
   timeline: "stageTimeline",
   rollback: "stageRollback",
+  help: "stageHelp",
 };
 
 function hideAllMainPanels() {
@@ -464,6 +471,7 @@ function hideAllMainPanels() {
     $("stageMemory"),
     $("stageTimeline"),
     $("stageRollback"),
+    $("stageHelp"),
   ].forEach((el) => el?.classList.add("hidden"));
 }
 
@@ -493,6 +501,106 @@ function showPlatformPanel(view) {
   if (view === "memory") loadMemoryUi();
   if (view === "timeline") loadRunsTimeline();
   if (view === "rollback") loadRollback();
+  if (view === "help") loadHelpUi();
+}
+
+async function loadHelpUi(topicId) {
+  const list = $("helpTopicList");
+  const body = $("helpBody");
+  const meta = $("helpArticleMeta");
+  const hitsEl = $("helpSearchHits");
+  if (!list || !body) return;
+  if (hitsEl) {
+    hitsEl.hidden = true;
+    hitsEl.innerHTML = "";
+  }
+  try {
+    if (meta) meta.textContent = t("help.loading");
+    const data = await fetch(`/api/help?locale=${encodeURIComponent(uiLocale)}`, {
+      credentials: "same-origin",
+    }).then((r) => r.json());
+    list.innerHTML = "";
+    (data.topics || []).forEach((topic) => {
+      const li = document.createElement("li");
+      const btn = document.createElement("button");
+      btn.type = "button";
+      btn.className = "help-topic-btn";
+      btn.dataset.id = topic.id;
+      btn.innerHTML = `<strong>${topic.title}</strong><span>${topic.summary}</span>`;
+      if (topicId && topic.id === topicId) btn.classList.add("active");
+      btn.addEventListener("click", () => openHelpTopic(topic.id));
+      li.appendChild(btn);
+      list.appendChild(li);
+    });
+    if (topicId) {
+      await openHelpTopic(topicId);
+    } else if (data.topics?.length) {
+      await openHelpTopic(data.topics[0].id);
+    } else if (meta) {
+      meta.textContent = t("help.empty");
+    }
+  } catch {
+    if (meta) meta.textContent = t("help.error");
+  }
+}
+
+async function openHelpTopic(id) {
+  const body = $("helpBody");
+  const meta = $("helpArticleMeta");
+  const hitsEl = $("helpSearchHits");
+  if (!body) return;
+  if (hitsEl) hitsEl.hidden = true;
+  document.querySelectorAll(".help-topic-btn").forEach((b) => {
+    b.classList.toggle("active", b.dataset.id === id);
+  });
+  try {
+    if (meta) meta.textContent = t("help.loading");
+    const data = await fetch(
+      `/api/help/${encodeURIComponent(id)}?locale=${encodeURIComponent(uiLocale)}`,
+      { credentials: "same-origin" }
+    ).then((r) => r.json());
+    if (!data.ok || !data.topic) {
+      if (meta) meta.textContent = t("help.error");
+      return;
+    }
+    helpActiveTopicId = data.topic.id;
+    if (meta) meta.textContent = `${data.topic.id} · ${data.topic.title}`;
+    body.innerHTML = data.topic.html || "";
+  } catch {
+    if (meta) meta.textContent = t("help.error");
+  }
+}
+
+async function runHelpSearch() {
+  const q = $("helpSearch")?.value?.trim() || "";
+  const hitsEl = $("helpSearchHits");
+  if (!q) {
+    await loadHelpUi();
+    return;
+  }
+  try {
+    const data = await fetch(
+      `/api/help?locale=${encodeURIComponent(uiLocale)}&q=${encodeURIComponent(q)}`,
+      { credentials: "same-origin" }
+    ).then((r) => r.json());
+    if (data.answer?.topicId) {
+      await openHelpTopic(data.answer.topicId);
+    }
+    if (hitsEl) {
+      hitsEl.hidden = false;
+      hitsEl.innerHTML = "";
+      (data.hits || []).forEach((hit) => {
+        const li = document.createElement("li");
+        li.innerHTML = `<button type="button" class="linkish" data-help-hit="${hit.id}"><strong>${hit.title}</strong> — ${hit.snippet}</button>`;
+        hitsEl.appendChild(li);
+      });
+      hitsEl.querySelectorAll("[data-help-hit]").forEach((btn) => {
+        btn.addEventListener("click", () => openHelpTopic(btn.getAttribute("data-help-hit")));
+      });
+    }
+  } catch {
+    if ($("helpArticleMeta")) $("helpArticleMeta").textContent = t("help.error");
+  }
 }
 
 async function loadRunsTimeline() {
@@ -1258,6 +1366,16 @@ document.querySelectorAll("#platformNav button").forEach((btn) => {
     }
     showPlatformPanel(btn.dataset.view);
   });
+});
+
+$("btnHelpSearch")?.addEventListener("click", () => {
+  void runHelpSearch();
+});
+$("helpSearch")?.addEventListener("keydown", (ev) => {
+  if (ev.key === "Enter") {
+    ev.preventDefault();
+    void runHelpSearch();
+  }
 });
 
 $("btnDailyAdd")?.addEventListener("click", async () => {
