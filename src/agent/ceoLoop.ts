@@ -203,6 +203,44 @@ async function ensureInventoryWriteFile(
 }
 
 export async function runOperationalCeoLoop(task: string, maxSteps = 8) {
+  // Product Help intents — answer from docs/help (no invented capabilities).
+  try {
+    const { detectHelpIntent, answerHelpQuery } = await import("../lib/help/index.js");
+    const { loadLocaleConfig } = await import("../lib/i18n/index.js");
+    const goal =
+      task.match(/## Goal\s*\n([\s\S]*?)(?=\n## |\n# |$)/i)?.[1]?.trim() || task.trim();
+    if (
+      detectHelpIntent(goal) &&
+      goal.length < 200 &&
+      !/move|copy|excel|screenshot|انقل|انسخ|لقطة/i.test(goal)
+    ) {
+      const answer = answerHelpQuery({
+        query: goal,
+        locale: loadLocaleConfig().locale,
+        cwd: process.cwd(),
+      });
+      const summary = `Help (${answer.topicId || "index"}): ${answer.title}`;
+      fs.writeFileSync(
+        "final-report.md",
+        `# Help\n\n${answer.title}\n\n${answer.body}\n`,
+        "utf-8"
+      );
+      fs.writeFileSync(
+        "execution-result.md",
+        `success=true\n${summary}\n`,
+        "utf-8"
+      );
+      ok("Help", summary);
+      return {
+        success: true,
+        summary,
+        tools: [] as ToolResult[],
+      };
+    }
+  } catch {
+    /* fall through to normal ops loop */
+  }
+
   live("CEO Supervisor", `Operational tool loop starting (model: ${CEO_MODEL})...`);
   const focused = focusTask(task);
   const history: string[] = [`USER TASK:\n${focused}`];

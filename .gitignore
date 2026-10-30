@@ -11,6 +11,7 @@ cost-ledger.json
 *.sqlite-wal
 *.sqlite-shm
 node_modules/
+dist/
 *.log
 .DS_Store
 .cursor/

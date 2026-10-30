@@ -14,6 +14,7 @@ export const AR_MESSAGES: MessageCatalog = {
   "nav.memory": "الذاكرة",
   "nav.timeline": "التشغيلات",
   "nav.rollback": "التراجع",
+  "nav.help": "المساعدة",
   "nav.locale": "اللغة",
   "login.eyebrow": "مصادقة المالك",
   "login.title": "Sam-Harness",
@@ -188,6 +189,20 @@ export const AR_MESSAGES: MessageCatalog = {
   "doctor.fail": "بعض الفحوصات فشلت — راجع التفاصيل",
   "install.done": "اكتمل التثبيت",
   "install.uninstallDone": "اكتمل إلغاء التثبيت",
+  "help.eyebrow": "مساعدة الوكالة",
+  "help.hero": "دليل Sam-Harness.",
+  "help.heroEm": "من الكود الفعلي.",
+  "help.lede":
+    "إجابات مبنية على المصدر الحالي فقط. العناصر غير المنفّذة مُعلَّمة «مخطط / غير منفّذ بعد». ابحث أو اختر موضوعاً.",
+  "help.search": "بحث في المساعدة",
+  "help.searchPlaceholder": "مثال: سقف التكلفة، سطح المكتب، الأدوار…",
+  "help.searchBtn": "ابحث",
+  "help.topics": "المواضيع",
+  "help.empty": "اختر موضوعاً أو ابحث بكلمة مفتاحية",
+  "help.exportHint": "تصدير حزمة HTML/PDF/Markdown: pnpm run help:export",
+  "help.cliHint": "من الطرفية: pnpm run help [موضوع]",
+  "help.loading": "جاري التحميل…",
+  "help.error": "تعذّر تحميل المساعدة",
 };
 
 export const EN_MESSAGES: MessageCatalog = {
@@ -200,6 +215,7 @@ export const EN_MESSAGES: MessageCatalog = {
   "nav.memory": "Memory",
   "nav.timeline": "Runs",
   "nav.rollback": "Rollback",
+  "nav.help": "Help",
   "nav.locale": "Language",
   "login.eyebrow": "Owner auth",
   "login.title": "Sam-Harness",
@@ -374,6 +390,20 @@ export const EN_MESSAGES: MessageCatalog = {
   "doctor.fail": "Some checks failed — see details",
   "install.done": "Install complete",
   "install.uninstallDone": "Uninstall complete",
+  "help.eyebrow": "Agency help",
+  "help.hero": "Sam-Harness guide.",
+  "help.heroEm": "From actual code.",
+  "help.lede":
+    "Answers grounded in current source only. Unimplemented items are marked “planned / not yet implemented”. Search or pick a topic.",
+  "help.search": "Search help",
+  "help.searchPlaceholder": "e.g. cost cap, desktop, roles…",
+  "help.searchBtn": "Search",
+  "help.topics": "Topics",
+  "help.empty": "Pick a topic or search by keyword",
+  "help.exportHint": "Export HTML/PDF/Markdown pack: pnpm run help:export",
+  "help.cliHint": "From the terminal: pnpm run help [topic]",
+  "help.loading": "Loading…",
+  "help.error": "Failed to load help",
 };
 
 export const CATALOGS: Record<AppLocale, MessageCatalog> = {

@@ -80,8 +80,20 @@ Copy `.env.example` → `.env`. Never commit `.env`, `.controlplane-token`, `mcp
 
 State defaults to SQLite under `SAM_OUTPUT_HOME/state/sam-harness.sqlite`. Set `DATABASE_URL` for Postgres. Liveness: `GET /healthz`.
 
+## Help (in-agency + export)
+
+```bash
+pnpm run help                 # index (locale from SAM_LOCALE)
+pnpm run help workflow        # topic
+pnpm run help --search "cost" # keyword search
+pnpm run help:export          # HTML + PDF-ready HTML + MD → SAM_OUTPUT_HOME/documents/help and dist/help
+```
+
+Control Plane: **Help** tab · API `GET /api/help` · bilingual docs under `docs/help/ar` and `docs/help/en` (Arabic primary). Unimplemented roadmap items are marked **planned / not yet implemented**.
+
 ## Docs
 
+- `docs/help/ar/` · `docs/help/en/` — owner Help (workflow, models, hybrid, desktop, customize, …)
 - `docs/AGENCY_PLATFORM_ROADMAP.md`
 - `docs/PRODUCTION_HARDENING_P0.md`
 - `docs/PHASE3_PRODUCTION_OPS.md`

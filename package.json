@@ -36,6 +36,8 @@
     "trust:evidence": "tsx scripts/trust-cli.ts evidence",
     "trust:policy": "tsx scripts/trust-cli.ts policy",
     "doctor": "tsx scripts/doctor.ts",
+    "help": "tsx scripts/help.ts",
+    "help:export": "tsx scripts/help-export.ts",
     "install:unix": "bash scripts/install/install.sh --non-interactive",
     "install:win": "powershell -NoProfile -ExecutionPolicy Bypass -File scripts/install/install.ps1 -NonInteractive",
     "uninstall:unix": "bash scripts/install/uninstall.sh --non-interactive",

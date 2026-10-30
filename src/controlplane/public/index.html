@@ -59,6 +59,7 @@
       <button type="button" data-view="memory" data-i18n="nav.memory">الذاكرة</button>
       <button type="button" data-view="timeline" data-i18n="nav.timeline">التشغيلات</button>
       <button type="button" data-view="rollback" data-i18n="nav.rollback">التراجع</button>
+      <button type="button" data-view="help" data-i18n="nav.help">المساعدة</button>
     </nav>
 
     <div class="layout">
@@ -310,6 +311,44 @@
               </thead>
               <tbody id="rollbackBody"></tbody>
             </table>
+          </div>
+        </section>
+
+        <section class="stage hidden" id="stageHelp">
+          <p class="eyebrow" data-i18n="help.eyebrow">مساعدة الوكالة</p>
+          <h1 class="hero-title">
+            <span data-i18n="help.hero">دليل Sam-Harness.</span><br />
+            <em data-i18n="help.heroEm">من الكود الفعلي.</em>
+          </h1>
+          <p class="lede" data-i18n="help.lede">
+            إجابات مبنية على المصدر الحالي فقط. العناصر غير المنفّذة مُعلَّمة «مخطط / غير منفّذ بعد». ابحث أو اختر موضوعاً.
+          </p>
+          <div class="platform-panel help-panel">
+            <div class="ops-form help-search-row">
+              <div class="field grow">
+                <label for="helpSearch" data-i18n="help.search">بحث في المساعدة</label>
+                <input
+                  id="helpSearch"
+                  type="search"
+                  data-i18n-placeholder="help.searchPlaceholder"
+                  placeholder="مثال: سقف التكلفة، سطح المكتب، الأدوار…"
+                />
+              </div>
+              <button type="button" class="btn primary" id="btnHelpSearch" data-i18n="help.searchBtn">ابحث</button>
+            </div>
+            <p class="lede-sm" data-i18n="help.cliHint">من الطرفية: pnpm run help [موضوع]</p>
+            <p class="lede-sm" data-i18n="help.exportHint">تصدير حزمة HTML/PDF/Markdown: pnpm run help:export</p>
+            <div class="help-layout">
+              <aside class="help-topics" aria-label="topics">
+                <p class="workspace-title" data-i18n="help.topics">المواضيع</p>
+                <ul class="help-topic-list" id="helpTopicList"></ul>
+              </aside>
+              <article class="help-article" id="helpArticle">
+                <p class="lede-sm" id="helpArticleMeta" data-i18n="help.empty">اختر موضوعاً أو ابحث بكلمة مفتاحية</p>
+                <div class="help-body" id="helpBody"></div>
+              </article>
+            </div>
+            <ul class="memory-list" id="helpSearchHits" hidden></ul>
           </div>
         </section>
 

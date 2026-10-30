@@ -50,6 +50,17 @@ import {
   getMessages,
 } from "../lib/i18n/index.js";
 import {
+  answerHelpQuery,
+  detectHelpIntent,
+  listHelpIndex,
+  loadHelpDoc,
+  markdownToHtml,
+  normalizeHelpLocale,
+  resolveTopicId,
+  searchHelp,
+  verifyHelpIntegrity,
+} from "../lib/help/index.js";
+import {
   initTracing,
   getMetrics,
   createLogger,
@@ -788,7 +799,12 @@ const PUBLIC_API = new Set([
   "/api/healthz",
   "/api/locale",
   "/api/i18n",
+  "/api/help",
 ]);
+
+function isPublicHelpPath(p: string): boolean {
+  return p === "/api/help" || p.startsWith("/api/help/");
+}
 
 const server = http.createServer(async (req, res) => {
   try {
@@ -869,6 +885,89 @@ const server = http.createServer(async (req, res) => {
       });
       return;
     }
+
+    // —— Public Help docs (Phase Help) — readable without auth for owner onboarding ——
+    if (method === "GET" && isPublicHelpPath(p)) {
+      const locale = normalizeHelpLocale(
+        url.searchParams.get("locale") || loadLocaleConfig().locale
+      );
+      try {
+        if (p === "/api/help") {
+          const q = (url.searchParams.get("q") || url.searchParams.get("query") || "").trim();
+          const topicParam = (url.searchParams.get("topic") || "").trim();
+          if (topicParam) {
+            const id = resolveTopicId(topicParam);
+            if (!id) {
+              sendJson(res, 404, { ok: false, error: `Unknown topic: ${topicParam}` });
+              return;
+            }
+            const doc = loadHelpDoc(id, locale, ROOT);
+            sendJson(res, 200, {
+              ok: true,
+              locale,
+              topic: {
+                ...doc,
+                html: markdownToHtml(doc.body),
+              },
+            });
+            return;
+          }
+          if (q) {
+            const hits = searchHelp({ query: q, locale, cwd: ROOT });
+            const answer = detectHelpIntent(q)
+              ? answerHelpQuery({ query: q, locale, cwd: ROOT })
+              : null;
+            sendJson(res, 200, {
+              ok: true,
+              locale,
+              query: q,
+              hits,
+              answer,
+              topics: listHelpIndex(locale, ROOT),
+            });
+            return;
+          }
+          sendJson(res, 200, {
+            ok: true,
+            locale,
+            topics: listHelpIndex(locale, ROOT),
+            integrity: verifyHelpIntegrity(ROOT),
+          });
+          return;
+        }
+        // /api/help/:topic
+        const topicSlug = decodeURIComponent(p.slice("/api/help/".length)).replace(/\/$/, "");
+        if (topicSlug === "integrity") {
+          const integrity = verifyHelpIntegrity(ROOT);
+          sendJson(res, 200, { ...integrity, locale });
+          return;
+        }
+        if (topicSlug === "search") {
+          const q = (url.searchParams.get("q") || "").trim();
+          sendJson(res, 200, {
+            ok: true,
+            locale,
+            query: q,
+            hits: searchHelp({ query: q, locale, cwd: ROOT }),
+          });
+          return;
+        }
+        const id = resolveTopicId(topicSlug);
+        if (!id) {
+          sendJson(res, 404, { ok: false, error: `Unknown topic: ${topicSlug}` });
+          return;
+        }
+        const doc = loadHelpDoc(id, locale, ROOT);
+        sendJson(res, 200, {
+          ok: true,
+          locale,
+          topic: { ...doc, html: markdownToHtml(doc.body) },
+        });
+      } catch (e: any) {
+        sendJson(res, 500, { ok: false, error: e?.message || String(e) });
+      }
+      return;
+    }
     if (method === "POST" && p === "/api/locale") {
       // Session-scoped UI preference via response; persists when client writes .env separately.
       // Auth not required for read; write still goes through normal auth below if we move it —
@@ -913,7 +1012,7 @@ const server = http.createServer(async (req, res) => {
     }
 
     // —— Require auth for every other /api/* route ——
-    if (p.startsWith("/api/") && !PUBLIC_API.has(p)) {
+    if (p.startsWith("/api/") && !PUBLIC_API.has(p) && !isPublicHelpPath(p)) {
       const auth = authenticateRequest(req, OWNER_TOKEN, {
         port: PORT,
         requireCsrf: true,
