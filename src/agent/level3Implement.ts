@@ -319,6 +319,7 @@ export async function runImplementationCrew(
         localModel: "qwen2.5-coder:1.5b",
         temperature: 0.1,
         numPredict: 700,
+        role: "coder",
       });
       const backlog = readIfExists(path.join(outDir, "IMPLEMENTATION_BACKLOG.md"));
       const ticket = readIfExists(path.join(outDir, "TICKET_P0_STARTER.md"));

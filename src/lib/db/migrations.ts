@@ -129,6 +129,31 @@ CREATE TABLE IF NOT EXISTS json_import_log (
 );
 `,
   },
+  {
+    version: 2,
+    name: "phase5_prompt_cache",
+    sql: `
+CREATE TABLE IF NOT EXISTS prompt_cache (
+  id TEXT PRIMARY KEY,
+  tenant_id TEXT NOT NULL,
+  cache_key TEXT NOT NULL,
+  model TEXT NOT NULL,
+  prompt_hash TEXT NOT NULL,
+  response TEXT NOT NULL,
+  input_tokens INTEGER NOT NULL DEFAULT 0,
+  output_tokens INTEGER NOT NULL DEFAULT 0,
+  created_at TEXT NOT NULL,
+  expires_at TEXT NOT NULL,
+  hit_count INTEGER NOT NULL DEFAULT 0
+);
+
+CREATE UNIQUE INDEX IF NOT EXISTS idx_prompt_cache_tenant_key
+  ON prompt_cache (tenant_id, cache_key);
+
+CREATE INDEX IF NOT EXISTS idx_prompt_cache_expires
+  ON prompt_cache (expires_at);
+`,
+  },
 ];
 
 function pgAdapt(sql: string): string {
