@@ -4,7 +4,23 @@
 pnpm run doctor
 ```
 
-Local checks (no network required for the core suite): platform, Node≥20, pnpm field, `.env` presence, `node_modules`, `task.ts`, `SAM_OUTPUT_HOME`, i18n coverage, and an Ollama note (reachability not probed by default).
+Or from the Tools manager:
+
+```bat
+Tools\Sam-Harness-Manager.cmd -Action doctor
+```
+
+```bash
+bash Tools/sam-harness-manager.sh --action doctor
+```
+
+Local checks (no network required for the core suite): platform, Node≥20, pnpm field, `.env` presence, `node_modules`, `task.ts`, `SAM_OUTPUT_HOME`, i18n coverage, team config / per-role routing, and an Ollama note (reachability not probed by default).
+
+Live check (doctor + Control Plane `/healthz` if running):
+
+```bash
+bash Tools/sam-harness-manager.sh --action health
+```
 
 ## Common failures
 
@@ -15,6 +31,11 @@ Local checks (no network required for the core suite): platform, Node≥20, pnpm
 | Level-3 refused | Authorize with `--go` / `IMPLEMENT_GO` / `go-nogo.json` |
 | Desktop fails on Ubuntu | Expected — stub; use Windows or filesystem tools only |
 | `pnpm test` path failures | Run from repo root after `pnpm install` |
-| Ollama errors | Install Ollama and pull models (`Tools\06-pull-ollama-models.bat` or `ollama pull`) |
+| Ollama errors | Install Ollama and pull models (`Tools` → `pull-models`, or `06-pull-ollama-models.*` — models from `config/team.json`) |
+| Update refused | Working tree dirty — commit/stash, then manager `update` |
+| Migrations / DB oddities | `pnpm run migrate` or manager `repair` |
+| Need a snapshot | Manager `backup` / `restore` (DB + config + `.env`) |
+
+Manager logs: `SAM_OUTPUT_HOME/logs/manager-*.log` (fallback `Tools/logs/`). View via menu **view-logs**.
 
 Service liveness: `GET /healthz` while Control Plane is running.

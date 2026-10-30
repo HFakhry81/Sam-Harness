@@ -1,0 +1,19 @@
+# Canonical Sam-Harness Manager actions (one id per line).
+# Keep in sync with Sam-Harness-Manager.ps1 and sam-harness-manager.sh.
+install
+setup-prereqs
+install-deps
+update
+build-check
+start-ui
+pull-models
+doctor
+help
+backup
+restore
+repair
+uninstall
+view-logs
+cleanup-logs
+health
+exit

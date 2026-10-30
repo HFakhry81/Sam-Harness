@@ -1,20 +1,10 @@
 @echo off
-setlocal
+setlocal EnableExtensions
+chcp 65001 >nul
 title Sam-Harness — install dependencies
-cd /d "%~dp0.."
-echo   cwd=%CD%
-where pnpm >nul 2>&1
-if errorlevel 1 (
-  echo   [X] pnpm missing — run 01-setup-prereqs.bat first.
-  pause
-  exit /b 1
-)
-call pnpm install
-if errorlevel 1 (
-  echo   [X] pnpm install failed.
-  pause
-  exit /b 1
-)
-echo   [OK] Dependencies installed.
+cd /d "%~dp0"
+set "SAM_TOOLS_NOPAUSE=1"
+call "%~dp0Sam-Harness-Manager.cmd" -Action install-deps %*
+set "ERR=%ERRORLEVEL%"
 pause
-endlocal
+endlocal & exit /b %ERR%

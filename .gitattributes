@@ -1,0 +1,21 @@
+# Default: normalize to LF in the repo
+* text=auto eol=lf
+
+# Windows Tools launchers / PowerShell — CRLF in working tree
+*.bat text eol=crlf
+*.cmd text eol=crlf
+*.ps1 text eol=crlf
+
+# Unix shell — LF
+*.sh text eol=lf
+
+# Keep lockfiles and binaries untouched
+pnpm-lock.yaml text eol=lf
+*.png binary
+*.jpg binary
+*.jpeg binary
+*.gif binary
+*.webp binary
+*.ico binary
+*.sqlite binary
+*.zip binary

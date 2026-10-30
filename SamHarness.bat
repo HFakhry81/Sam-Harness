@@ -17,7 +17,7 @@ echo      Hybrid Local + Cloud  ^|  LangGraph Review  ^|  Delivery OS
 echo   ================================================================
 echo.
 echo   Project: %PROJECT_DIR%
-echo   First-time setup: Tools\01-setup-prereqs.bat then 02-install-deps.bat
+echo   First-time setup: Tools\Sam-Harness-Manager.cmd  ^(or 01-setup-prereqs then 02-install-deps^)
 echo.
 echo   ----------------------------------------------------------------
 echo.
