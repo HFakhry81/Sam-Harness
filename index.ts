@@ -22,6 +22,12 @@ import {
   mirrorRunArtifacts,
 } from "./src/lib/outputHome.js";
 import { beginCostRun, endCostRun } from "./src/lib/costLedger.js";
+import {
+  answerHelpQuery,
+  detectHelpIntent,
+  formatHelpAnswerForCli,
+} from "./src/lib/help/index.js";
+import { loadLocaleConfig } from "./src/lib/i18n/index.js";
 
 /** Default ON — LangGraph agency runtime. Set AGENCY_MODE=0 for legacy linear swarm. */
 function useAgencyRuntime(): boolean {
@@ -164,6 +170,33 @@ async function main() {
   const argv = process.argv.slice(2);
   const task = loadTask();
   const implementOnly = argv.includes("--implement-only");
+
+  // In-agency Help intents — answer from docs/help without inventing capabilities.
+  const helpArg = argv.includes("--help-intent");
+  const helpQuery = helpArg
+    ? argv.filter((a) => a !== "--help-intent" && !isCliNoise(a)).join(" ").trim() || task
+    : task;
+  const trimmedHelp = helpQuery.trim();
+  const primarilyHelp =
+    helpArg ||
+    /^(help|مساعدة|المساعدة|docs?|faq|glossary)(\s+|$)/i.test(trimmedHelp) ||
+    (detectHelpIntent(trimmedHelp) &&
+      trimmedHelp.length < 160 &&
+      !/architecture|implement|level-?3|maw3ed|mauswed|تحليل مستودع|نف[ّ']?ذ|طب[ّ']?ق/i.test(
+        trimmedHelp
+      ));
+  if (!implementOnly && primarilyHelp) {
+    const locale = loadLocaleConfig().locale;
+    const answer = answerHelpQuery({ query: helpQuery, locale, cwd: process.cwd() });
+    console.log(formatHelpAnswerForCli(answer));
+    fs.writeFileSync(
+      "final-report.md",
+      `# Help\n\n${answer.title}\n\n${answer.body}\n`,
+      "utf-8"
+    );
+    ok("Help", `Answered from docs/help (${answer.topicId || "index"}, ${answer.source})`);
+    return;
+  }
 
   const layout = ensureOutputHome();
   cleanOutputTemp();

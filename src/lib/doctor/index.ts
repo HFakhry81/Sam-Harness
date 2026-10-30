@@ -8,6 +8,19 @@ import * as path from "path";
 import { loadLocaleConfig } from "../i18n/index.js";
 import { assertTranslationCoverage } from "../i18n/index.js";
 import { getOutputHome, getOutputLayout } from "../outputHome.js";
+import { verifyHelpIntegrity } from "../help/index.js";
+import {
+  loadTeamConfig,
+  teamConfigPath,
+  teamConfigSummary,
+  validateTeamConfig,
+} from "../../agency/teamConfig.js";
+import { effectiveRoutingDecisions } from "../../agent/models.js";
+import { loadHybridProfile } from "../../controlplane/hybridProfile.js";
+import {
+  detectLinuxCapabilities,
+  detectMacCapabilities,
+} from "../../tools/desktop/index.js";
 
 export type DoctorSeverity = "ok" | "warn" | "fail";
 
@@ -229,6 +242,159 @@ function checkPlatform(): DoctorCheck {
   };
 }
 
+function checkHelpDocs(cwd: string): DoctorCheck {
+  try {
+    const result = verifyHelpIntegrity(cwd);
+    if (result.ok) {
+      return {
+        id: "help",
+        title: "Help docs",
+        severity: "ok",
+        detail: `${result.topics.length} topics × ar/en`,
+      };
+    }
+    return {
+      id: "help",
+      title: "Help docs",
+      severity: "fail",
+      detail: result.issues
+        .slice(0, 4)
+        .map((i) => `${i.locale}/${i.id || "?"}: ${i.problem}`)
+        .join("; "),
+    };
+  } catch (e: any) {
+    return {
+      id: "help",
+      title: "Help docs",
+      severity: "fail",
+      detail: e?.message || String(e),
+    };
+  }
+}
+
+function checkTeamConfig(cwd: string): DoctorCheck {
+  try {
+    const file = teamConfigPath(cwd);
+    if (!fs.existsSync(file)) {
+      // Defaults still work; warn that file is missing
+      const cfg = loadTeamConfig(cwd);
+      return {
+        id: "team",
+        title: "Team config",
+        severity: "warn",
+        detail: `config/team.json missing — using defaults (${cfg.roles.length} roles)`,
+      };
+    }
+    const raw = JSON.parse(fs.readFileSync(file, "utf-8"));
+    const v = validateTeamConfig(raw);
+    if (!v.ok) {
+      return {
+        id: "team",
+        title: "Team config",
+        severity: "fail",
+        detail: v.issues
+          .slice(0, 3)
+          .map((i) => `${i.path}: ${i.message}`)
+          .join("; "),
+      };
+    }
+    const summary = teamConfigSummary(cwd);
+    return {
+      id: "team",
+      title: "Team config",
+      severity: "ok",
+      detail: `${summary.enabledCount}/${summary.roleCount} roles · pipeline ${summary.downstreamOrder.join("→")}`,
+    };
+  } catch (e: any) {
+    return {
+      id: "team",
+      title: "Team config",
+      severity: "fail",
+      detail: e?.message || String(e),
+    };
+  }
+}
+
+function checkRouting(cwd: string): DoctorCheck {
+  try {
+    const profile = loadHybridProfile(cwd);
+    const decisions = effectiveRoutingDecisions(cwd);
+    const sample = decisions
+      .filter((d) => ["strategist", "auditor", "ceo_router", "operator"].includes(d.role))
+      .map((d) => `${d.role}=${d.route.tier}${d.route.degraded ? "*" : ""}`)
+      .join(", ");
+    return {
+      id: "routing",
+      title: "Per-role routing",
+      severity: "ok",
+      detail: `hybrid=${profile.mode} cap=$${profile.costCapUsd} · ${sample}`,
+    };
+  } catch (e: any) {
+    return {
+      id: "routing",
+      title: "Per-role routing",
+      severity: "warn",
+      detail: e?.message || String(e),
+    };
+  }
+}
+
+function checkDesktopBackend(): DoctorCheck {
+  try {
+    if (process.platform === "linux") {
+      const caps = detectLinuxCapabilities();
+      const missing: string[] = [];
+      if (caps.input === "none") missing.push("input(xdotool|ydotool)");
+      if (caps.windows === "none") missing.push("windows(wmctrl|xdotool)");
+      if (caps.screenshot === "none") missing.push("screenshot(grim|scrot|gnome-screenshot)");
+      if (missing.length) {
+        return {
+          id: "desktop",
+          title: "Desktop backend (Linux)",
+          severity: "warn",
+          detail: `session=${caps.session} · missing ${missing.join(", ")} — sudo apt install wmctrl xdotool scrot python3-pyatspi`,
+        };
+      }
+      return {
+        id: "desktop",
+        title: "Desktop backend (Linux)",
+        severity: "ok",
+        detail: `session=${caps.session} input=${caps.input} windows=${caps.windows} shot=${caps.screenshot} atspi=${caps.atspi}`,
+      };
+    }
+    if (process.platform === "darwin") {
+      const caps = detectMacCapabilities();
+      if (!caps.osascript || !caps.screencapture) {
+        return {
+          id: "desktop",
+          title: "Desktop backend (macOS)",
+          severity: "warn",
+          detail: `osascript=${caps.osascript} screencapture=${caps.screencapture}`,
+        };
+      }
+      return {
+        id: "desktop",
+        title: "Desktop backend (macOS)",
+        severity: "ok",
+        detail: `osascript + screencapture · Accessibility permission may be required`,
+      };
+    }
+    return {
+      id: "desktop",
+      title: "Desktop backend (Windows)",
+      severity: "ok",
+      detail: "windows-uia (PowerShell + UIAutomation)",
+    };
+  } catch (e: any) {
+    return {
+      id: "desktop",
+      title: "Desktop backend",
+      severity: "warn",
+      detail: e?.message || String(e),
+    };
+  }
+}
+
 /** Run diagnostic suite (no network). */
 export function runDoctor(opts: DoctorOptions = {}): DoctorReport {
   const cwd = opts.cwd || process.cwd();
@@ -251,6 +417,10 @@ export function runDoctor(opts: DoctorOptions = {}): DoctorReport {
       checkTaskSeed(cwd),
       checkOutputHome(env),
       checkLocale(env),
+      checkHelpDocs(cwd),
+      checkTeamConfig(cwd),
+      checkRouting(cwd),
+      checkDesktopBackend(),
     ];
 
     if (opts.probeOllama) {

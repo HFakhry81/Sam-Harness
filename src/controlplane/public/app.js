@@ -74,6 +74,8 @@ async function loadLocale() {
   }
 }
 
+let helpActiveTopicId = "";
+
 async function setLocale(locale) {
   const res = await fetch("/api/locale", {
     method: "POST",
@@ -93,6 +95,10 @@ async function setLocale(locale) {
   }
   applyDocumentDir(uiLocale, uiDir);
   applyI18nDom();
+  // Reload Help topic list/body so titles match the active locale.
+  if (!$("stageHelp")?.classList.contains("hidden")) {
+    await loadHelpUi(helpActiveTopicId || undefined);
+  }
   return data;
 }
 
@@ -449,9 +455,11 @@ const PLATFORM_STAGES = {
   compose: "stageCompose",
   daily: "stageDaily",
   profiles: "stageProfiles",
+  team: "stageTeam",
   memory: "stageMemory",
   timeline: "stageTimeline",
   rollback: "stageRollback",
+  help: "stageHelp",
 };
 
 function hideAllMainPanels() {
@@ -461,9 +469,11 @@ function hideAllMainPanels() {
     els.stageDone,
     $("stageDaily"),
     $("stageProfiles"),
+    $("stageTeam"),
     $("stageMemory"),
     $("stageTimeline"),
     $("stageRollback"),
+    $("stageHelp"),
   ].forEach((el) => el?.classList.add("hidden"));
 }
 
@@ -490,9 +500,182 @@ function showPlatformPanel(view) {
   if (id) $(id)?.classList.remove("hidden");
   if (view === "daily") loadDailyOps();
   if (view === "profiles") loadProfiles();
+  if (view === "team") loadTeamUi();
   if (view === "memory") loadMemoryUi();
   if (view === "timeline") loadRunsTimeline();
   if (view === "rollback") loadRollback();
+  if (view === "help") loadHelpUi();
+}
+
+async function loadTeamUi() {
+  const body = $("teamRolesBody");
+  const status = $("teamStatus");
+  if (!body) return;
+  try {
+    const data = await api("/api/team").then((r) => r.json());
+    const cfg = data.config || {};
+    const routing = data.routing || [];
+    const routeByRole = Object.fromEntries(
+      (routing || []).map((d) => [d.role, d.route])
+    );
+    if ($("teamPipelineOrder")) {
+      $("teamPipelineOrder").value = (cfg.pipeline?.downstreamOrder || []).join(",");
+    }
+    body.innerHTML = "";
+    (cfg.roles || []).forEach((role) => {
+      const route = routeByRole[role.id];
+      const tr = document.createElement("tr");
+      const routeLabel = route
+        ? `${route.tier}${route.degraded ? "*" : ""} · ${route.model}`
+        : "—";
+      tr.innerHTML = `
+        <td><code>${escapeHtml(role.id)}</code>${role.builtin ? "" : " · custom"}</td>
+        <td>${escapeHtml(role.title || "")}</td>
+        <td>${role.enabled ? "✓" : "—"}</td>
+        <td><code>${escapeHtml(role.models?.local || "")}</code></td>
+        <td><code>${escapeHtml(role.models?.cloud || "")}</code></td>
+        <td>${escapeHtml(routeLabel)}</td>
+        <td class="ops-actions"></td>`;
+      const actions = tr.querySelector(".ops-actions");
+      if (role.stage === "downstream" || !role.builtin) {
+        const toggle = document.createElement("button");
+        toggle.type = "button";
+        toggle.className = "btn ghost tiny";
+        toggle.textContent = role.enabled
+          ? t("team.disable") || "Disable"
+          : t("team.enable") || "Enable";
+        toggle.addEventListener("click", async () => {
+          await api("/api/team/roles", {
+            method: "POST",
+            body: JSON.stringify({ id: role.id, enabled: !role.enabled }),
+          });
+          loadTeamUi();
+        });
+        actions.appendChild(toggle);
+      }
+      if (!role.builtin) {
+        const del = document.createElement("button");
+        del.type = "button";
+        del.className = "btn ghost tiny";
+        del.textContent = t("team.delete") || "Delete";
+        del.addEventListener("click", async () => {
+          await api(`/api/team/roles/${encodeURIComponent(role.id)}`, {
+            method: "DELETE",
+          });
+          loadTeamUi();
+        });
+        actions.appendChild(del);
+      }
+      body.appendChild(tr);
+    });
+    if (!(cfg.roles || []).length) {
+      body.innerHTML = `<tr><td colspan="7">${escapeHtml(t("team.empty") || "No roles")}</td></tr>`;
+    }
+    if (status) {
+      status.textContent = `roles=${(cfg.roles || []).length} · pipeline=${(cfg.pipeline?.downstreamOrder || []).join("→")}`;
+    }
+  } catch (e) {
+    if (status) status.textContent = e.message || String(e);
+  }
+}
+
+async function loadHelpUi(topicId) {
+  const list = $("helpTopicList");
+  const body = $("helpBody");
+  const meta = $("helpArticleMeta");
+  const hitsEl = $("helpSearchHits");
+  if (!list || !body) return;
+  if (hitsEl) {
+    hitsEl.hidden = true;
+    hitsEl.innerHTML = "";
+  }
+  try {
+    if (meta) meta.textContent = t("help.loading");
+    const data = await fetch(`/api/help?locale=${encodeURIComponent(uiLocale)}`, {
+      credentials: "same-origin",
+    }).then((r) => r.json());
+    list.innerHTML = "";
+    (data.topics || []).forEach((topic) => {
+      const li = document.createElement("li");
+      const btn = document.createElement("button");
+      btn.type = "button";
+      btn.className = "help-topic-btn";
+      btn.dataset.id = topic.id;
+      btn.innerHTML = `<strong>${topic.title}</strong><span>${topic.summary}</span>`;
+      if (topicId && topic.id === topicId) btn.classList.add("active");
+      btn.addEventListener("click", () => openHelpTopic(topic.id));
+      li.appendChild(btn);
+      list.appendChild(li);
+    });
+    if (topicId) {
+      await openHelpTopic(topicId);
+    } else if (data.topics?.length) {
+      await openHelpTopic(data.topics[0].id);
+    } else if (meta) {
+      meta.textContent = t("help.empty");
+    }
+  } catch {
+    if (meta) meta.textContent = t("help.error");
+  }
+}
+
+async function openHelpTopic(id) {
+  const body = $("helpBody");
+  const meta = $("helpArticleMeta");
+  const hitsEl = $("helpSearchHits");
+  if (!body) return;
+  if (hitsEl) hitsEl.hidden = true;
+  document.querySelectorAll(".help-topic-btn").forEach((b) => {
+    b.classList.toggle("active", b.dataset.id === id);
+  });
+  try {
+    if (meta) meta.textContent = t("help.loading");
+    const data = await fetch(
+      `/api/help/${encodeURIComponent(id)}?locale=${encodeURIComponent(uiLocale)}`,
+      { credentials: "same-origin" }
+    ).then((r) => r.json());
+    if (!data.ok || !data.topic) {
+      if (meta) meta.textContent = t("help.error");
+      return;
+    }
+    helpActiveTopicId = data.topic.id;
+    if (meta) meta.textContent = `${data.topic.id} · ${data.topic.title}`;
+    body.innerHTML = data.topic.html || "";
+  } catch {
+    if (meta) meta.textContent = t("help.error");
+  }
+}
+
+async function runHelpSearch() {
+  const q = $("helpSearch")?.value?.trim() || "";
+  const hitsEl = $("helpSearchHits");
+  if (!q) {
+    await loadHelpUi();
+    return;
+  }
+  try {
+    const data = await fetch(
+      `/api/help?locale=${encodeURIComponent(uiLocale)}&q=${encodeURIComponent(q)}`,
+      { credentials: "same-origin" }
+    ).then((r) => r.json());
+    if (data.answer?.topicId) {
+      await openHelpTopic(data.answer.topicId);
+    }
+    if (hitsEl) {
+      hitsEl.hidden = false;
+      hitsEl.innerHTML = "";
+      (data.hits || []).forEach((hit) => {
+        const li = document.createElement("li");
+        li.innerHTML = `<button type="button" class="linkish" data-help-hit="${hit.id}"><strong>${hit.title}</strong> — ${hit.snippet}</button>`;
+        hitsEl.appendChild(li);
+      });
+      hitsEl.querySelectorAll("[data-help-hit]").forEach((btn) => {
+        btn.addEventListener("click", () => openHelpTopic(btn.getAttribute("data-help-hit")));
+      });
+    }
+  } catch {
+    if ($("helpArticleMeta")) $("helpArticleMeta").textContent = t("help.error");
+  }
 }
 
 async function loadRunsTimeline() {
@@ -1260,6 +1443,16 @@ document.querySelectorAll("#platformNav button").forEach((btn) => {
   });
 });
 
+$("btnHelpSearch")?.addEventListener("click", () => {
+  void runHelpSearch();
+});
+$("helpSearch")?.addEventListener("keydown", (ev) => {
+  if (ev.key === "Enter") {
+    ev.preventDefault();
+    void runHelpSearch();
+  }
+});
+
 $("btnDailyAdd")?.addEventListener("click", async () => {
   const title = $("dailyPrompt")?.value?.trim();
   const schedule = $("dailyCron")?.value?.trim() || "manual";
@@ -1317,6 +1510,55 @@ $("btnSaveProfile")?.addEventListener("click", async () => {
       : data.error || "فشل الحفظ";
   }
   if (data.ok) renderCostUsage(data.cost);
+});
+
+$("btnTeamRefresh")?.addEventListener("click", () => loadTeamUi());
+$("btnTeamSavePipeline")?.addEventListener("click", async () => {
+  const raw = $("teamPipelineOrder")?.value || "";
+  const downstreamOrder = raw
+    .split(",")
+    .map((s) => s.trim())
+    .filter(Boolean);
+  const res = await api("/api/team/pipeline", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ downstreamOrder }),
+  });
+  const data = await res.json();
+  if ($("teamStatus")) {
+    $("teamStatus").textContent = data.ok
+      ? `pipeline saved · ${downstreamOrder.join("→")}`
+      : data.error || "failed";
+  }
+  if (data.ok) loadTeamUi();
+});
+$("btnTeamAddRole")?.addEventListener("click", async () => {
+  const id = $("teamRoleId")?.value?.trim() || "";
+  const title = $("teamRoleTitle")?.value?.trim() || "";
+  const prompt = $("teamRolePrompt")?.value?.trim() || "";
+  const res = await api("/api/team/roles", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      id,
+      title,
+      prompt,
+      stage: "downstream",
+      prefersCloud: false,
+      enabled: true,
+      models: { local: "qwen2.5:1.5b", cloud: "gemma4:cloud", free: null },
+    }),
+  });
+  const data = await res.json();
+  if ($("teamStatus")) {
+    $("teamStatus").textContent = data.ok ? `added ${id}` : data.error || "failed";
+  }
+  if (data.ok) {
+    if ($("teamRoleId")) $("teamRoleId").value = "";
+    if ($("teamRoleTitle")) $("teamRoleTitle").value = "";
+    if ($("teamRolePrompt")) $("teamRolePrompt").value = "";
+    loadTeamUi();
+  }
 });
 
 $("btnLogin")?.addEventListener("click", async () => {

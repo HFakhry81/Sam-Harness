@@ -1,8 +1,12 @@
 /**
- * Phase 5 — model routing: cheap/local → free → paid, with cost-cap awareness.
+ * Phase 5 + Phase 8 — model routing: cheap/local → free → paid, with cost-cap
+ * awareness, hybrid per-role map, and prefersCloud from team config.
  */
 import { getCostBudget } from "../costLedger.js";
-import { loadHybridProfile } from "../../controlplane/hybridProfile.js";
+import {
+  loadHybridProfile,
+  type HybridMode,
+} from "../../controlplane/hybridProfile.js";
 import {
   classifyDifficulty,
   escalateTier,
@@ -10,6 +14,7 @@ import {
   type DifficultyTier,
 } from "./difficulty.js";
 import { loadCostOptConfig, type CostOptConfig } from "./config.js";
+import { rolePrefersCloud } from "../../agency/teamConfig.js";
 
 export type ModelTier = "local" | "free" | "paid";
 
@@ -30,6 +35,10 @@ export type ModelRoute = {
   useProviderPromptCache: boolean;
   /** Cap / budget forced local degradation. */
   degraded: boolean;
+  /** Effective hybrid mode for this role after profile.roles merge. */
+  roleHybridMode?: HybridMode;
+  /** Whether team/role prefersCloud influenced the decision. */
+  prefersCloud?: boolean;
 };
 
 export type RouteInput = DifficultyInput & {
@@ -38,8 +47,12 @@ export type RouteInput = DifficultyInput & {
   cloudModel?: string;
   /** Preferred local model name. */
   localModel?: string;
+  /** Optional free-tier model override for this role. */
+  freeModel?: string;
   /** Skip paid even if difficulty is premium (e.g. FORCE_LOCAL). */
   forceLocal?: boolean;
+  /** Team/role prefersCloud hint (Phase 8). */
+  prefersCloud?: boolean;
   /** Override config (tests). */
   config?: CostOptConfig;
 };
@@ -56,7 +69,7 @@ function hybridForcesLocal(cwd: string): boolean {
   return false;
 }
 
-function hybridMode(cwd: string): "local" | "cloud" | "auto" {
+function hybridMode(cwd: string): HybridMode {
   const env = String(process.env.HYBRID_MODE || "").trim().toLowerCase();
   if (env === "local" || env === "cloud" || env === "auto") return env;
   try {
@@ -66,8 +79,38 @@ function hybridMode(cwd: string): "local" | "cloud" | "auto" {
   }
 }
 
+/**
+ * Effective hybrid mode for a role: profile.roles[role] overrides global mode.
+ * Cap / FORCE_LOCAL still win later in resolveModelRoute.
+ */
+export function effectiveHybridModeForRole(
+  cwd: string,
+  role?: string
+): HybridMode {
+  const global = hybridMode(cwd);
+  if (!role) return global;
+  try {
+    const p = loadHybridProfile(cwd);
+    const per = p.roles?.[role];
+    if (per === "local" || per === "cloud" || per === "auto") return per;
+  } catch {
+    /* ignore */
+  }
+  return global;
+}
+
 function ollamaApiKey(): string {
   return String(process.env.OLLAMA_API_KEY || "").trim();
+}
+
+function resolvePrefersCloud(input: RouteInput, cwd: string): boolean {
+  if (typeof input.prefersCloud === "boolean") return input.prefersCloud;
+  if (!input.role) return false;
+  try {
+    return rolePrefersCloud(input.role, cwd);
+  } catch {
+    return false;
+  }
 }
 
 function freeTierConfigured(cfg: CostOptConfig): boolean {
@@ -178,8 +221,29 @@ function paidRoute(
   };
 }
 
+function withRoleMeta(
+  route: ModelRoute,
+  roleMode: HybridMode,
+  prefersCloud: boolean
+): ModelRoute {
+  return { ...route, roleHybridMode: roleMode, prefersCloud };
+}
+
+function freeRouteForRole(
+  cfg: CostOptConfig,
+  difficulty: DifficultyTier,
+  reason: string,
+  freeModel?: string
+): ModelRoute {
+  const base = freeRoute(cfg, difficulty, reason);
+  if (freeModel) return { ...base, model: freeModel };
+  return base;
+}
+
 /**
  * Resolve which model endpoint to use for this call.
+ * Precedence: FORCE_LOCAL / hybrid local → **cost cap always wins** →
+ * per-role hybrid map → difficulty router → prefersCloud nudge.
  * Never selects paid when it would exceed the daily cap.
  */
 export function resolveModelRoute(input: RouteInput = {}): ModelRoute {
@@ -187,116 +251,182 @@ export function resolveModelRoute(input: RouteInput = {}): ModelRoute {
   const cfg = input.config || loadCostOptConfig();
   const localModel = input.localModel || cfg.localModel;
   const paidModel = input.cloudModel || cfg.paidModel;
+  const prefersCloud = resolvePrefersCloud(input, cwd);
+  const roleMode = effectiveHybridModeForRole(cwd, input.role);
 
   let difficulty = classifyDifficulty(input);
+  // prefersCloud nudges standard → treat closer to premium when affordable (auto only)
+  if (prefersCloud && difficulty === "standard" && roleMode !== "local") {
+    difficulty = "premium";
+  }
   difficulty = escalateTier(difficulty, {
     verificationFailed: input.verificationFailed,
     confidence: input.confidence,
     threshold: cfg.escalateConfidenceBelow,
   });
 
+  const annotate = (r: ModelRoute) => withRoleMeta(r, roleMode, prefersCloud);
+
   if (!cfg.routingEnabled) {
     // Legacy behavior: cloud when key + budget allow, else local.
+    // Cap still wins: canAffordPaid / shouldDegradeToLocal.
     if (
       !input.forceLocal &&
       !hybridForcesLocal(cwd) &&
+      roleMode !== "local" &&
       ollamaApiKey() &&
       canAffordPaid(cwd, estimatePaidUsd(paidModel, String(input.prompt || "").length), cfg)
     ) {
-      return paidRoute(
-        cfg,
-        difficulty,
-        paidModel,
-        estimatePaidUsd(paidModel, String(input.prompt || "").length),
-        "routing disabled — cloud key + budget"
+      return annotate(
+        paidRoute(
+          cfg,
+          difficulty,
+          paidModel,
+          estimatePaidUsd(paidModel, String(input.prompt || "").length),
+          "routing disabled — cloud key + budget"
+        )
       );
     }
-    return localRoute(cfg, difficulty, localModel, "routing disabled — local", false);
-  }
-
-  if (input.forceLocal || hybridForcesLocal(cwd)) {
-    return localRoute(cfg, difficulty, localModel, "forced local (env/profile)", false);
-  }
-
-  const degraded = shouldDegradeToLocal(cwd, cfg);
-  const mode = hybridMode(cwd);
-  const promptChars = String(input.prompt || "").length;
-  const est = estimatePaidUsd(paidModel, promptChars);
-
-  // Near / at cap: never paid. Prefer free endpoint if configured, else local.
-  if (degraded) {
-    if (freeTierConfigured(cfg) && difficulty !== "cheap") {
-      return {
-        ...freeRoute(cfg, difficulty, "near/at cost cap — free tier"),
-        degraded: true,
-      };
-    }
-    return localRoute(
-      cfg,
-      difficulty,
-      localModel,
-      mode === "cloud"
-        ? "cost cap exhausted — local degradation (cloud mode blocked for paid)"
-        : "near/at cost cap — local tier",
-      true
+    return annotate(
+      localRoute(cfg, difficulty, localModel, "routing disabled — local", false)
     );
   }
 
-  // Cheap tasks always stay local.
-  if (difficulty === "cheap") {
-    return localRoute(cfg, difficulty, localModel, "cheap task → local", false);
+  if (input.forceLocal || hybridForcesLocal(cwd) || roleMode === "local") {
+    return annotate(
+      localRoute(
+        cfg,
+        difficulty,
+        localModel,
+        roleMode === "local" && !input.forceLocal && !hybridForcesLocal(cwd)
+          ? `role hybrid map → local (${input.role || "role"})`
+          : "forced local (env/profile)",
+        false
+      )
+    );
   }
 
-  const paidOk =
-    mode !== "local" &&
-    Boolean(ollamaApiKey()) &&
-    canAffordPaid(cwd, est, cfg);
+  // Cap always wins — near / at cap: never paid.
+  const degraded = shouldDegradeToLocal(cwd, cfg);
+  const promptChars = String(input.prompt || "").length;
+  const est = estimatePaidUsd(paidModel, promptChars);
+  const freeConfigured =
+    freeTierConfigured(cfg) || Boolean(String(input.freeModel || "").trim());
 
-  // Hybrid mode `cloud`: prefer paid for non-cheap work when the key + budget allow.
-  if (mode === "cloud" && paidOk) {
-    return paidRoute(
-      cfg,
-      difficulty,
-      paidModel,
-      est,
-      `${difficulty} → paid (hybrid cloud mode)`
+  if (degraded) {
+    if (freeConfigured && difficulty !== "cheap") {
+      return annotate({
+        ...freeRouteForRole(
+          cfg,
+          difficulty,
+          "near/at cost cap — free tier (cap wins)",
+          input.freeModel || undefined
+        ),
+        degraded: true,
+      });
+    }
+    return annotate(
+      localRoute(
+        cfg,
+        difficulty,
+        localModel,
+        roleMode === "cloud"
+          ? "cost cap exhausted — local degradation (cloud mode blocked for paid)"
+          : "near/at cost cap — local tier (cap wins)",
+        true
+      )
+    );
+  }
+
+  // Cheap tasks always stay local (unless role hybrid map is cloud — still respect cheap for ceo_router).
+  if (difficulty === "cheap" && roleMode !== "cloud") {
+    return annotate(
+      localRoute(cfg, difficulty, localModel, "cheap task → local", false)
+    );
+  }
+
+  // roleMode === "local" already returned above
+  const paidOk = Boolean(ollamaApiKey()) && canAffordPaid(cwd, est, cfg);
+
+  // Hybrid mode / per-role `cloud`: prefer paid for non-cheap work when key + budget allow.
+  if (roleMode === "cloud" && paidOk && difficulty !== "cheap") {
+    return annotate(
+      paidRoute(
+        cfg,
+        difficulty,
+        paidModel,
+        est,
+        `${difficulty} → paid (role/hybrid cloud mode${prefersCloud ? ", prefersCloud" : ""})`
+      )
+    );
+  }
+  if (roleMode === "cloud" && difficulty === "cheap" && paidOk && prefersCloud) {
+    return annotate(
+      paidRoute(
+        cfg,
+        difficulty,
+        paidModel,
+        est,
+        "cheap but role cloud+prefersCloud → paid"
+      )
     );
   }
 
   // Standard (auto): local first; optional free-tier preference via env.
+  // prefersCloud already bumped standard→premium above when set.
   if (difficulty === "standard") {
     if (
-      freeTierConfigured(cfg) &&
+      freeConfigured &&
       String(process.env.SAM_PREFER_FREE_FOR_STANDARD || "").trim() === "1"
     ) {
-      return freeRoute(
-        cfg,
-        difficulty,
-        "standard → free tier (SAM_PREFER_FREE_FOR_STANDARD)"
+      return annotate(
+        freeRouteForRole(
+          cfg,
+          difficulty,
+          "standard → free tier (SAM_PREFER_FREE_FOR_STANDARD)",
+          input.freeModel || undefined
+        )
       );
     }
-    return localRoute(cfg, difficulty, localModel, "standard → local", false);
+    return annotate(
+      localRoute(cfg, difficulty, localModel, "standard → local", false)
+    );
   }
 
   // Premium (auto): escalate to paid only when affordable + key present; else free → local.
   if (paidOk) {
-    return paidRoute(cfg, difficulty, paidModel, est, "premium → paid (budget ok)");
-  }
-  if (freeTierConfigured(cfg)) {
-    return freeRoute(
-      cfg,
-      difficulty,
-      ollamaApiKey()
-        ? "premium — paid unaffordable/blocked → free"
-        : "premium — no cloud key → free"
+    return annotate(
+      paidRoute(
+        cfg,
+        difficulty,
+        paidModel,
+        est,
+        prefersCloud
+          ? "premium → paid (budget ok, prefersCloud)"
+          : "premium → paid (budget ok)"
+      )
     );
   }
-  return localRoute(
-    cfg,
-    difficulty,
-    localModel,
-    "premium — no paid/free available → local",
-    false
+  if (freeConfigured) {
+    return annotate(
+      freeRouteForRole(
+        cfg,
+        difficulty,
+        ollamaApiKey()
+          ? "premium — paid unaffordable/blocked → free"
+          : "premium — no cloud key → free",
+        input.freeModel || undefined
+      )
+    );
+  }
+  return annotate(
+    localRoute(
+      cfg,
+      difficulty,
+      localModel,
+      "premium — no paid/free available → local",
+      false
+    )
   );
 }
 

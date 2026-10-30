@@ -1,0 +1,217 @@
+{
+  "version": 1,
+  "updatedAt": "2026-04-30T00:00:00.000Z",
+  "roles": [
+    {
+      "id": "ceo_router",
+      "title": "CEO Router",
+      "mission": "Classify intent; open/close gates; never fake success.",
+      "enabled": true,
+      "builtin": true,
+      "prefersCloud": false,
+      "models": {
+        "local": "qwen2.5-coder:1.5b",
+        "cloud": "gemma4:cloud",
+        "free": null
+      },
+      "stage": "none",
+      "order": 0,
+      "outputs": ["route", "gate_decision"]
+    },
+    {
+      "id": "intake",
+      "title": "Intake Analyst",
+      "mission": "Normalize client brief into engagement + success criteria.",
+      "enabled": true,
+      "builtin": true,
+      "prefersCloud": false,
+      "models": {
+        "local": "qwen2.5-coder:1.5b",
+        "cloud": "gemma4:cloud",
+        "free": null
+      },
+      "stage": "intake",
+      "order": 10,
+      "outputs": ["engagement.json"]
+    },
+    {
+      "id": "evidence",
+      "title": "Evidence Scout",
+      "mission": "Scan target repo/docs; produce citable path hits before audit.",
+      "enabled": true,
+      "builtin": true,
+      "prefersCloud": false,
+      "models": {
+        "local": "qwen2.5-coder:1.5b",
+        "cloud": "gemma4:cloud",
+        "free": null
+      },
+      "stage": "evidence",
+      "order": 20,
+      "outputs": ["evidence-pack.md"]
+    },
+    {
+      "id": "strategist",
+      "title": "Strategist",
+      "mission": "Write concrete production strategy; merge rejection fixes into full rewrites.",
+      "enabled": true,
+      "builtin": true,
+      "prefersCloud": true,
+      "models": {
+        "local": "qwen2.5-coder:1.5b",
+        "cloud": "gemma4:cloud",
+        "free": null
+      },
+      "temperature": 0.15,
+      "numPredict": 1600,
+      "stage": "review",
+      "order": 30,
+      "outputs": ["strategy-vN.md"]
+    },
+    {
+      "id": "auditor",
+      "title": "Security & Logic Auditor",
+      "mission": "Approve only with evidence; reject with reason/severity/fix.",
+      "enabled": true,
+      "builtin": true,
+      "prefersCloud": true,
+      "models": {
+        "local": "gemma3:1b",
+        "cloud": "gemma4:cloud",
+        "free": null
+      },
+      "temperature": 0,
+      "numPredict": 1200,
+      "stage": "review",
+      "order": 40,
+      "outputs": ["audit-vN.md", "rejection-vN.md"]
+    },
+    {
+      "id": "architect",
+      "title": "Solution Architect",
+      "mission": "N-tier blueprint + gap matrix + backlog after APPROVED only.",
+      "enabled": true,
+      "builtin": true,
+      "prefersCloud": true,
+      "models": {
+        "local": "qwen2.5:1.5b",
+        "cloud": "gemma4:cloud",
+        "free": null
+      },
+      "temperature": 0.2,
+      "numPredict": 1400,
+      "stage": "downstream",
+      "order": 50,
+      "outputs": ["execution-plan.md", "CODE_VS_PLAN_GAP_MATRIX.md"]
+    },
+    {
+      "id": "help",
+      "title": "Help Systems",
+      "mission": "In-app help for multi-purpose ops (not vertical-locked wording).",
+      "enabled": true,
+      "builtin": true,
+      "prefersCloud": true,
+      "models": {
+        "local": "qwen2.5:1.5b",
+        "cloud": "gemma4:cloud",
+        "free": null
+      },
+      "temperature": 0.3,
+      "numPredict": 1000,
+      "stage": "downstream",
+      "order": 60,
+      "outputs": ["help-system-spec.md"]
+    },
+    {
+      "id": "marketer",
+      "title": "GTM Marketer",
+      "mission": "Honest campaign; never over-claim unfinished integrations.",
+      "enabled": true,
+      "builtin": true,
+      "prefersCloud": true,
+      "models": {
+        "local": "qwen2.5:1.5b",
+        "cloud": "gemma4:cloud",
+        "free": null
+      },
+      "temperature": 0.7,
+      "numPredict": 900,
+      "stage": "downstream",
+      "order": 70,
+      "outputs": ["marketing-campaign.md"]
+    },
+    {
+      "id": "verifier",
+      "title": "CEO Verifier",
+      "mission": "Check deliverables vs task; fail if audit gate closed.",
+      "enabled": true,
+      "builtin": true,
+      "prefersCloud": false,
+      "models": {
+        "local": "qwen2.5-coder:1.5b",
+        "cloud": "gemma4:cloud",
+        "free": null
+      },
+      "stage": "downstream",
+      "order": 80,
+      "outputs": ["final-report.md"]
+    },
+    {
+      "id": "implementer",
+      "title": "Implementer",
+      "mission": "Code changes only when owner authorizes; otherwise skip.",
+      "enabled": true,
+      "builtin": true,
+      "prefersCloud": true,
+      "models": {
+        "local": "qwen2.5-coder:1.5b",
+        "cloud": "gemma4:cloud",
+        "free": null
+      },
+      "temperature": 0.1,
+      "numPredict": 1200,
+      "stage": "implement",
+      "order": 90,
+      "outputs": ["EXECUTION_JOURNAL.md"]
+    },
+    {
+      "id": "operator",
+      "title": "Desktop Operator",
+      "mission": "Safe local PC ops: open files, screenshot, copy within allowlist.",
+      "enabled": true,
+      "builtin": true,
+      "prefersCloud": false,
+      "models": {
+        "local": "qwen2.5-coder:1.5b",
+        "cloud": "gemma4:cloud",
+        "free": null
+      },
+      "stage": "operator",
+      "order": 100,
+      "outputs": ["tool results"]
+    },
+    {
+      "id": "coder",
+      "title": "L3 Coder",
+      "mission": "Propose bounded writes during Level-3 implement.",
+      "enabled": true,
+      "builtin": true,
+      "prefersCloud": true,
+      "models": {
+        "local": "qwen2.5-coder:1.5b",
+        "cloud": "gemma4:cloud",
+        "free": null
+      },
+      "temperature": 0.1,
+      "numPredict": 1200,
+      "stage": "implement",
+      "order": 95,
+      "outputs": ["level3 writes"]
+    }
+  ],
+  "pipeline": {
+    "downstreamOrder": ["architect", "help", "marketer", "verifier"],
+    "keepReviewLoop": true,
+    "keepGoGate": true
+  }
+}

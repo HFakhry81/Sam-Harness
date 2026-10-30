@@ -20,6 +20,7 @@ export {
   routeToChatOptions,
   shouldDegradeToLocal,
   canAffordPaid,
+  effectiveHybridModeForRole,
   type ModelRoute,
   type ModelTier,
   type RouteInput,
