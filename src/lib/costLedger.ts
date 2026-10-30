@@ -160,7 +160,10 @@ export function getActiveRunId(): string | null {
 
 export function dailySpentUsd(cwd: string): number {
   const ledger = loadCostLedger(cwd);
-  return ledger.entries.reduce((s, e) => s + (e.costUsd || 0), 0);
+  return ledger.entries.reduce(
+    (s, e) => s + (e.cloud ? e.costUsd || 0 : 0),
+    0
+  );
 }
 
 export function getCostCapUsd(cwd: string): number {
@@ -171,7 +174,11 @@ export function getCostCapUsd(cwd: string): number {
 export function getCostBudget(cwd: string): CostBudgetSnapshot {
   const ledger = loadCostLedger(cwd);
   const capUsd = getCostCapUsd(cwd);
-  const spentUsd = ledger.entries.reduce((s, e) => s + (e.costUsd || 0), 0);
+  // Only cloud entries count against the daily $ cap (local/free are $0 but still tracked).
+  const spentUsd = ledger.entries.reduce(
+    (s, e) => s + (e.cloud ? e.costUsd || 0 : 0),
+    0
+  );
   const remainingUsd = Math.max(0, capUsd - spentUsd);
   const runId = activeRunId;
   const runSpentUsd = runId && ledger.runs[runId] ? ledger.runs[runId].costUsd : 0;
@@ -192,6 +199,19 @@ export function getCostBudget(cwd: string): CostBudgetSnapshot {
         : `Daily cost cap exceeded: spent $${round4(spentUsd)} / cap $${capUsd}`
       : null,
   };
+}
+
+/** Sum tokens for the active (or given) run — cloud + local. */
+export function getRunTokenTotals(
+  cwd: string,
+  runId?: string | null
+): { inputTokens: number; outputTokens: number; costUsd: number; cloudCalls: number } {
+  const ledger = loadCostLedger(cwd);
+  const id = runId || activeRunId;
+  if (!id || !ledger.runs[id]) {
+    return { inputTokens: 0, outputTokens: 0, costUsd: 0, cloudCalls: 0 };
+  }
+  return { ...ledger.runs[id] };
 }
 
 export function assertWithinCostCap(cwd: string, additionalUsd = 0): CostBudgetSnapshot {

@@ -131,12 +131,14 @@ function buildGraph() {
     localModel: process.env.CEO_MODEL || "qwen2.5-coder:1.5b",
     temperature: 0.15,
     numPredict: 1600,
+    role: "strategist",
   };
   const auditorOpts = {
     cloudModel: "gemma4:cloud",
     localModel: "gemma3:1b",
     temperature: 0,
     numPredict: 1200,
+    role: "auditor",
   };
   const strategist = makeSpecialistModel(strategistOpts);
   const auditor = makeSpecialistModel(auditorOpts);

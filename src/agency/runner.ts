@@ -195,18 +195,21 @@ export async function runAgencyArchitecture(task: string): Promise<AgencyRunResu
     localModel: "qwen2.5:1.5b",
     temperature: 0.2,
     numPredict: 1400,
+    role: "architect",
   });
   const helpAgent = makeSpecialistModel({
     cloudModel: "gemma4:cloud",
     localModel: "qwen2.5:1.5b",
     temperature: 0.3,
     numPredict: 1000,
+    role: "help",
   });
   const marketer = makeSpecialistModel({
     cloudModel: "gemma4:cloud",
     localModel: "qwen2.5:1.5b",
     temperature: 0.7,
     numPredict: 900,
+    role: "marketer",
   });
   const ceo = makeCeoModel();
   const strategist = makeSpecialistModel({
@@ -214,6 +217,7 @@ export async function runAgencyArchitecture(task: string): Promise<AgencyRunResu
     localModel: process.env.CEO_MODEL || "qwen2.5-coder:1.5b",
     temperature: 0.15,
     numPredict: 1200,
+    role: "strategist",
   });
 
   if (!review.auditPassed) {
