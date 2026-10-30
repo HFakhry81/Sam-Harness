@@ -199,6 +199,9 @@ export type DesktopBackend = {
   /** Optional pixel-diff between two PNG paths; returns 0..1 change ratio */
   screenshotDiff?(beforePath: string, afterPath: string): Promise<number>;
 
+  /** Process existence check (more reliable than UIA window list on CI/session-isolated hosts) */
+  isProcessRunning?(name: string): Promise<boolean>;
+
   /** Register / poll kill-switch hotkey support (best-effort) */
   installKillHotkey?(opts: { flagPath: string }): Promise<{ installed: boolean; note?: string }>;
 };

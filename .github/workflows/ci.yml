@@ -54,3 +54,4 @@ jobs:
         run: pnpm run test:desktop:windows
         env:
           APPROVE_DESKTOP: "1"
+          SAM_DESKTOP_RECORD_SHOTS: "0"

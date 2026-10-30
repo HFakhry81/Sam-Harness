@@ -260,6 +260,13 @@ export function createMockBackend(state: MockDesktopState = createMockDesktopSta
       return state.diffRatio;
     },
 
+    async isProcessRunning(name: string) {
+      const n = name.toLowerCase().replace(/\.exe$/i, "");
+      return state.windows.some((w) =>
+        (w.processName || "").toLowerCase().replace(/\.exe$/i, "").includes(n)
+      );
+    },
+
     async installKillHotkey() {
       return { installed: false, note: "mock has no hotkey" };
     },

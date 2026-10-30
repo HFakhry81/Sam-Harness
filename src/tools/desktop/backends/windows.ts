@@ -33,38 +33,86 @@ export function createWindowsBackend(): DesktopBackend {
     name: "windows-uia",
 
     async listWindows(): Promise<WindowInfo[]> {
+      // Prefer Get-Process (reliable on CI); merge UIA titles when available.
       const script = `
-${UIA_PREAMBLE}
-$root = [System.Windows.Automation.AutomationElement]::RootElement
-$walker = [System.Windows.Automation.TreeWalker]::ControlViewWalker
+$ErrorActionPreference = 'SilentlyContinue'
 $out = @()
-$child = $walker.GetFirstChild($root)
-while ($null -ne $child) {
-  try {
-    $name = $child.Current.Name
-    if ($name) {
-      $rect = $child.Current.BoundingRectangle
-      $pid = 0
-      try { $pid = $child.Current.ProcessId } catch {}
-      $proc = ''
-      try { $proc = (Get-Process -Id $pid -ErrorAction SilentlyContinue).ProcessName } catch {}
-      $out += [ordered]@{
-        handle = [string]$child.Current.NativeWindowHandle
-        title = $name
-        processName = $proc
-        pid = $pid
-        bounds = @{ x=[int]$rect.X; y=[int]$rect.Y; width=[int]$rect.Width; height=[int]$rect.Height }
-      }
+$seen = @{}
+Get-Process | Where-Object { $_.MainWindowHandle -ne 0 } | ForEach-Object {
+  $h = [string]([int64]$_.MainWindowHandle)
+  if (-not $seen.ContainsKey($h)) {
+    $seen[$h] = $true
+    $out += [ordered]@{
+      handle = $h
+      title = [string]$_.MainWindowTitle
+      processName = [string]$_.ProcessName
+      pid = [int]$_.Id
+      bounds = @{ x = 0; y = 0; width = 0; height = 0 }
     }
-  } catch {}
-  $child = $walker.GetNextSibling($child)
+  }
 }
-$out | ConvertTo-Json -Depth 5 -Compress
+try {
+  Add-Type -AssemblyName UIAutomationClient -ErrorAction Stop
+  Add-Type -AssemblyName UIAutomationTypes -ErrorAction Stop
+  $root = [System.Windows.Automation.AutomationElement]::RootElement
+  $walker = [System.Windows.Automation.TreeWalker]::ControlViewWalker
+  $child = $walker.GetFirstChild($root)
+  while ($null -ne $child) {
+    try {
+      $name = $child.Current.Name
+      $h = [string]$child.Current.NativeWindowHandle
+      if ($name -and $h -and $h -ne '0') {
+        $pid = 0; try { $pid = $child.Current.ProcessId } catch {}
+        $proc = ''; try { $proc = (Get-Process -Id $pid -ErrorAction SilentlyContinue).ProcessName } catch {}
+        $rect = $child.Current.BoundingRectangle
+        if ($seen.ContainsKey($h)) {
+          for ($i = 0; $i -lt $out.Count; $i++) {
+            if ($out[$i].handle -eq $h) {
+              if (-not $out[$i].title) { $out[$i].title = $name }
+              $out[$i].bounds = @{ x=[int]$rect.X; y=[int]$rect.Y; width=[int]$rect.Width; height=[int]$rect.Height }
+            }
+          }
+        } else {
+          $seen[$h] = $true
+          $out += [ordered]@{
+            handle = $h
+            title = $name
+            processName = $proc
+            pid = $pid
+            bounds = @{ x=[int]$rect.X; y=[int]$rect.Y; width=[int]$rect.Width; height=[int]$rect.Height }
+          }
+        }
+      }
+    } catch {}
+    $child = $walker.GetNextSibling($child)
+  }
+} catch {}
+if ($out.Count -eq 0) { '[]' } else { ConvertTo-Json -InputObject @($out) -Depth 5 -Compress }
 `.trim();
-      const { stdout } = await runPowerShell(script, { timeoutMs: 20_000 });
+      const { stdout } = await runPowerShell(script, { timeoutMs: 25_000 });
       const parsed = parseJsonOutput(stdout);
       if (!parsed) return [];
       return (Array.isArray(parsed) ? parsed : [parsed]) as WindowInfo[];
+    },
+
+    async isProcessRunning(name: string): Promise<boolean> {
+      const n = String(name || "").replace(/\.exe$/i, "");
+      if (!n) return false;
+      const script = `
+$n = ${psQuote(n)}
+$p = Get-Process -Name $n -ErrorAction SilentlyContinue | Select-Object -First 1
+if (-not $p) {
+  $p = Get-Process -ErrorAction SilentlyContinue | Where-Object { $_.ProcessName -like ($n + '*') } | Select-Object -First 1
+}
+@{ running = [bool]$p } | ConvertTo-Json -Compress
+`.trim();
+      try {
+        const { stdout } = await runPowerShell(script, { timeoutMs: 10_000 });
+        const parsed = parseJsonOutput(stdout) as { running?: boolean };
+        return Boolean(parsed?.running);
+      } catch {
+        return false;
+      }
     },
 
     async focusWindow(opts): Promise<WindowInfo> {
@@ -82,8 +130,17 @@ if ($handle) {
 } elseif ($title) {
   $target = Get-RootElement -TitleIncludes $title
 } elseif ($procName) {
-  $p = Get-Process -Name ($procName -replace '\\.exe$','') -ErrorAction SilentlyContinue | Select-Object -First 1
-  if (-not $p) { throw "Process not found: $procName" }
+  $name = $procName -replace '\\.exe$',''
+  $p = $null
+  for ($i = 0; $i -lt 20; $i++) {
+    $p = Get-Process -Name $name -ErrorAction SilentlyContinue | Where-Object { $_.MainWindowHandle -ne 0 } | Select-Object -First 1
+    if (-not $p) {
+      $p = Get-Process -ErrorAction SilentlyContinue | Where-Object { $_.ProcessName -like ($name + '*') -and $_.MainWindowHandle -ne 0 } | Select-Object -First 1
+    }
+    if ($p) { break }
+    Start-Sleep -Milliseconds 250
+  }
+  if (-not $p) { throw "Process window not found: $procName" }
   $target = [System.Windows.Automation.AutomationElement]::FromHandle($p.MainWindowHandle)
 } else {
   throw "focus_window requires handle, titleIncludes, or processName"
@@ -122,41 +179,81 @@ $proc = ''; try { $proc = (Get-Process -Id $pid -ErrorAction SilentlyContinue).P
       const app = opts.app;
       const args = opts.args || [];
       const cwd = opts.cwd;
-      const waitMs = opts.waitForWindowMs ?? 5000;
-      // Prefer Start-Process for .exe / known apps; allow shell apps like notepad
+      const waitMs = opts.waitForWindowMs ?? 8000;
+      // Prefer Start-Process; poll until MainWindowHandle appears (CI-friendly).
       const script = `
+$ErrorActionPreference = 'Stop'
 $app = ${psQuote(app)}
 $argList = @(${args.map((a) => psQuote(a)).join(",")})
 $cwd = ${cwd ? psQuote(cwd) : "''"}
 $waitMs = ${Number(waitMs)}
-$psi = @{ FilePath = $app; PassThru = $true }
-if ($argList.Count -gt 0) { $psi.ArgumentList = $argList }
-if ($cwd) { $psi.WorkingDirectory = $cwd }
+$p = $null
 try {
+  $psi = @{ FilePath = $app; PassThru = $true }
+  if ($argList.Count -gt 0) { $psi.ArgumentList = $argList }
+  if ($cwd) { $psi.WorkingDirectory = $cwd }
   $p = Start-Process @psi
 } catch {
-  # Fallback: cmd start for shell builtins / associations
-  $p = Start-Process -FilePath 'cmd.exe' -ArgumentList @('/c','start','',$app) + $argList -PassThru
+  # Bare name (notepad) or association fallback
+  try {
+    $p = Start-Process -FilePath ($app -replace '\\.exe$','') -PassThru -ErrorAction Stop
+  } catch {
+    $p = Start-Process -FilePath 'cmd.exe' -ArgumentList (@('/c','start','','/b',$app) + $argList) -PassThru
+  }
 }
-Start-Sleep -Milliseconds ([Math]::Min($waitMs, 15000))
+$deadline = [DateTime]::UtcNow.AddMilliseconds([Math]::Max(1000, [Math]::Min($waitMs, 20000)))
 $win = $null
-try {
-  if ($p -and $p.MainWindowHandle -ne 0) {
-    Add-Type -AssemblyName UIAutomationClient
-    $el = [System.Windows.Automation.AutomationElement]::FromHandle($p.MainWindowHandle)
-    $rect = $el.Current.BoundingRectangle
-    $win = @{
-      handle = [string]$el.Current.NativeWindowHandle
-      title = $el.Current.Name
-      processName = $p.ProcessName
-      pid = $p.Id
-      bounds = @{ x=[int]$rect.X; y=[int]$rect.Y; width=[int]$rect.Width; height=[int]$rect.Height }
+$procNameHint = [IO.Path]::GetFileNameWithoutExtension($app)
+function Find-LaunchedProcess {
+  param($Started, [string]$Hint)
+  $list = @()
+  if ($Started -and $Started.Id) {
+    $list += Get-Process -Id $Started.Id -ErrorAction SilentlyContinue
+  }
+  if ($Hint) {
+    $list += Get-Process -Name $Hint -ErrorAction SilentlyContinue
+    $list += Get-Process -ErrorAction SilentlyContinue | Where-Object { $_.ProcessName -like ($Hint + '*') }
+  }
+  $list | Where-Object { $_ } | Sort-Object Id -Unique
+}
+while ([DateTime]::UtcNow -lt $deadline) {
+  Start-Sleep -Milliseconds 300
+  if ($p) { try { $p.Refresh() } catch {} }
+  foreach ($c in (Find-LaunchedProcess -Started $p -Hint $procNameHint)) {
+    if ($c.MainWindowHandle -ne 0) {
+      $win = @{
+        handle = [string]([int64]$c.MainWindowHandle)
+        title = [string]$c.MainWindowTitle
+        processName = [string]$c.ProcessName
+        pid = [int]$c.Id
+        bounds = @{ x = 0; y = 0; width = 0; height = 0 }
+      }
+      $p = $c
+      break
     }
   }
-} catch {}
-@{ pid = $(if ($p) { $p.Id } else { $null }); window = $win } | ConvertTo-Json -Depth 5 -Compress
+  if ($win) { break }
+}
+$alive = $false
+$pidOut = $null
+$found = @(Find-LaunchedProcess -Started $p -Hint $procNameHint) | Select-Object -First 1
+if ($found) {
+  $alive = $true
+  $pidOut = [int]$found.Id
+  if (-not $win -and $found.MainWindowHandle -ne 0) {
+    $win = @{
+      handle = [string]([int64]$found.MainWindowHandle)
+      title = [string]$found.MainWindowTitle
+      processName = [string]$found.ProcessName
+      pid = [int]$found.Id
+      bounds = @{ x = 0; y = 0; width = 0; height = 0 }
+    }
+  }
+}
+if (-not $alive) { throw "Failed to launch or locate process for $app" }
+@{ pid = $pidOut; window = $win; processAlive = $alive } | ConvertTo-Json -Depth 5 -Compress
 `.trim();
-      const { stdout } = await runPowerShell(script, { timeoutMs: waitMs + 15_000 });
+      const { stdout } = await runPowerShell(script, { timeoutMs: waitMs + 20_000 });
       return parseJsonOutput(stdout) as { pid?: number; window?: WindowInfo };
     },
 

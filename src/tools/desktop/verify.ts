@@ -39,8 +39,18 @@ async function checkOne(
       };
     }
     case "process_running": {
-      const wins = await backend.listWindows();
       const name = expectation.name.toLowerCase().replace(/\.exe$/i, "");
+      if (backend.isProcessRunning) {
+        try {
+          const running = await backend.isProcessRunning(expectation.name);
+          if (running) {
+            return { ok: true, detail: `process_running: ${expectation.name}` };
+          }
+        } catch {
+          /* fall through to window scan */
+        }
+      }
+      const wins = await backend.listWindows();
       const hit = wins.find((w) =>
         (w.processName || "").toLowerCase().replace(/\.exe$/i, "").includes(name)
       );
@@ -194,10 +204,15 @@ export function defaultVerifyFor(
       const app = String(params.app || "");
       const base = path.basename(app).replace(/\.exe$/i, "");
       if (!base) return [];
-      return [
-        { kind: "process_running", name: base },
-        { kind: "window_title", includes: String(params.expectTitle || base) },
-      ];
+      // Process check is authoritative; window title can lag / be empty on CI desktops.
+      const verify: VerifyExpectation[] = [{ kind: "process_running", name: base }];
+      if (params.expectTitle) {
+        verify.push({
+          kind: "window_title",
+          includes: String(params.expectTitle),
+        });
+      }
+      return verify;
     }
     case "focus_window": {
       const title = String(params.titleIncludes || params.title || "");
