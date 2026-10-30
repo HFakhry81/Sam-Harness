@@ -65,8 +65,14 @@ typecheck + Vitest + CI (ubuntu/windows) + smokes محمولة.
 3. موافقة لكل فعل destructive/financial/sending؛ dry-run؛ kill switch؛ تسجيل timeline.
 4. اختبارات mock على كل OS + تكامل Notepad على `windows-latest`.
 
-### بعد Phase 4 (Phase 5+)
-- تكلفة شبه صفرية، بوابات ثقة قابلة للإثبات، توزيع عربي أولاً.
+### Phase 5 — تكلفة شبه صفرية ✅
+1. توجيه النماذج حسب صعوبة المهمة: محلي/مجاني أولاً → مدفوع عند الحاجة فقط (ثقة منخفضة، فشل تحقق، تعقيد صريح).
+2. تخزين مؤقت للـ prompt/response (تطابق تام في SQLite) + تلميحات provider prompt-caching؛ ضغط السياق لتقليل التوكنات.
+3. محاسبة دقيقة لكل تشغيل/يوم مربوطة بسقف Phase 1؛ تدهور لطيف للمحلي قرب السقف دون تجاوزه.
+4. إعداد عبر env — انظر `docs/PHASE5_NEAR_ZERO_COST.md` و`.env.example`.
+
+### بعد Phase 5 (Phase 6+)
+- بوابات ثقة قابلة للإثبات، توزيع عربي أولاً.
 
 ## قرارات المالك (مُثبَّتة في هذا الفرع)
 

@@ -21,6 +21,12 @@ import { readTaskSpec } from "./taskSpec.js";
 import { listAllowlistRoots } from "../lib/paths.js";
 import { beginCostRun, endCostRun, getCostBudget } from "../lib/costLedger.js";
 import {
+  loadCostOptConfig,
+  promptCacheStats,
+  shouldDegradeToLocal,
+} from "../lib/cost/index.js";
+import { costStatus } from "../agent/models.js";
+import {
   beginOutputRun,
   cleanOutputTemp,
   endOutputRun,
@@ -1177,7 +1183,19 @@ const server = http.createServer(async (req, res) => {
       return;
     }
     if (method === "GET" && p === "/api/cost-usage") {
-      sendJson(res, 200, { ok: true, cost: getCostBudget(ROOT) });
+      const cfg = loadCostOptConfig();
+      sendJson(res, 200, {
+        ok: true,
+        cost: costStatus(ROOT),
+        routing: {
+          enabled: cfg.routingEnabled,
+          cacheEnabled: cfg.cacheEnabled,
+          nearCap: shouldDegradeToLocal(ROOT, cfg),
+          localBaseUrl: cfg.localBaseUrl,
+          freeConfigured: Boolean(cfg.freeBaseUrl && cfg.freeModel),
+          cache: promptCacheStats(),
+        },
+      });
       return;
     }
     if (method === "POST" && p === "/api/hybrid-profile") {

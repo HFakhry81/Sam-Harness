@@ -20,6 +20,8 @@ Filesystem tools use a **desktop-controller** sandbox: normal user environment (
 
 **Phase 4:** Windows desktop operator — UI Automation (PowerShell/.NET) first with screenshot verify/vision fallback, window/input/clipboard/file-dialog tools, per-action approvals, dry-run, kill switch, run-timeline recording. macOS/Linux backends stubbed. See `docs/PHASE4_DESKTOP_OPERATOR.md`.
 
+**Phase 5:** Near-zero model cost — difficulty-based routing (local → free → paid), exact SQLite prompt cache + provider cache hints, context compaction, accurate per-run/daily accounting with near-cap degradation (never exceed the $0.50 default daily cloud cap). See `docs/PHASE5_NEAR_ZERO_COST.md`.
+
 ## Layout
 
 | Path | Role |
@@ -56,5 +58,6 @@ State defaults to SQLite under `SAM_OUTPUT_HOME/state/sam-harness.sqlite`. Set `
 - `docs/PRODUCTION_HARDENING_P0.md`
 - `docs/PHASE3_PRODUCTION_OPS.md`
 - `docs/PHASE4_DESKTOP_OPERATOR.md`
+- `docs/PHASE5_NEAR_ZERO_COST.md`
 - `docs/AGENCY_OPS.md`
 - `docs/engagements/EXAMPLE-CLIENT.md`
