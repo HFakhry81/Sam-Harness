@@ -36,6 +36,7 @@ import {
   validateWorkflowLayout,
 } from "../src/agency/workflowLayout.js";
 import { getPersistence } from "../src/lib/db/index.js";
+import { makeIsolatedCpEnv } from "./helpers/isolatedCpEnv.js";
 
 const REPO_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 
@@ -270,9 +271,11 @@ describe("undo/redo history", () => {
 });
 
 describe("Control Plane workflow API", () => {
-  const PORT = 18797;
+  // Distinct from help-system (18797) / controlplane-http (18787)
+  const PORT = 18798;
   const TOKEN = "phase9-test-owner-token-0123456789abcdef";
   let child: ChildProcess | null = null;
+  let cpIso: ReturnType<typeof makeIsolatedCpEnv> | null = null;
   let layoutBackup: string | null = null;
   let teamBackup: string | null = null;
 
@@ -282,15 +285,14 @@ describe("Control Plane workflow API", () => {
     teamBackup = fs.existsSync(teamPath) ? fs.readFileSync(teamPath, "utf-8") : null;
     layoutBackup = fs.existsSync(layoutPath) ? fs.readFileSync(layoutPath, "utf-8") : null;
 
+    cpIso = makeIsolatedCpEnv({
+      CONTROL_PLANE_PORT: String(PORT),
+      CONTROL_PLANE_TOKEN: TOKEN,
+    });
     const tsxBin = path.join(REPO_ROOT, "node_modules", "tsx", "dist", "cli.mjs");
     child = spawn(process.execPath, [tsxBin, path.join(REPO_ROOT, "src/controlplane/server.ts")], {
       cwd: REPO_ROOT,
-      env: {
-        ...process.env,
-        CONTROL_PLANE_PORT: String(PORT),
-        CONTROL_PLANE_TOKEN: TOKEN,
-        CONTROL_PLANE_NO_BROWSER: "1",
-      },
+      env: cpIso.env,
       stdio: ["ignore", "pipe", "pipe"],
     });
     const start = Date.now();
@@ -316,6 +318,7 @@ describe("Control Plane workflow API", () => {
         /* ignore */
       }
     }
+    cpIso?.cleanup();
     const teamPath = path.join(REPO_ROOT, "config", "team.json");
     const layoutPath = path.join(REPO_ROOT, "config", "workflow-layout.json");
     if (teamBackup != null) fs.writeFileSync(teamPath, teamBackup);
