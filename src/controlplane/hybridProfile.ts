@@ -1,8 +1,10 @@
 /**
  * P8 — Hybrid client profiles: local / cloud / auto + daily cost cap.
+ * Persisted in embedded DB (legacy hybrid-profile.json imported once).
  */
-import * as fs from "fs";
-import * as path from "path";
+import { loadStoreDoc, saveStoreDoc } from "../lib/db/storeBridge.js";
+import { getDriver, getPersistence } from "../lib/db/index.js";
+import { tenantIdForCwd } from "../lib/tenant/context.js";
 
 export type HybridMode = "local" | "cloud" | "auto";
 
@@ -36,20 +38,14 @@ const DEFAULT: HybridProfile = {
 };
 
 export function loadHybridProfile(cwd: string): HybridProfile {
-  const p = path.join(cwd, FILE);
-  try {
-    if (fs.existsSync(p)) {
-      const raw = JSON.parse(fs.readFileSync(p, "utf-8"));
-      return {
-        ...DEFAULT,
-        ...raw,
-        costCapUsd: Number(raw.costCapUsd ?? raw.costCapUsdPerDay ?? DEFAULT.costCapUsd),
-      };
-    }
-  } catch {
-    /* ignore */
-  }
-  return { ...DEFAULT };
+  const raw = loadStoreDoc<Partial<HybridProfile>>(cwd, "hybrid-profile", FILE, {
+    ...DEFAULT,
+  });
+  return {
+    ...DEFAULT,
+    ...raw,
+    costCapUsd: Number(raw.costCapUsd ?? raw.costCapUsdPerDay ?? DEFAULT.costCapUsd),
+  };
 }
 
 export function saveHybridProfile(
@@ -67,7 +63,17 @@ export function saveHybridProfile(
   if (!["local", "cloud", "auto"].includes(next.mode)) {
     throw new Error("mode must be local | cloud | auto");
   }
-  fs.writeFileSync(path.join(cwd, FILE), JSON.stringify(next, null, 2), "utf-8");
+  saveStoreDoc(cwd, "hybrid-profile", next);
+  // Keep tenants.cost_cap_usd in sync for multi-tenant queries
+  try {
+    getPersistence();
+    const tid = tenantIdForCwd(cwd);
+    getDriver()
+      .prepare("UPDATE tenants SET cost_cap_usd = ?, updated_at = ? WHERE id = ?")
+      .run(next.costCapUsd, next.updatedAt, tid);
+  } catch {
+    /* DB optional during early boot */
+  }
   return next;
 }
 

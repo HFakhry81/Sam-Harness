@@ -1,6 +1,4 @@
 import "../lib/loadEnv.js";
-import * as fs from "fs";
-import * as path from "path";
 import { ChatOllama } from "@langchain/ollama";
 import {
   assertWithinCostCap,
@@ -23,11 +21,7 @@ function hybridForcesLocal(): boolean {
   const mode = String(process.env.HYBRID_MODE || "").trim().toLowerCase();
   if (mode === "local") return true;
   try {
-    const p = path.join(process.cwd(), "hybrid-profile.json");
-    if (fs.existsSync(p)) {
-      const j = JSON.parse(fs.readFileSync(p, "utf-8")) as { mode?: string };
-      if (String(j.mode || "").toLowerCase() === "local") return true;
-    }
+    if (loadHybridProfile(process.cwd()).mode === "local") return true;
   } catch {
     /* ignore */
   }
@@ -151,6 +145,7 @@ export function specialistLabel(cloudName: string, localName: string) {
 
 /**
  * Invoke a model and charge the daily ledger when the active specialist is cloud.
+ * Emits OTel span + latency/cost metrics when observability is active.
  */
 export async function invokeTracked(
   model: { invoke: (prompt: string) => Promise<{ content?: unknown }> },
@@ -159,18 +154,42 @@ export async function invokeTracked(
 ): Promise<string> {
   const cwd = process.cwd();
   const cloud = meta.cloud ?? useOllamaCloudNow();
-  if (cloud) {
-    // Pre-check with a prompt-based estimate so we fail before the network call
-    const estChars = String(prompt || "").length;
-    const { estimateCloudCallUsd } = await import("../lib/costLedger.js");
-    assertWithinCostCap(cwd, estimateCloudCallUsd(meta.modelName, estChars, 600));
-  }
-  const res = await model.invoke(prompt);
-  const text = String(res.content || "");
-  if (cloud) {
-    chargeCloudCall(cwd, { model: meta.modelName, prompt, output: text });
-  }
-  return text;
+  const { withSpan, recordLlmCall, recordError } = await import(
+    "../lib/observability/index.js"
+  );
+  return withSpan(
+    "llm.invoke",
+    { "llm.model": meta.modelName, "llm.cloud": cloud },
+    async (span) => {
+      const started = Date.now();
+      try {
+        if (cloud) {
+          const estChars = String(prompt || "").length;
+          const { estimateCloudCallUsd } = await import("../lib/costLedger.js");
+          assertWithinCostCap(cwd, estimateCloudCallUsd(meta.modelName, estChars, 600));
+        }
+        const res = await model.invoke(prompt);
+        const text = String(res.content || "");
+        let costUsd = 0;
+        if (cloud) {
+          const entry = chargeCloudCall(cwd, {
+            model: meta.modelName,
+            prompt,
+            output: text,
+          });
+          costUsd = entry.costUsd;
+        }
+        const durationMs = Date.now() - started;
+        recordLlmCall({ durationMs, costUsd });
+        span.setAttribute("llm.duration_ms", durationMs);
+        if (costUsd) span.setAttribute("llm.cost_usd", costUsd);
+        return text;
+      } catch (e) {
+        recordError();
+        throw e;
+      }
+    }
+  );
 }
 
 /** Snapshot for UI / API */

@@ -48,9 +48,9 @@ describe("comms email provider", () => {
     }
   });
 
-  it("defaults to dry-run when no provider configured", () => {
+  it("defaults to smtp (owner) and dry-runs when SMTP_* unset", () => {
     const status = detectEmailProvider();
-    expect(status.provider).toBe("dry-run");
+    expect(status.provider).toBe("smtp");
     expect(status.dryRun).toBe(true);
   });
 

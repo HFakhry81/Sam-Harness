@@ -39,7 +39,10 @@ function env(name: string): string {
 }
 
 export function detectEmailProvider(): EmailProviderStatus {
-  const forced = env("EMAIL_PROVIDER").toLowerCase();
+  // Owner decision (Phase 3): default EMAIL_PROVIDER=smtp.
+  // Still dry-run when SMTP_* is unset. Explicit dry-run|resend overrides.
+  const forcedRaw = env("EMAIL_PROVIDER").toLowerCase();
+  const forced = forcedRaw || "smtp";
   const from =
     env("EMAIL_FROM") ||
     env("SMTP_FROM") ||
@@ -56,52 +59,51 @@ export function detectEmailProvider(): EmailProviderStatus {
     };
   }
 
-  const hasSmtp =
-    Boolean(env("SMTP_HOST")) &&
-    Boolean(env("SMTP_USER") || env("SMTP_PASS") || env("SMTP_PORT"));
+  const hasSmtp = Boolean(env("SMTP_HOST"));
   const hasResend = Boolean(env("RESEND_API_KEY"));
 
-  if (forced === "smtp" || (!forced && hasSmtp && !hasResend)) {
-    return {
-      provider: "smtp",
-      configured: Boolean(env("SMTP_HOST")),
-      dryRun: !env("SMTP_HOST"),
-      from,
-      hint: env("SMTP_HOST")
-        ? `SMTP via ${env("SMTP_HOST")}`
-        : "Set SMTP_HOST / SMTP_PORT / SMTP_USER / SMTP_PASS / EMAIL_FROM",
-    };
-  }
-
-  if (forced === "resend" || (!forced && hasResend)) {
+  if (forced === "resend") {
     return {
       provider: "resend",
-      configured: Boolean(env("RESEND_API_KEY")),
-      dryRun: !env("RESEND_API_KEY"),
+      configured: hasResend,
+      dryRun: !hasResend,
       from: from || "onboarding@resend.dev",
-      hint: env("RESEND_API_KEY")
+      hint: hasResend
         ? "Resend API"
         : "Set RESEND_API_KEY and EMAIL_FROM (or RESEND_FROM)",
     };
   }
 
-  // Prefer explicit SMTP if host alone is set
-  if (hasSmtp) {
+  // Default / explicit smtp
+  if (forced === "smtp" || hasSmtp) {
     return {
       provider: "smtp",
+      configured: hasSmtp,
+      dryRun: !hasSmtp,
+      from,
+      hint: hasSmtp
+        ? `SMTP via ${env("SMTP_HOST")}`
+        : "EMAIL_PROVIDER=smtp (default) — set SMTP_HOST / SMTP_PORT / SMTP_USER / SMTP_PASS / EMAIL_FROM (dry-run until configured)",
+    };
+  }
+
+  // Fallback if someone forces an unknown provider without SMTP
+  if (hasResend) {
+    return {
+      provider: "resend",
       configured: true,
       dryRun: false,
-      from,
-      hint: `SMTP via ${env("SMTP_HOST")}`,
+      from: from || "onboarding@resend.dev",
+      hint: "Resend API",
     };
   }
 
   return {
-    provider: "dry-run",
+    provider: "smtp",
     configured: false,
     dryRun: true,
     from,
-    hint: "No SMTP_HOST or RESEND_API_KEY — dry-run mode",
+    hint: "EMAIL_PROVIDER=smtp (default) — SMTP_* unset, dry-run mode",
   };
 }
 

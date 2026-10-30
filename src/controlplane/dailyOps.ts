@@ -1,12 +1,13 @@
 /**
  * P6 — Daily Ops Agent: persistent cron-style schedules + results ledger.
- * Scheduler tick survives Control Plane restarts (state in daily-ops.json).
+ * State lives in the embedded DB (SQLite/Postgres); legacy daily-ops.json is imported once.
  * Run history also mirrored under SAM_OUTPUT_HOME/runs/daily-ops/.
  */
 import * as fs from "fs";
 import * as path from "path";
 import * as crypto from "crypto";
 import { ensureOutputHome } from "../lib/outputHome.js";
+import { loadStoreDoc, saveStoreDoc } from "../lib/db/storeBridge.js";
 
 export type DailySchedule = string;
 
@@ -38,23 +39,20 @@ export type DailyOpsStore = { jobs: DailyOpsItem[]; ledger: DailyLedgerEntry[] }
 const FILE = "daily-ops.json";
 
 function load(cwd: string): DailyOpsStore {
-  const p = path.join(cwd, FILE);
-  try {
-    if (fs.existsSync(p)) {
-      const raw = JSON.parse(fs.readFileSync(p, "utf-8"));
-      return {
-        jobs: raw.jobs || raw.items || [],
-        ledger: raw.ledger || [],
-      };
-    }
-  } catch {
-    /* ignore */
-  }
-  return { jobs: [], ledger: [] };
+  const raw = loadStoreDoc<Partial<DailyOpsStore> & { items?: DailyOpsItem[] }>(
+    cwd,
+    "daily-ops",
+    FILE,
+    { jobs: [], ledger: [] }
+  );
+  return {
+    jobs: raw.jobs || raw.items || [],
+    ledger: raw.ledger || [],
+  };
 }
 
 function save(cwd: string, store: DailyOpsStore): void {
-  fs.writeFileSync(path.join(cwd, FILE), JSON.stringify(store, null, 2), "utf-8");
+  saveStoreDoc(cwd, "daily-ops", store);
 }
 
 export function loadDailyOps(cwd: string): DailyOpsStore {

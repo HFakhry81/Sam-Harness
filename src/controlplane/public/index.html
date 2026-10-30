@@ -50,6 +50,7 @@
       <button type="button" data-view="daily">المهام اليومية</button>
       <button type="button" data-view="profiles">الهجين</button>
       <button type="button" data-view="memory">الذاكرة</button>
+      <button type="button" data-view="timeline">التشغيلات</button>
       <button type="button" data-view="rollback">Rollback</button>
     </nav>
 
@@ -176,7 +177,7 @@
               </div>
               <button type="button" class="btn primary" id="btnDailyAdd">إضافة</button>
             </div>
-            <p class="lede-sm" id="dailySchedulerHint">المجدول يعمل داخل Control Plane ويبقى في daily-ops.json بعد إعادة التشغيل. السجل تحت Documents/Sam-Harness/runs/daily-ops/.</p>
+            <p class="lede-sm" id="dailySchedulerHint">المجدول يعمل داخل Control Plane والحالة في SQLite (مع استيراد JSON القديم). السجل تحت Documents/Sam-Harness/runs/daily-ops/.</p>
             <table class="ops-table">
               <thead>
                 <tr>
@@ -249,6 +250,38 @@
               <button type="button" class="btn primary" id="btnMemAdd">حفظ</button>
             </div>
             <ul class="memory-list" id="memoryList"></ul>
+          </div>
+        </section>
+
+        <section class="stage hidden" id="stageTimeline">
+          <p class="eyebrow">Phase 3 · Observability</p>
+          <h1 class="hero-title">سجل التشغيلات.<br /><em>خط زمني قابل للاستئناف.</em></h1>
+          <p class="lede">كل تشغيل له معرّف ومسار تحقق (trace) وأحداث أدوات/نماذج/نقاط حفظ. اختر تشغيلاً لعرض الخط الزمني.</p>
+          <div class="platform-panel">
+            <div class="meta-row">
+              <div class="field">
+                <label for="tenantIdInput">Tenant / عميل</label>
+                <input id="tenantIdInput" type="text" value="local" placeholder="local" />
+              </div>
+              <button type="button" class="btn ghost" id="btnTenantApply">تطبيق</button>
+              <button type="button" class="btn primary" id="btnRefreshRuns">تحديث</button>
+            </div>
+            <p class="lede-sm" id="timelineMeta">—</p>
+            <table class="ops-table" id="runsTable">
+              <thead>
+                <tr>
+                  <th>المعرّف</th>
+                  <th>الوضع</th>
+                  <th>الحالة</th>
+                  <th>المحاولة</th>
+                  <th>البداية</th>
+                  <th></th>
+                </tr>
+              </thead>
+              <tbody id="runsBody"></tbody>
+            </table>
+            <h3 class="workspace-title" style="margin-top:1.25rem">الخط الزمني</h3>
+            <ol class="memory-list" id="timelineList"></ol>
           </div>
         </section>
 
