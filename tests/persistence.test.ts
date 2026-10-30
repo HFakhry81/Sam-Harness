@@ -83,8 +83,14 @@ describe("Phase 3 persistence", () => {
     const result = backupSqlite(pers.driver, { backupDir, label: "test", keep: 3 });
     expect(result.ok).toBe(true);
     expect(result.path && fs.existsSync(result.path)).toBe(true);
-    fs.rmSync(dir, { recursive: true, force: true });
+    // Close DB before rm — Windows holds a lock on open sqlite files (EBUSY).
+    __resetPersistenceForTests();
     process.env.SAM_DATABASE_PATH = ":memory:";
+    try {
+      fs.rmSync(dir, { recursive: true, force: true });
+    } catch {
+      /* best-effort cleanup on Windows */
+    }
   });
 });
 
