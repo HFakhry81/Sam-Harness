@@ -17,12 +17,27 @@ import {
   extractUserGoal,
   goalWantsBookingBlueprint,
   scoreGoalFidelity,
-  GROUNDED_FIDELITY_THRESHOLD,
 } from "./goalFidelity.js";
 import {
+  buildClaimRewritePrompt,
+  finalizeClaimsClean,
   sanitizeDraftClaims,
   verifyCitationsAgainstRepo,
 } from "./claimVerify.js";
+import {
+  assertCleanPackClaims,
+  GROUNDED_FIDELITY_THRESHOLD,
+  keywordHitInfo,
+  scoreGroundedAuditRubric,
+  type RubricContext,
+} from "./fidelityRubric.js";
+import {
+  appendGateEntry,
+  currentRunId,
+  ensureGatesForRun,
+  logModelClaimErrors,
+  type ModelClaimError,
+} from "./gatesStore.js";
 import {
   chooseNonDegenerateDraft,
   detectRepetition,
@@ -39,8 +54,12 @@ import { appendTimeline } from "../lib/durableRuns.js";
 import { withSpan } from "../lib/observability/index.js";
 
 const MAX_LOOPS = 5;
+/** Max writer rewrites when invalid claims are detected. */
+const MAX_CLAIM_REWRITES = 2;
 /** Min share of REQs that must be addressed (not missing) before APPROVED. */
 export const MIN_REQ_COVERAGE = 0.7;
+
+export { GROUNDED_FIDELITY_THRESHOLD };
 
 const REJECTION_FORMAT = `
 If [REJECTED], for EACH issue:
@@ -133,6 +152,14 @@ export const ReviewState = Annotation.Root({
   /** 0..1 from evidence REQ matrix; 1 when no REQs extracted. */
   reqCoverage: Annotation<number>,
   groundedCurrency: Annotation<string>,
+  /** Per-run id for gates.json isolation. */
+  runId: Annotation<string>,
+  /** Spec files ingested (rubric: specs_read). */
+  specsReadCount: Annotation<number>,
+  /** REQ rows for rubric scoring. */
+  reqRows: Annotation<Array<{ id: string; status: string; codePaths?: string[] }>>,
+  /** Checklist findings for P0/P1 rubric. */
+  findings: Annotation<Array<{ severity?: string; summary?: string; category?: string }>>,
   strategy: Annotation<string>,
   auditReport: Annotation<string>,
   loop: Annotation<number>,
@@ -365,11 +392,92 @@ ${clip(state.evidenceMarkdown, 3000)}`;
       }
     }
 
-    // Claim sanitizer: strip nonexistent paths + wrong currency
-    const sanitized = sanitizeDraftClaims(strategy, targetRepo, currency);
-    strategy = sanitized.text;
-    if (sanitized.flags.length) {
-      warn("Strategist", `Claim sanitizer: ${sanitized.flags.join("; ")}`);
+    // Claim sanitizer: detect → rewrite (max 2) → clean-delete (never [REMOVED] / never auto-sub currency)
+    const runId = state.runId || currentRunId();
+    {
+      let claimErrors: ModelClaimError[] = [];
+      let detected = sanitizeDraftClaims(strategy, targetRepo, currency);
+      if (detected.modelErrors.length) {
+        claimErrors = claimErrors.concat(
+          detected.modelErrors.map((e) => ({ ...e, loop: loopNo }))
+        );
+      }
+      for (
+        let attempt = 0;
+        attempt < MAX_CLAIM_REWRITES && detected.needsRewrite;
+        attempt++
+      ) {
+        warn(
+          "Strategist",
+          `Invalid claims detected — rewrite attempt ${attempt + 1}/${MAX_CLAIM_REWRITES}`
+        );
+        const rewritePrompt =
+          detected.rewritePrompt ||
+          buildClaimRewritePrompt({
+            draft: strategy,
+            invalid: detected.invalid,
+            groundedCurrency: currency,
+            evidenceClip: clip(state.evidenceMarkdown, 3500),
+          });
+        // Inject full evidence clip into rewrite prompt
+        const fullRewrite = rewritePrompt.includes("EVIDENCE (real paths only):")
+          ? rewritePrompt.replace(
+              /\(targetRepo=[\s\S]*?currency=[\s\S]*?\)/,
+              clip(state.evidenceMarkdown, 3500)
+            )
+          : rewritePrompt;
+        try {
+          const rewritten = await invokeWithCloudFallback(
+            activeModel,
+            activeOpts,
+            fullRewrite
+          );
+          strategy = rewritten;
+          detected = sanitizeDraftClaims(strategy, targetRepo, currency);
+          if (detected.modelErrors.length) {
+            claimErrors = claimErrors.concat(
+              detected.modelErrors.map((e) => ({
+                ...e,
+                loop: loopNo,
+                detail: `${e.detail} (after rewrite ${attempt + 1})`,
+              }))
+            );
+          }
+        } catch (e) {
+          warn(
+            "Strategist",
+            `Claim rewrite failed: ${String((e as Error)?.message || e).slice(0, 120)}`
+          );
+          break;
+        }
+      }
+      if (detected.needsRewrite) {
+        const cleaned = finalizeClaimsClean(strategy, targetRepo, currency);
+        strategy = cleaned.text;
+        if (cleaned.flags.length) {
+          warn("Strategist", `Claim clean-delete: ${cleaned.flags.join("; ")}`);
+        }
+        if (cleaned.modelErrors.length) {
+          claimErrors = claimErrors.concat(
+            cleaned.modelErrors.map((e) => ({ ...e, loop: loopNo }))
+          );
+        }
+      } else if (detected.flags.length) {
+        warn("Strategist", `Claim sanitizer: ${detected.flags.join("; ")}`);
+      }
+      // Absolute ban residues — strip any leftover placeholders without substituting currency
+      strategy = strategy.replace(/\s*\[REMOVED[^\]]*\]\s*/gi, " ");
+      strategy = strategy.replace(/\n{3,}/g, "\n\n").trim() + "\n";
+      if (claimErrors.length) {
+        logModelClaimErrors(claimErrors, runId);
+      }
+      const packCheck = assertCleanPackClaims(strategy);
+      if (!packCheck.ok) {
+        warn(
+          "Strategist",
+          `Pack claim assertion FAIL after sanitize: ${packCheck.violations.join(", ")}`
+        );
+      }
     }
 
     if (stallCount >= MAX_CONSECUTIVE_STALLS) {
@@ -396,7 +504,23 @@ ${clip(state.evidenceMarkdown, 3000)}`;
 
     const userGoal = state.userGoal || extractUserGoal(state.brief);
     const bookingMode = goalWantsBookingBlueprint(userGoal);
-    const fidelityPre = scoreGoalFidelity(userGoal, state.strategy || "");
+    const runId = state.runId || currentRunId();
+    const targetRepo = state.targetRepo || process.cwd();
+    const currency = state.groundedCurrency || "EGP";
+
+    // Keyword hits are informational only — gate uses task rubric
+    const keywordInfo = keywordHitInfo(userGoal, state.strategy || "");
+    const keywordFidelity = scoreGoalFidelity(userGoal, state.strategy || "");
+
+    const rubricCtx: RubricContext = {
+      strategy: state.strategy || "",
+      evidenceMarkdown: state.evidenceMarkdown,
+      specsReadCount: state.specsReadCount || 0,
+      reqRows: state.reqRows || [],
+      findings: state.findings || [],
+      cwd: process.cwd(),
+    };
+    const rubricPre = scoreGroundedAuditRubric(rubricCtx);
 
     const bookingRules = bookingMode
       ? `REJECT clinic-only framing, missing BookingTypes, missing token lifecycle, missing QR→invoice,
@@ -410,15 +534,17 @@ REJECT strategies that ignore the stated goal.`;
       `You are Agency Auditor (evidence-grounded + goal-fidelity).
 REJECT rubber-stamp checklists. Prefer citing EVIDENCE paths.
 REJECT invented files not in evidence.
+REJECT drafts that contain [REMOVED] placeholders or invent SAR / packages/ / apps/web.
 ${bookingRules}
 
 APPROVE only if strategy is concrete, consistent with evidence (or honestly marks gaps),
-AND clearly answers ORIGINAL USER GOAL.
+AND clearly answers ORIGINAL USER GOAL (specs cited, REQ statuses, stack conflict, P0/P1 findings, recommendations).
 
 ORIGINAL USER GOAL:
 ${clip(userGoal, 2000)}
 
-Deterministic fidelity hint (informational): ${fidelityPre.reason}
+Rubric hint (gate): ${rubricPre.reason}
+Keyword hits (informational only, not a gate): ${keywordInfo.hit}/${keywordInfo.total} (${keywordFidelity.reason})
 
 EVIDENCE PACK:
 ${clip(state.evidenceMarkdown, 5000)}
@@ -431,18 +557,19 @@ ${REJECTION_FORMAT}`
     );
 
     let llmApproved = parseApproved(auditReport);
-    const fidelity = scoreGoalFidelity(
-      userGoal,
-      state.strategy || "",
-      GROUNDED_FIDELITY_THRESHOLD
-    );
-    let goalPassed = fidelity.passed;
+
+    // Re-score rubric against current strategy (may have been cleaned in strategize)
+    const rubric = scoreGroundedAuditRubric({
+      ...rubricCtx,
+      strategy: state.strategy || "",
+    });
+    let goalPassed = rubric.passed;
     const rejectReasons: string[] = [];
 
-    // Hard gate: fidelity
+    // Hard gate: grounded-audit rubric (NOT keyword count)
     if (llmApproved && !goalPassed) {
       rejectReasons.push(
-        `Goal fidelity gate failed (score=${fidelity.score.toFixed(3)} < ${GROUNDED_FIDELITY_THRESHOLD}): ${fidelity.reason}`
+        `Goal fidelity rubric failed (score=${rubric.score.toFixed(3)} < ${GROUNDED_FIDELITY_THRESHOLD}): ${rubric.reason}`
       );
       llmApproved = false;
     }
@@ -460,41 +587,66 @@ ${REJECTION_FORMAT}`
       goalPassed = false;
     }
 
-    // Hard gate: cited paths must exist (after sanitizer still)
-    const targetRepo = state.targetRepo || process.cwd();
-    const currency = state.groundedCurrency || "EGP";
-    const sanitized = sanitizeDraftClaims(state.strategy || "", targetRepo, currency);
-    if (sanitized.removedPaths.length || sanitized.removedCurrencies.length) {
-      // Persist sanitized draft for pack/downstream
+    // Detect residual invalid claims (strategize should have rewritten/deleted)
+    let strategyText = state.strategy || "";
+    const residual = sanitizeDraftClaims(strategyText, targetRepo, currency);
+    if (residual.needsRewrite || residual.invalid.length) {
+      logModelClaimErrors(
+        residual.modelErrors.map((e) => ({ ...e, loop: loopNo })),
+        runId
+      );
+      const cleaned = finalizeClaimsClean(strategyText, targetRepo, currency);
+      strategyText = cleaned.text;
       try {
-        fs.writeFileSync("ceo-draft.md", sanitized.text, "utf-8");
+        fs.writeFileSync("ceo-draft.md", strategyText, "utf-8");
         fs.writeFileSync(
           path.join(state.loopDir, `strategy-v${loopNo}-sanitized.md`),
-          sanitized.text,
+          strategyText,
           "utf-8"
         );
       } catch {
         /* ignore */
       }
+      if (cleaned.modelErrors.length) {
+        logModelClaimErrors(
+          cleaned.modelErrors.map((e) => ({ ...e, loop: loopNo })),
+          runId
+        );
+      }
     }
-    const cites = verifyCitationsAgainstRepo(sanitized.text, targetRepo);
+
+    const cites = verifyCitationsAgainstRepo(strategyText, targetRepo);
     if (llmApproved && !cites.ok) {
       rejectReasons.push(cites.reason);
       llmApproved = false;
       goalPassed = false;
     }
-    if (llmApproved && sanitized.removedCurrencies.length) {
+    if (llmApproved && residual.removedCurrencies.length) {
       rejectReasons.push(
-        `Wrong currency claims sanitized (${sanitized.removedCurrencies
+        `Invalid currency claims detected (${residual.removedCurrencies
           .slice(0, 4)
-          .join(",")}) — must use ${currency}`
+          .join(",")}) — must use ${currency}; never auto-substitute`
       );
       llmApproved = false;
       goalPassed = false;
     }
 
+    // Pack-level assertion: 0 SAR / packages/ / apps/web / [REMOVED]
+    const packAssert = assertCleanPackClaims(strategyText);
+    if (!packAssert.ok) {
+      rejectReasons.push(
+        `Pack claim assertion FAIL: forbidden residues ${packAssert.violations.join(", ")}`
+      );
+      llmApproved = false;
+      goalPassed = false;
+      warn(
+        "Auditor",
+        `Pack claim assertion FAIL — ${packAssert.violations.join(", ")}`
+      );
+    }
+
     // Repetition / degeneration on strategy
-    const rep = detectRepetition(sanitized.text);
+    const rep = detectRepetition(strategyText);
     if (llmApproved && !rep.ok) {
       rejectReasons.push(`Strategy degeneration: ${rep.reason}`);
       llmApproved = false;
@@ -516,7 +668,7 @@ ${REJECTION_FORMAT}`
         ``,
         ...rejectReasons.map(
           (r, i) =>
-            `### Issue ${i + 1}\n- أسباب الرفض / Rejection reason: ${r}\n- درجة الخطورة / Severity: Critical\n- طريقة الحل / How to fix: Ground claims in evidence-pack.md / evidence.json; cite only real paths; raise REQ coverage; avoid invented folders.\nFIX ${i + 1}: ${r}`
+            `### Issue ${i + 1}\n- Rejection reason: ${r}\n- Severity: Critical\n- How to fix: Ground claims in evidence-pack.md / evidence.json; cite only real paths; raise REQ coverage; never use [REMOVED] placeholders or invent SAR/packages/apps/web.\nFIX ${i + 1}: ${r}`
         ),
         ``,
         `--- LLM draft (overridden by grounded gates) ---`,
@@ -532,28 +684,29 @@ ${REJECTION_FORMAT}`
     // Empty / failed gates => CLOSED (never OPEN without APPROVED)
     const gateOpen = auditPassed === true;
 
-    // Persist gates.json snapshot for the run (never empty→OPEN)
+    // Per-run gates.json (keyed by runId — never append prior-run loops)
     try {
-      const gatesPath = path.join(process.cwd(), "gates.json");
-      const prev = fs.existsSync(gatesPath)
-        ? JSON.parse(fs.readFileSync(gatesPath, "utf-8"))
-        : { gates: [] };
-      const gates = Array.isArray(prev.gates) ? prev.gates : [];
-      gates.push({
-        at: new Date().toISOString(),
-        loop: loopNo,
-        gate: gateOpen ? "OPEN" : "CLOSED",
-        auditPassed,
-        goalPassed,
-        goalFidelityScore: fidelity.score,
-        reqCoverage,
-        missingCitations: cites.missing.map((m) => m.raw),
-        rejectReasons,
-      });
-      fs.writeFileSync(
-        gatesPath,
-        JSON.stringify({ gates, latest: gates[gates.length - 1] }, null, 2),
-        "utf-8"
+      appendGateEntry(
+        {
+          at: new Date().toISOString(),
+          loop: loopNo,
+          gate: gateOpen ? "OPEN" : "CLOSED",
+          auditPassed,
+          goalPassed,
+          goalFidelityScore: rubric.score,
+          keywordHitRatio: keywordInfo.ratio,
+          keywordHits: { hit: keywordInfo.hit, total: keywordInfo.total },
+          rubricItems: rubric.items.map((i) => ({
+            id: i.id,
+            passed: i.passed,
+            applicable: i.applicable,
+          })),
+          reqCoverage,
+          missingCitations: cites.missing.map((m) => m.raw),
+          rejectReasons,
+          packClaimViolations: packAssert.ok ? [] : packAssert.violations,
+        },
+        runId
       );
     } catch {
       /* ignore */
@@ -564,10 +717,12 @@ ${REJECTION_FORMAT}`
       `Result: ${auditPassed ? "[APPROVED]" : "[REJECTED]"}`,
       `gate: ${gateOpen ? "OPEN" : "CLOSED"}`,
       `goalPassed: ${goalPassed}`,
-      `goalFidelityScore: ${fidelity.score.toFixed(3)} (threshold ${GROUNDED_FIDELITY_THRESHOLD})`,
-      `goalFidelityReason: ${fidelity.reason}`,
+      `goalFidelityScore: ${rubric.score.toFixed(3)} (rubric threshold ${GROUNDED_FIDELITY_THRESHOLD})`,
+      `goalFidelityReason: ${rubric.reason}`,
+      `keywordHits (informational): ${keywordInfo.hit}/${keywordInfo.total} ratio=${keywordInfo.ratio.toFixed(3)}`,
       `reqCoverage: ${reqCoverage.toFixed(3)} (min ${MIN_REQ_COVERAGE})`,
       `citationsOk: ${cites.ok}`,
+      `packClaimsOk: ${packAssert.ok}`,
       `repetitionOk: ${rep.ok}`,
       ``,
       auditReport,
@@ -588,7 +743,8 @@ ${REJECTION_FORMAT}`
       auditReport: auditDoc,
       auditPassed,
       goalPassed,
-      goalFidelityScore: fidelity.score,
+      goalFidelityScore: rubric.score,
+      strategy: strategyText,
       history: [auditDoc],
     };
   };
@@ -630,6 +786,10 @@ export async function runReviewGraph(input: {
   /** 0..1 REQ coverage from evidence matrix; default 1 when unknown. */
   reqCoverage?: number;
   groundedCurrency?: string;
+  /** Spec files ingested — rubric specs_read. */
+  specsReadCount?: number;
+  reqRows?: Array<{ id: string; status: string; codePaths?: string[] }>;
+  findings?: Array<{ severity?: string; summary?: string; category?: string }>;
   /** LangGraph thread id — stable across resume after crash/restart */
   threadId?: string;
   /** When true, resume from last checkpoint instead of fresh state */
@@ -650,9 +810,11 @@ export async function runReviewGraph(input: {
   getPersistence();
   const graph = getCompiled();
   const userGoal = input.userGoal || extractUserGoal(input.brief);
+  const runId = input.runId || currentRunId();
   const threadId =
     input.threadId ||
     process.env.SAM_HARNESS_RUN_ID ||
+    runId ||
     `review-${Date.now().toString(36)}`;
   const config = {
     configurable: { thread_id: threadId },
@@ -667,24 +829,11 @@ export async function runReviewGraph(input: {
     });
   }
 
-  // Ensure gates.json exists as CLOSED until APPROVED (never empty→OPEN)
-  try {
-    if (!fs.existsSync("gates.json")) {
-      fs.writeFileSync(
-        "gates.json",
-        JSON.stringify(
-          {
-            gates: [],
-            latest: { gate: "CLOSED", auditPassed: false, at: new Date().toISOString() },
-          },
-          null,
-          2
-        ),
-        "utf-8"
-      );
-    }
-  } catch {
-    /* ignore */
+  // Per-run gates.json — reset when runId changes (never leak prior pack loops)
+  if (!input.resume) {
+    ensureGatesForRun(runId);
+  } else {
+    ensureGatesForRun(runId);
   }
 
   const out = await withSpan(
@@ -705,6 +854,10 @@ export async function runReviewGraph(input: {
           reqCoverage:
             typeof input.reqCoverage === "number" ? input.reqCoverage : 1,
           groundedCurrency: input.groundedCurrency || "EGP",
+          runId,
+          specsReadCount: input.specsReadCount || 0,
+          reqRows: input.reqRows || [],
+          findings: input.findings || [],
           strategy: "",
           auditReport: "",
           loop: 0,

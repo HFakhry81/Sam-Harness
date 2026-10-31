@@ -15,9 +15,12 @@ import {
   STALL_SIMILARITY_THRESHOLD,
 } from "../src/agency/stallDetect.js";
 import {
+  detectInvalidClaims,
+  finalizeClaimsClean,
   sanitizeDraftClaims,
   verifyCitationsAgainstRepo,
 } from "../src/agency/claimVerify.js";
+import { assertCleanPackClaims } from "../src/agency/fidelityRubric.js";
 import {
   runAuditChecklist,
   scanMissingHandlers,
@@ -80,18 +83,37 @@ describe("claim path verifier + currency sanitizer", () => {
     expect(v.missing.some((m) => /apps\/web/.test(m.raw))).toBe(true);
   });
 
-  it("strips missing paths and replaces SAR with EGP", () => {
+  it("detects invalid claims without mutating text or auto-substituting currency", () => {
     const draft = [
       "Currency should be SAR for Gulf users.",
       "See `packages/core/index.ts` and apps/web for tenant isolation.",
       "Also `src/data/mockData.js` uses EGP already.",
     ].join("\n");
     const s = sanitizeDraftClaims(draft, REPO, "EGP");
+    expect(s.needsRewrite).toBe(true);
     expect(s.removedCurrencies.length).toBeGreaterThan(0);
-    expect(s.text).not.toMatch(/\bSAR\b/);
-    expect(s.text).toMatch(/EGP/);
     expect(s.removedPaths.some((p) => /packages\//.test(p))).toBe(true);
-    expect(s.text).toMatch(/REMOVED: path not found/);
+    // Must NOT auto-rewrite SAR→EGP or insert placeholders
+    expect(s.text).toContain("SAR");
+    expect(s.text).not.toMatch(/\[REMOVED/);
+    expect(s.rewritePrompt).toMatch(/REWRITE REQUIRED/);
+  });
+
+  it("clean-deletes invalid claim sentences with no placeholders", () => {
+    const draft = [
+      "Currency should be SAR for Gulf users.",
+      "See `packages/core/index.ts` for tenant isolation.",
+      "Also `src/data/mockData.js` uses EGP already.",
+    ].join("\n");
+    const detected = detectInvalidClaims(draft, REPO, "EGP");
+    expect(detected.ok).toBe(false);
+    const cleaned = finalizeClaimsClean(draft, REPO, "EGP");
+    expect(cleaned.text).not.toMatch(/\bSAR\b/);
+    expect(cleaned.text).not.toMatch(/packages\//);
+    expect(cleaned.text).not.toMatch(/\[REMOVED/);
+    expect(cleaned.text).toMatch(/mockData\.js/);
+    expect(cleaned.text).toMatch(/EGP/);
+    expect(assertCleanPackClaims(cleaned.text).ok).toBe(true);
   });
 });
 

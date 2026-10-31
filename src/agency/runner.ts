@@ -33,6 +33,14 @@ import {
   isSamHarnessSelfGoal,
 } from "./goalFidelity.js";
 import {
+  assertCleanPackClaims,
+  assertCleanPackFiles,
+} from "./fidelityRubric.js";
+import {
+  currentRunId,
+  resetGatesForRun,
+} from "./gatesStore.js";
+import {
   extractGoalPaths,
   primarySpecRoot,
   primaryTargetRepo,
@@ -114,6 +122,10 @@ export async function runAgencyArchitecture(task: string): Promise<AgencyRunResu
       : "Agency specialists → local fallback (set OLLAMA_API_KEY for cloud)"
   );
   sys(`Agency roster: ${AGENCY_ROLES.map((r) => r.id).join(", ")}`);
+
+  // Fresh gates.json for this pack/run — never append prior-run loops
+  const packRunId = currentRunId(process.env.SAM_HARNESS_RUN_ID || undefined);
+  resetGatesForRun(packRunId);
 
   const userGoalEarly = extractUserGoal(
     typeof taskConfig.body === "string" && taskConfig.body.trim()
@@ -258,14 +270,57 @@ export async function runAgencyArchitecture(task: string): Promise<AgencyRunResu
     targetRepo: engagement.targetRepo,
     reqCoverage: evidence.reqMatrix?.coverageRatio ?? 1,
     groundedCurrency: evidence.localeCurrency?.currency || "EGP",
+    specsReadCount: evidence.spec?.filesRead?.length || 0,
+    reqRows: (evidence.reqMatrix?.rows || []).map((r) => ({
+      id: r.id,
+      status: r.status,
+      codePaths: r.codePaths,
+    })),
+    findings: (evidence.checklist?.findings || []).map((f) => ({
+      severity: f.severity,
+      summary: f.summary,
+      category: f.category,
+    })),
+    runId: packRunId,
   });
+
+  // Pack-level claim assertion — fail loudly if residues remain
+  let auditPassed = review.auditPassed;
+  let goalPassed = review.goalPassed;
+  {
+    const draftCheck = assertCleanPackClaims(review.strategy || "");
+    const filesCheck = assertCleanPackFiles(process.cwd());
+    if (!draftCheck.ok || !filesCheck.ok) {
+      const violations = [
+        ...new Set([...draftCheck.violations, ...filesCheck.violations]),
+      ];
+      const msg = `Pack claim assertion FAIL: forbidden residues ${violations.join(", ")}${
+        filesCheck.file ? ` in ${filesCheck.file}` : ""
+      }`;
+      warn("Pack", msg);
+      try {
+        fs.writeFileSync(
+          "PACK_CLAIM_ASSERTION.md",
+          `# Pack claim assertion FAIL\n\n${msg}\n`,
+          "utf-8"
+        );
+      } catch {
+        /* ignore */
+      }
+      if (auditPassed) {
+        auditPassed = false;
+        goalPassed = false;
+        warn("Pack", "Forced gate CLOSED due to pack claim assertion");
+      }
+    }
+  }
 
   fs.writeFileSync(
     "audit-history.md",
     [
       `# Audit History (LangGraph, max ${MAX_LOOPS})`,
-      `Final: ${review.auditPassed ? "[APPROVED]" : "[REJECTED] — gate CLOSED"}`,
-      `goalPassed: ${review.goalPassed}`,
+      `Final: ${auditPassed ? "[APPROVED]" : "[REJECTED] — gate CLOSED"}`,
+      `goalPassed: ${goalPassed}`,
       `goalFidelityScore: ${review.goalFidelityScore.toFixed(3)}`,
       ``,
       ...review.history.map((h, i) => `---\n## Loop ${i + 1}\n\n${h}`),
@@ -279,10 +334,10 @@ export async function runAgencyArchitecture(task: string): Promise<AgencyRunResu
       `- engine: LangGraph StateGraph`,
       `- loops_run: ${review.loop}`,
       `- max: ${MAX_LOOPS}`,
-      `- auditPassed: ${review.auditPassed}`,
-      `- goalPassed: ${review.goalPassed}`,
+      `- auditPassed: ${auditPassed}`,
+      `- goalPassed: ${goalPassed}`,
       `- goalFidelityScore: ${review.goalFidelityScore.toFixed(3)}`,
-      `- gate: ${review.auditPassed ? "OPEN" : "CLOSED"}`,
+      `- gate: ${auditPassed ? "OPEN" : "CLOSED"}`,
       `- evidence_hits: ${evidence.hits.length}`,
     ].join("\n"),
     "utf-8"
@@ -402,7 +457,7 @@ ${clip(brief, 3000)}`,
     return ctx;
   }
 
-  if (!review.auditPassed) {
+  if (!auditPassed) {
     warn("Gate", "Auditor never APPROVED — downstream specialists SKIPPED");
     finalReport = [
       `# Final report — AUDIT GATE FAILED`,
@@ -414,7 +469,7 @@ ${clip(brief, 3000)}`,
     fs.writeFileSync("final-report.md", finalReport, "utf-8");
     fs.writeFileSync(
       "execution-result.md",
-      `# Agency Result\n- engine: LangGraph\n- auditPassed: false\n- goalPassed: ${review.goalPassed}\n- goalFidelityScore: ${review.goalFidelityScore.toFixed(3)}\n- gate: CLOSED\n- loops: ${review.loop}\n`,
+      `# Agency Result\n- engine: LangGraph\n- auditPassed: false\n- goalPassed: ${goalPassed}\n- goalFidelityScore: ${review.goalFidelityScore.toFixed(3)}\n- gate: CLOSED\n- loops: ${review.loop}\n`,
       "utf-8"
     );
   } else {
@@ -486,7 +541,7 @@ ${clip(layeredBlueprint, 3000)}`
 
     fs.writeFileSync(
       "execution-result.md",
-      `# Agency Result\n- engine: LangGraph\n- auditPassed: true\n- goalPassed: ${review.goalPassed}\n- goalFidelityScore: ${review.goalFidelityScore.toFixed(3)}\n- gate: OPEN\n- loops: ${review.loop}\n- downstream: ${downstream.map((r) => r.id).join(",")}\n`,
+      `# Agency Result\n- engine: LangGraph\n- auditPassed: true\n- goalPassed: ${goalPassed}\n- goalFidelityScore: ${review.goalFidelityScore.toFixed(3)}\n- gate: OPEN\n- loops: ${review.loop}\n- downstream: ${downstream.map((r) => r.id).join(",")}\n`,
       "utf-8"
     );
   }
@@ -498,7 +553,7 @@ ${clip(layeredBlueprint, 3000)}`
     packDir = dir;
     reviewNo = n;
     // Refresh board with packDir once known
-    if (review.auditPassed) {
+    if (auditPassed) {
       syncDeliveryBoardFromBacklog({
         engagementId: engagement.id,
         targetRepo: engagement.targetRepo,
@@ -545,8 +600,8 @@ ${clip(layeredBlueprint, 3000)}`
           {
             gates: [],
             latest: {
-              gate: review.auditPassed ? "OPEN" : "CLOSED",
-              auditPassed: review.auditPassed,
+              gate: auditPassed ? "OPEN" : "CLOSED",
+              auditPassed: auditPassed,
               at: new Date().toISOString(),
             },
           },
@@ -565,7 +620,7 @@ ${clip(layeredBlueprint, 3000)}`
     }
     fs.writeFileSync(
       path.join(dir, "PACK_HANDOFF.md"),
-      `# Pack — Sam-Harness no.${n}\n\nengine: LangGraph agency\nauditPassed: ${review.auditPassed}\ngoalPassed: ${review.goalPassed}\ngoalFidelityScore: ${review.goalFidelityScore.toFixed(3)}\nloops: ${review.loop}/${MAX_LOOPS}\nevidence_hits: ${evidence.hits.length}\n`,
+      `# Pack — Sam-Harness no.${n}\n\nengine: LangGraph agency\nauditPassed: ${auditPassed}\ngoalPassed: ${goalPassed}\ngoalFidelityScore: ${review.goalFidelityScore.toFixed(3)}\nloops: ${review.loop}/${MAX_LOOPS}\nevidence_hits: ${evidence.hits.length}\n`,
       "utf-8"
     );
     fs.writeFileSync(
@@ -580,8 +635,8 @@ ${clip(layeredBlueprint, 3000)}`
 
   return {
     engagement,
-    auditPassed: review.auditPassed,
-    goalPassed: review.goalPassed,
+    auditPassed: auditPassed,
+    goalPassed: goalPassed,
     goalFidelityScore: review.goalFidelityScore,
     revisionCount: review.loop,
     strategyPlan: review.strategy,
