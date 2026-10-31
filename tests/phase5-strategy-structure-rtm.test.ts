@@ -177,7 +177,7 @@ describe("deterministic RTM + Key Findings injection into strategy", () => {
 
     expect(injected).toMatch(/## Requirements traceability \(deterministic\)/);
     expect(injected).toMatch(/## Key Findings/);
-    expect(injected).toMatch(/Coverage \(non-missing\):/);
+    expect(injected).toMatch(/Coverage \(code-backed/);
     // Must not keep the hallucinated 21.4% model RTM section
     expect(injected).not.toMatch(/Coverage:\s*21\.4%/);
     expect(injected).toMatch(/MOCK-001|mock data/i);

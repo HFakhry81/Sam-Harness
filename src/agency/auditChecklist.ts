@@ -12,6 +12,7 @@ import * as path from "path";
 import type { RepoIndexResult } from "./repoIndex.js";
 import type { SpecIngestResult } from "./specIngest.js";
 import type { LocaleCurrencyProfile } from "./localeCurrency.js";
+import { isJunkDirName, isJunkEvidencePath } from "./pathFilters.js";
 
 export type ChecklistFinding = {
   id: string;
@@ -61,7 +62,6 @@ function readJsonSafe(p: string): Record<string, unknown> | null {
 
 function walkFiles(root: string, max = 80): string[] {
   const out: string[] = [];
-  const skip = new Set(["node_modules", ".git", "dist", "build", ".next", "coverage"]);
   const stack = [root];
   while (stack.length && out.length < max) {
     const dir = stack.pop()!;
@@ -72,10 +72,18 @@ function walkFiles(root: string, max = 80): string[] {
       continue;
     }
     for (const e of entries) {
-      if (skip.has(e.name)) continue;
+      if (isJunkDirName(e.name)) continue;
       const full = path.join(dir, e.name);
-      if (e.isDirectory()) stack.push(full);
-      else if (/\.(m?[jt]sx?|tsx?|jsx?)$/i.test(e.name)) out.push(full);
+      const rel = path.relative(root, full).replace(/\\/g, "/");
+      if (e.isDirectory()) {
+        if (isJunkEvidencePath(rel + "/x")) continue;
+        stack.push(full);
+      } else if (
+        !isJunkEvidencePath(rel) &&
+        /\.(m?[jt]sx?|tsx?|jsx?|dart|py)$/i.test(e.name)
+      ) {
+        out.push(full);
+      }
       if (out.length >= max) break;
     }
   }

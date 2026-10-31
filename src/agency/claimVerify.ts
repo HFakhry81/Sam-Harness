@@ -8,6 +8,7 @@ import * as fs from "fs";
 import * as path from "path";
 import type { ModelClaimError } from "./gatesStore.js";
 import { normalizeMarkdownStructure } from "./markdownNormalize.js";
+import { clipStrategyForPrompt } from "./finalReport.js";
 
 export type PathCitation = {
   raw: string;
@@ -404,10 +405,10 @@ After edits, every heading must have content; no empty bullets; ordered lists mu
 EVIDENCE (real paths only):
 ${input.evidenceClip}
 
-PRIOR DRAFT:
-${input.draft.slice(0, 6000)}
+PRIOR DRAFT (deterministic RTM/Key Findings summarized — keep full blocks when writing the file):
+${clipStrategyForPrompt(input.draft, 5000)}
 
-Return the full corrected strategy.`;
+Return the full corrected strategy. Re-include or leave room for the harness to re-inject the full deterministic RTM and Key Findings blocks.`;
 }
 
 function toModelErrorKind(

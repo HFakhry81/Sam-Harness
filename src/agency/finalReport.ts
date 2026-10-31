@@ -19,7 +19,12 @@ export type FinalReportEvidence = {
   targetRepo?: string;
 };
 
-const ISSUE_REQ_STATUSES = new Set(["missing", "partial", "contradicts"]);
+const ISSUE_REQ_STATUSES = new Set([
+  "missing",
+  "partial",
+  "contradicts",
+  "unverified",
+]);
 
 /** Checklist items that represent failures / partial gaps (not OK confirmations). */
 export function selectFailedChecklistFindings(
@@ -198,19 +203,20 @@ export function buildDeterministicRtmBlock(input: {
   const partial = rows.filter((r) => r.status === "partial").length;
   const missing = rows.filter((r) => r.status === "missing").length;
   const contradicts = rows.filter((r) => r.status === "contradicts").length;
-  const addressed = implemented + partial + contradicts;
+  const unverified = rows.filter((r) => r.status === "unverified").length;
+  const codeBacked = implemented + partial + contradicts;
   const ratio =
     typeof input.coverageRatio === "number" && !Number.isNaN(input.coverageRatio)
       ? input.coverageRatio
       : rows.length
-        ? addressed / rows.length
+        ? codeBacked / rows.length
         : 0;
   return [
     `## Requirements traceability (deterministic)`,
     ``,
     `Do NOT restate or invent alternate REQ statuses or coverage percentages.`,
-    `Coverage (non-missing): ${(ratio * 100).toFixed(1)}% (${addressed}/${rows.length})`,
-    `implemented=${implemented} partial=${partial} missing=${missing} contradicts=${contradicts}`,
+    `Coverage (code-backed: implemented+partial+contradicts): ${(ratio * 100).toFixed(1)}% (${codeBacked}/${rows.length})`,
+    `implemented=${implemented} partial=${partial} missing=${missing} contradicts=${contradicts} unverified=${unverified}`,
     ``,
     `| ID | Status | Code paths | Requirement |`,
     `| --- | --- | --- | --- |`,
@@ -265,6 +271,51 @@ export function buildDeterministicKeyFindingsBlock(input: {
     ...findingLines,
     ``,
   ].join("\n");
+}
+
+/** Detect start of a deterministic injected block. */
+export function isDeterministicStrategySection(headingLine: string): boolean {
+  return /##\s*(Requirements traceability \(deterministic\)|Key Findings)\b/i.test(
+    headingLine
+  );
+}
+
+/**
+ * Clip strategy for LLM prompts without truncating deterministic RTM / Key Findings.
+ * Those blocks are replaced by a short count summary in the prompt; written files
+ * must always keep the full blocks (never append "...(truncated)" into them).
+ */
+export function clipStrategyForPrompt(strategy: string, max = 6000): string {
+  const text = String(strategy || "");
+  const rtm = text.match(
+    /##\s*Requirements traceability \(deterministic\)\b[\s\S]*?(?=\n##\s(?!Requirements traceability)|\n#\s|$)/i
+  )?.[0];
+  const findings = text.match(
+    /##\s*Key Findings\b[\s\S]*?(?=\n##\s(?!Key Findings)|\n#\s|$)/i
+  )?.[0];
+
+  let narrative = text
+    .replace(
+      /##\s*Requirements traceability \(deterministic\)\b[\s\S]*?(?=\n##\s(?!Requirements traceability)|\n#\s|$)/gi,
+      ""
+    )
+    .replace(/##\s*Key Findings\b[\s\S]*?(?=\n##\s(?!Key Findings)|\n#\s|$)/gi, "")
+    .replace(/\n{3,}/g, "\n\n")
+    .trim();
+
+  const reqRows = (rtm || "").match(/^\|\s*REQ/gim)?.length || 0;
+  const findingBullets = (findings || "").match(/^\s*-\s+\[/gm)?.length || 0;
+  const summary = [
+    `## Deterministic blocks (full text is in the written strategy file — do not invent statuses)`,
+    `- RTM rows in file: ${reqRows}`,
+    `- Key Findings bullets in file: ${findingBullets}`,
+    `- Coverage line: ${(rtm || "").match(/Coverage[^\n]*/)?.[0] || "(see written file)"}`,
+  ].join("\n");
+
+  if (narrative.length > max) {
+    narrative = narrative.slice(0, max) + "\n...(truncated narrative only)";
+  }
+  return `${narrative}\n\n${summary}\n`;
 }
 
 /**

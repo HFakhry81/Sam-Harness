@@ -1,13 +1,25 @@
 /**
- * Requirements traceability: REQ -> implemented / partial / missing / contradicts
- * with real code paths. Drives the gap report.
+ * Requirements traceability: REQ -> implemented / partial / missing / contradicts / unverified
+ * with real app-source paths only. Junk/backup/prior-report paths never count.
  */
 import * as fs from "fs";
 import * as path from "path";
 import type { SpecRequirement } from "./specIngest.js";
 import type { RepoIndexResult } from "./repoIndex.js";
+import type { ChecklistFinding } from "./auditChecklist.js";
+import {
+  hasSymbolOrHandlerEvidence,
+  isAppSourcePath,
+  isJunkDirName,
+  isJunkEvidencePath,
+} from "./pathFilters.js";
 
-export type ReqStatus = "implemented" | "partial" | "missing" | "contradicts";
+export type ReqStatus =
+  | "implemented"
+  | "partial"
+  | "missing"
+  | "contradicts"
+  | "unverified";
 
 export type ReqTraceRow = {
   id: string;
@@ -21,21 +33,51 @@ export type ReqTraceRow = {
 
 export type ReqTraceMatrix = {
   rows: ReqTraceRow[];
-  coverageRatio: number; // addressed (not missing) / total
+  /** Share of REQs with code-backed statuses (implemented/partial/contradicts). */
+  coverageRatio: number;
   implementedCount: number;
   partialCount: number;
   missingCount: number;
   contradictsCount: number;
+  unverifiedCount: number;
   markdown: string;
   json: object;
 };
+
+const STOP_TOKENS = new Set(
+  [
+    "must",
+    "should",
+    "shall",
+    "with",
+    "from",
+    "that",
+    "this",
+    "have",
+    "been",
+    "support",
+    "target",
+    "stack",
+    "client",
+    "product",
+    "brief",
+    "provide",
+    "working",
+    "button",
+    "using",
+    "into",
+    "only",
+    "real",
+    "data",
+  ].map((x) => x.toLowerCase())
+);
 
 function tokenize(text: string): string[] {
   return text
     .toLowerCase()
     .replace(/[^\p{L}\p{N}\-_./]+/gu, " ")
     .split(/\s+/)
-    .filter((t) => t.length >= 4)
+    .filter((t) => t.length >= 4 && !STOP_TOKENS.has(t))
     .slice(0, 12);
 }
 
@@ -44,31 +86,28 @@ function tokenize(text: string): string[] {
  * Used before scoring so every REQ is actively searched in the tree.
  */
 export function reqSearchPattern(reqText: string): string {
-  const tokens = tokenize(reqText)
-    .filter((t) => !/^(must|should|shall|with|from|that|this|have|been)$/i.test(t))
-    .slice(0, 6);
+  const tokens = tokenize(reqText).slice(0, 6);
   if (!tokens.length) return reqText.slice(0, 40).replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
   return tokens.map((t) => t.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")).join("|");
 }
 
-/** Search file bodies for a REQ pattern; returns relative paths that hit. */
+/** Search file bodies for a REQ; requires 2+ distinctive tokens (or one strong token). */
 export function searchCodeForReq(
   fileBodies: Map<string, string>,
   reqText: string
 ): { paths: string[]; hitCount: number } {
-  const pattern = reqSearchPattern(reqText);
-  let re: RegExp;
-  try {
-    re = new RegExp(pattern, "i");
-  } catch {
-    return { paths: [], hitCount: 0 };
-  }
+  const tokens = tokenize(reqText);
+  if (!tokens.length) return { paths: [], hitCount: 0 };
   const paths: string[] = [];
   let hitCount = 0;
   for (const [rel, body] of fileBodies) {
-    if (re.test(body)) {
+    if (isJunkEvidencePath(rel)) continue;
+    const lower = body.toLowerCase();
+    const matched = tokens.filter((t) => lower.includes(t));
+    const strong = matched.some((t) => t.length >= 6);
+    if (matched.length >= 2 || (matched.length >= 1 && strong)) {
       paths.push(rel);
-      hitCount += 1;
+      hitCount += matched.length;
     }
   }
   return { paths: paths.slice(0, 12), hitCount };
@@ -80,46 +119,66 @@ function scoreAgainstRepo(
   fileBodies: Map<string, string>
 ): Omit<ReqTraceRow, "id" | "text" | "sourceFile" | "section"> {
   const tokens = tokenize(req.text);
-  const codePaths: string[] = [];
+  const appPaths: string[] = [];
+  const docPaths: string[] = [];
   const evidenceNotes: string[] = [];
-  let hits = 0;
+  let symbolHits = 0;
+  let keywordHits = 0;
+
+  const considerPath = (rel: string, body?: string) => {
+    if (!rel || isJunkEvidencePath(rel)) return;
+    if (isAppSourcePath(rel)) {
+      appPaths.push(rel);
+      const src = body ?? fileBodies.get(rel) ?? "";
+      if (hasSymbolOrHandlerEvidence(src, tokens)) {
+        symbolHits += 1;
+        evidenceNotes.push(`symbol/handler evidence in ${rel}`);
+      } else {
+        keywordHits += 1;
+        evidenceNotes.push(`keyword hit in app source ${rel}`);
+      }
+      return;
+    }
+    // Non-app but non-junk (e.g. deeper markdown) — doc-only
+    docPaths.push(rel);
+    evidenceNotes.push(`doc/non-source hit ${rel}`);
+  };
 
   // Mandatory: search_code-style scan per REQ before scoring
   const searched = searchCodeForReq(fileBodies, req.text);
   for (const p of searched.paths) {
-    codePaths.push(p);
-    evidenceNotes.push(`search_code hit for REQ pattern`);
-    hits += 2;
+    considerPath(p, fileBodies.get(p));
   }
 
   for (const h of index.hits) {
+    if (isJunkEvidencePath(h.path)) continue;
     const hay = `${h.path} ${h.note}`.toLowerCase();
     const tokHit = tokens.filter((t) => hay.includes(t)).length;
     if (tokHit >= 1) {
-      codePaths.push(h.path);
-      evidenceNotes.push(h.note);
-      hits += tokHit;
+      considerPath(h.path, fileBodies.get(h.path));
     }
   }
 
-  // Content search on a sample of source files (token overlap)
+  // Content search on sampled bodies (token overlap)
   for (const [rel, body] of fileBodies) {
+    if (isJunkEvidencePath(rel)) continue;
     const lower = body.toLowerCase();
     const tokHit = tokens.filter((t) => lower.includes(t)).length;
     if (tokHit >= 2) {
-      codePaths.push(rel);
-      evidenceNotes.push("content token match");
-      hits += tokHit;
+      considerPath(rel, body);
     }
   }
+
+  const uniqApp = [...new Set(appPaths)].slice(0, 8);
+  const uniqDoc = [...new Set(docPaths)].slice(0, 8);
 
   // Contradiction: req mentions live/supabase/backend but mocks dominate
   const wantsLive =
     /supabase|postgres|api|auth|live|production|real\s+data|قاعدة/i.test(req.text);
-  if (wantsLive && index.usesMockData && codePaths.some((p) => /mock/i.test(p))) {
+  if (wantsLive && index.usesMockData && uniqApp.some((p) => /mock/i.test(p))) {
     return {
       status: "contradicts",
-      codePaths: [...new Set(codePaths)].slice(0, 8),
+      codePaths: uniqApp,
       evidenceNotes: [
         ...evidenceNotes.slice(0, 4),
         "mock-data usage contradicts live-backend requirement",
@@ -127,14 +186,106 @@ function scoreAgainstRepo(
     };
   }
 
-  const uniqPaths = [...new Set(codePaths)].slice(0, 8);
-  if (uniqPaths.length === 0 || hits === 0) {
-    return { status: "missing", codePaths: [], evidenceNotes: ["no code evidence found"] };
+  // No app source at all
+  if (uniqApp.length === 0) {
+    if (uniqDoc.length > 0) {
+      return {
+        status: "unverified",
+        codePaths: [],
+        evidenceNotes: [
+          ...evidenceNotes.slice(0, 4),
+          "doc/keyword-only hits — not code-backed",
+        ],
+      };
+    }
+    return {
+      status: "missing",
+      codePaths: [],
+      evidenceNotes: ["no app-source evidence found"],
+    };
   }
-  if (hits >= 4 && uniqPaths.length >= 2) {
-    return { status: "implemented", codePaths: uniqPaths, evidenceNotes: evidenceNotes.slice(0, 6) };
+
+  // Implemented requires app source + symbol/handler evidence (not keyword-only)
+  if (symbolHits >= 1 && uniqApp.length >= 1) {
+    return {
+      status: "implemented",
+      codePaths: uniqApp,
+      evidenceNotes: evidenceNotes.slice(0, 6),
+    };
   }
-  return { status: "partial", codePaths: uniqPaths, evidenceNotes: evidenceNotes.slice(0, 6) };
+
+  // Keyword hits in app source without symbol/handler → partial (not implemented)
+  if (keywordHits >= 1 || uniqApp.length >= 1) {
+    return {
+      status: "partial",
+      codePaths: uniqApp,
+      evidenceNotes: [
+        ...evidenceNotes.slice(0, 4),
+        "keyword-only in app source — not symbol-backed implemented",
+      ],
+    };
+  }
+
+  return {
+    status: "unverified",
+    codePaths: [],
+    evidenceNotes: evidenceNotes.slice(0, 6),
+  };
+}
+
+/**
+ * P0 checklist findings cap related REQs at most `partial`
+ * (never leave them as implemented when the audit says the capability is broken).
+ */
+export function applyP0FindingCaps(
+  rows: ReqTraceRow[],
+  findings: ChecklistFinding[] = []
+): ReqTraceRow[] {
+  const p0 = (findings || []).filter((f) => f.severity === "P0");
+  const hasStack = p0.some((f) => f.category === "stack_conflict");
+  const hasOtpOrAuth = p0.some(
+    (f) =>
+      f.category === "auth" ||
+      /otp|auth|sign-?in|login/i.test(`${f.id} ${f.summary} ${f.detail}`)
+  );
+  const hasMock = p0.some((f) => f.category === "mock_data");
+  const hasDep = p0.some((f) => f.category === "dependency");
+  const hasUi = p0.some((f) => f.category === "ui_handler");
+
+  return rows.map((r) => {
+    if (r.status !== "implemented") return r;
+    const text = `${r.id} ${r.text}`.toLowerCase();
+    let capped = false;
+    let note = "";
+    if (
+      hasStack &&
+      /flutter|fastapi|django|expo|react\s*native|stack|android|ios/i.test(text)
+    ) {
+      capped = true;
+      note = "capped to partial by P0 stack_conflict finding";
+    } else if (hasOtpOrAuth && /otp|auth|sign\s*in|login|google|apple|oauth/i.test(text)) {
+      capped = true;
+      note = "capped to partial by P0 auth/OTP finding";
+    } else if (
+      hasMock &&
+      /live|real|supabase|backend|production|data\s+entry|mock/i.test(text)
+    ) {
+      capped = true;
+      note = "capped to partial by P0 mock_data finding";
+    } else if (hasDep && /depend|supabase|package|install|import/i.test(text)) {
+      capped = true;
+      note = "capped to partial by P0 dependency finding";
+    } else if (hasUi && /logout|onpress|button|handler|pressable/i.test(text)) {
+      capped = true;
+      note = "capped to partial by P0 ui_handler finding";
+    }
+    if (!capped) return r;
+    return {
+      ...r,
+      status: "partial" as const,
+      evidenceNotes: [...r.evidenceNotes.slice(0, 5), note],
+    };
+  });
 }
 
 function loadSampleBodies(root: string, maxFiles = 80): Map<string, string> {
@@ -144,7 +295,6 @@ function loadSampleBodies(root: string, maxFiles = 80): Map<string, string> {
 function mapPaths(root: string, maxFiles: number): Map<string, string> {
   const map = new Map<string, string>();
   const stack = [root];
-  const skip = new Set(["node_modules", ".git", "dist", "build", ".next", "coverage"]);
   while (stack.length && map.size < maxFiles) {
     const dir = stack.pop()!;
     let entries: fs.Dirent[];
@@ -154,15 +304,20 @@ function mapPaths(root: string, maxFiles: number): Map<string, string> {
       continue;
     }
     for (const e of entries) {
-      if (skip.has(e.name)) continue;
+      if (isJunkDirName(e.name)) continue;
       const full = path.join(dir, e.name);
+      const rel = path.relative(root, full).replace(/\\/g, "/");
       if (e.isDirectory()) {
+        // Also block toolbox/maintenance even if parent isn't junk-named
+        if (isJunkEvidencePath(rel + "/x")) continue;
+        if (/toolbox\/maintenance/i.test(rel)) continue;
         stack.push(full);
         continue;
       }
-      if (!/\.(m?[jt]sx?|jsx?|md|json)$/i.test(e.name)) continue;
+      if (isJunkEvidencePath(rel)) continue;
+      // Prefer app source; still allow other non-junk for search, but scoring filters
+      if (!/\.(m?[jt]sx?|jsx?|dart|py|md|json)$/i.test(e.name)) continue;
       try {
-        const rel = path.relative(root, full).replace(/\\/g, "/");
         map.set(rel, fs.readFileSync(full, "utf-8").slice(0, 40_000));
       } catch {
         /* ignore */
@@ -173,12 +328,33 @@ function mapPaths(root: string, maxFiles: number): Map<string, string> {
   return map;
 }
 
+function recomputeCounts(rows: ReqTraceRow[]) {
+  const implementedCount = rows.filter((r) => r.status === "implemented").length;
+  const partialCount = rows.filter((r) => r.status === "partial").length;
+  const missingCount = rows.filter((r) => r.status === "missing").length;
+  const contradictsCount = rows.filter((r) => r.status === "contradicts").length;
+  const unverifiedCount = rows.filter((r) => r.status === "unverified").length;
+  // Code-backed only — unverified/missing do not inflate coverage
+  const codeBacked = implementedCount + partialCount + contradictsCount;
+  const coverageRatio = rows.length ? codeBacked / rows.length : 0;
+  return {
+    implementedCount,
+    partialCount,
+    missingCount,
+    contradictsCount,
+    unverifiedCount,
+    coverageRatio,
+    codeBacked,
+  };
+}
+
 export function buildReqTraceMatrix(
   requirements: SpecRequirement[],
-  index: RepoIndexResult
+  index: RepoIndexResult,
+  checklistFindings: ChecklistFinding[] = []
 ): ReqTraceMatrix {
   const bodies = loadSampleBodies(index.targetRepo);
-  const rows: ReqTraceRow[] = requirements.map((req) => {
+  let rows: ReqTraceRow[] = requirements.map((req) => {
     const scored = scoreAgainstRepo(req, index, bodies);
     return {
       id: req.id,
@@ -188,19 +364,15 @@ export function buildReqTraceMatrix(
       ...scored,
     };
   });
+  rows = applyP0FindingCaps(rows, checklistFindings);
 
-  const implementedCount = rows.filter((r) => r.status === "implemented").length;
-  const partialCount = rows.filter((r) => r.status === "partial").length;
-  const missingCount = rows.filter((r) => r.status === "missing").length;
-  const contradictsCount = rows.filter((r) => r.status === "contradicts").length;
-  const addressed = implementedCount + partialCount + contradictsCount;
-  const coverageRatio = rows.length ? addressed / rows.length : 0;
+  const counts = recomputeCounts(rows);
 
   const markdown = [
     `# Requirements traceability matrix`,
     ``,
-    `Coverage (non-missing): ${(coverageRatio * 100).toFixed(1)}% (${addressed}/${rows.length})`,
-    `implemented=${implementedCount} partial=${partialCount} missing=${missingCount} contradicts=${contradictsCount}`,
+    `Coverage (code-backed: implemented+partial+contradicts): ${(counts.coverageRatio * 100).toFixed(1)}% (${counts.codeBacked}/${rows.length})`,
+    `implemented=${counts.implementedCount} partial=${counts.partialCount} missing=${counts.missingCount} contradicts=${counts.contradictsCount} unverified=${counts.unverifiedCount}`,
     ``,
     `| ID | Status | Code paths | Requirement |`,
     `| --- | --- | --- | --- |`,
@@ -213,18 +385,20 @@ export function buildReqTraceMatrix(
 
   return {
     rows,
-    coverageRatio,
-    implementedCount,
-    partialCount,
-    missingCount,
-    contradictsCount,
+    coverageRatio: counts.coverageRatio,
+    implementedCount: counts.implementedCount,
+    partialCount: counts.partialCount,
+    missingCount: counts.missingCount,
+    contradictsCount: counts.contradictsCount,
+    unverifiedCount: counts.unverifiedCount,
     markdown,
     json: {
-      coverageRatio,
-      implementedCount,
-      partialCount,
-      missingCount,
-      contradictsCount,
+      coverageRatio: counts.coverageRatio,
+      implementedCount: counts.implementedCount,
+      partialCount: counts.partialCount,
+      missingCount: counts.missingCount,
+      contradictsCount: counts.contradictsCount,
+      unverifiedCount: counts.unverifiedCount,
       rows,
     },
   };

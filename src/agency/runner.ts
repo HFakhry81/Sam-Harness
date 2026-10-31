@@ -539,10 +539,11 @@ ${clip(brief, 4000)}`,
         ceo,
         `Verify agency pack vs task. Audit gate=APPROVED.
 Task: ${clip(task, 2500)}
-Strategy: ${clip(review.strategy, 1000)}
+Strategy: ${clip(review.strategy, 1000).replace(/\n\.\.\.\(truncated\)\s*$/, "\n...(truncated narrative)")}
 Audit: ${clip(review.auditReport, 600)}
 Blueprint: ${clip(ctx.layeredBlueprint, 1000)}
-Reply [VERIFIED] or [GAPS] + checklist. Be concise — no repeated lines.`
+Reply [VERIFIED] or [GAPS] + checklist. Be concise — no repeated lines.
+Deterministic Key Findings / RTM are already in final-report.md — do not drop them.`
       );
       const picked = chooseNonDegenerateDraft(draft, review.strategy);
       const modelProse = picked.usedFallback

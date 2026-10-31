@@ -32,7 +32,10 @@ import {
   scrubPackMarkdown,
   type RubricContext,
 } from "./fidelityRubric.js";
-import { injectGroundedStrategyBlocks } from "./finalReport.js";
+import {
+  clipStrategyForPrompt,
+  injectGroundedStrategyBlocks,
+} from "./finalReport.js";
 import {
   hasStructuralMarkdownHoles,
   normalizeMarkdownStructure,
@@ -361,8 +364,8 @@ ${clip(state.brief, 8000)}`
         `FULL REJECTION REPORT:`,
         clip(state.auditReport, 4000),
         ``,
-        `PRIOR STRATEGY (do not reproduce unchanged):`,
-        clip(state.strategy, 5000),
+        `PRIOR STRATEGY (do not reproduce unchanged; deterministic RTM/Key Findings are summarized — full blocks stay in the written file):`,
+        clipStrategyForPrompt(state.strategy || "", 4500),
         ``,
         `EVIDENCE (cite only these real paths):`,
         clip(state.evidenceMarkdown, 4000),
@@ -448,8 +451,8 @@ ${clip(userGoal, 1500)}`
           temperature: 0.2,
         });
         const retryPrompt = `Rewrite the strategy WITHOUT repeated lines. Keep substance; vary wording. Currency=${currency}.
-PRIOR DRAFT (degenerate):
-${clip(strategy, 4000)}
+PRIOR DRAFT (degenerate; deterministic blocks summarized):
+${clipStrategyForPrompt(strategy, 3500)}
 GOAL:
 ${clip(userGoal, 2000)}
 EVIDENCE:
@@ -671,8 +674,8 @@ Keyword hits (informational only, not a gate): ${keywordInfo.hit}/${keywordInfo.
 EVIDENCE PACK:
 ${clip(state.evidenceMarkdown, 5000)}
 
-STRATEGY-v${loopNo}:
-${clip(state.strategy, 8000)}
+STRATEGY-v${loopNo} (deterministic RTM/Key Findings summarized here; full blocks are in ceo-draft.md / written strategy — never reject solely for prompt truncation):
+${clipStrategyForPrompt(state.strategy || "", 5500)}
 
 Line 1: [APPROVED] or [REJECTED]
 ${REJECTION_FORMAT}`

@@ -4,6 +4,7 @@
  */
 import * as fs from "fs";
 import * as path from "path";
+import { isJunkDirName, isJunkEvidencePath } from "./pathFilters.js";
 
 export type RepoIndexHit = {
   path: string;
@@ -38,20 +39,7 @@ export type RepoIndexResult = {
   filesReadMeta?: RepoFileRead[];
 };
 
-const SKIP = new Set([
-  "node_modules",
-  ".git",
-  "dist",
-  "build",
-  ".next",
-  "coverage",
-  "vendor",
-  ".expo",
-  "android",
-  "ios",
-]);
-
-function walk(dir: string, out: string[], depth = 0): void {
+function walk(dir: string, out: string[], root: string, depth = 0): void {
   if (depth > 7 || out.length > 6000) return;
   let entries: fs.Dirent[];
   try {
@@ -60,10 +48,15 @@ function walk(dir: string, out: string[], depth = 0): void {
     return;
   }
   for (const e of entries) {
-    if (SKIP.has(e.name)) continue;
+    if (isJunkDirName(e.name)) continue;
     const full = path.join(dir, e.name);
-    if (e.isDirectory()) walk(full, out, depth + 1);
-    else out.push(full);
+    const rel = path.relative(root, full).replace(/\\/g, "/");
+    if (e.isDirectory()) {
+      if (isJunkEvidencePath(rel + "/x")) continue;
+      walk(full, out, root, depth + 1);
+    } else if (!isJunkEvidencePath(rel)) {
+      out.push(full);
+    }
   }
 }
 
@@ -149,7 +142,7 @@ export function indexRepo(targetRepo: string): RepoIndexResult {
 
   const allDeps = new Set<string>();
   const files: string[] = [];
-  walk(root, files);
+  walk(root, files, root);
 
   const trackRead = (file: string, sample: string) => {
     const r = rel(root, file);
