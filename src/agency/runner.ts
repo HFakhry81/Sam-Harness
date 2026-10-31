@@ -36,6 +36,8 @@ import {
   goalWantsBookingBlueprint,
   isSamHarnessSelfGoal,
 } from "./goalFidelity.js";
+import { classifyRouteIntent } from "./routeIntent.js";
+import { toAsciiDashes } from "./asciiText.js";
 import {
   assertCleanPackClaims,
   enforcePackResiduesAfterWrite,
@@ -318,7 +320,15 @@ export async function runAgencyArchitecture(task: string): Promise<AgencyRunResu
     loopDir,
     userGoal,
     targetRepo: engagement.targetRepo,
-    reqCoverage: evidence.reqMatrix?.coverageRatio ?? 1,
+    // Gate metric: audit intent uses assessed traceability; build uses implementation
+    reqCoverage:
+      (classifyRouteIntent(userGoal).kind === "audit" ||
+      classifyRouteIntent(userGoal).kind === "unknown"
+        ? evidence.reqMatrix?.assessedCoverageRatio
+        : evidence.reqMatrix?.coverageRatio) ?? 1,
+    implementationCoverage: evidence.reqMatrix?.coverageRatio ?? 1,
+    assessedCoverage: evidence.reqMatrix?.assessedCoverageRatio ?? 1,
+    taskIntent: classifyRouteIntent(userGoal).kind,
     eligibleCount: evidence.reqMatrix?.eligibleCount ?? 0,
     codeBackedCount: evidence.reqMatrix?.codeBackedCount ?? 0,
     groundedCurrency: evidence.localeCurrency?.currency || "EGP",
@@ -432,16 +442,18 @@ export async function runAgencyArchitecture(task: string): Promise<AgencyRunResu
 
   fs.writeFileSync(
     "audit-history.md",
-    scrubPackMarkdown(
-      [
-        `# Audit History (LangGraph, max ${MAX_LOOPS})`,
-        verdictMarkdown(verdict),
-        ``,
-        ...review.history.map((h, i) => `---\n## Loop ${i + 1}\n\n${h}`),
-      ].join("\n"),
-      [],
-      groundedCurrency
-    ).text,
+    toAsciiDashes(
+      scrubPackMarkdown(
+        [
+          `# Audit History (LangGraph, max ${MAX_LOOPS})`,
+          verdictMarkdown(verdict),
+          ``,
+          ...review.history.map((h, i) => `---\n## Loop ${i + 1}\n\n${h}`),
+        ].join("\n"),
+        [],
+        groundedCurrency
+      ).text
+    ),
     "utf-8"
   );
   fs.writeFileSync(

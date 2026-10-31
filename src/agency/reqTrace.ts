@@ -33,16 +33,29 @@ export type ReqTraceRow = {
   evidenceNotes: string[];
   sourceFile: string;
   section: string;
+  /**
+   * True when per-REQ code search ran and a status was assigned
+   * (including missing). n/a headings are not assessed.
+   */
+  assessed?: boolean;
+  /** Hits from the per-REQ search_code-style scan (0 when none / n/a). */
+  searchHitCount?: number;
 };
 
 export type ReqTraceMatrix = {
   rows: ReqTraceRow[];
   /**
-   * Share of eligible REQs (excludes n/a) with code-backed statuses
-   * (implemented/partial/contradicts).
+   * Implementation coverage: share of eligible REQs with code-backed statuses
+   * (implemented/partial/contradicts). Reported metric; gate for build/implement.
    */
   coverageRatio: number;
-  /** Eligible REQ count (denominator — excludes n/a headings). */
+  /**
+   * Audit traceability: share of eligible REQs that were assessed with a status
+   * and a recorded search trace. Missing counts when search ran. Gate for audit.
+   */
+  assessedCoverageRatio: number;
+  assessedCount: number;
+  /** Eligible REQ count (denominator - excludes n/a headings). */
   eligibleCount: number;
   codeBackedCount: number;
   implementedCount: number;
@@ -55,7 +68,7 @@ export type ReqTraceMatrix = {
   json: object;
 };
 
-/** Canonical coverage line used everywhere (strategy / final-report / claims). */
+/** Canonical implementation-coverage line (reported metric / build gate). */
 export function formatGroundedCoverageLine(input: {
   coverageRatio: number;
   codeBackedCount: number;
@@ -63,6 +76,16 @@ export function formatGroundedCoverageLine(input: {
 }): string {
   const pct = (Number(input.coverageRatio) * 100).toFixed(1);
   return `Coverage (code-backed: implemented+partial+contradicts): ${pct}% (${input.codeBackedCount}/${input.eligibleCount})`;
+}
+
+/** Audit-traceability line (gate metric for audit intent). */
+export function formatAssessedCoverageLine(input: {
+  assessedCoverageRatio: number;
+  assessedCount: number;
+  eligibleCount: number;
+}): string {
+  const pct = (Number(input.assessedCoverageRatio) * 100).toFixed(1);
+  return `Audit traceability (assessed REQs with search trace): ${pct}% (${input.assessedCount}/${input.eligibleCount})`;
 }
 
 const STOP_TOKENS = new Set(
@@ -149,12 +172,12 @@ function scoreAgainstRepo(
   const considerPath = (rel: string, body?: string) => {
     if (!rel || isJunkEvidencePath(rel)) return;
     const src = body ?? fileBodies.get(rel) ?? "";
-    // Nav / mock / constants: never implementation evidence (weak partial at most)
+    // Nav / mock / constants: never implementation evidence.
+    // Do NOT bump keywordHits — nav-only registration must stay missing.
     if (isNonFeatureEvidencePath(rel)) {
       if (isAppSourcePath(rel)) {
-        keywordHits += 1;
         evidenceNotes.push(
-          `non-feature path ${rel} (nav/mock/constants) — not implementation evidence`
+          `non-feature path ${rel} (nav/mock/constants) - not implementation evidence`
         );
       }
       return;
@@ -171,7 +194,7 @@ function scoreAgainstRepo(
       }
       return;
     }
-    // Non-app but non-junk (e.g. deeper markdown) — doc-only
+    // Non-app but non-junk (e.g. deeper markdown) - doc-only
     docPaths.push(rel);
     evidenceNotes.push(`doc/non-source hit ${rel}`);
   };
@@ -203,45 +226,18 @@ function scoreAgainstRepo(
 
   const uniqApp = [...new Set(appPaths)].slice(0, 8);
   const uniqDoc = [...new Set(docPaths)].slice(0, 8);
+  const assessedMeta = {
+    assessed: true as const,
+    searchHitCount: searched.hitCount,
+  };
+  evidenceNotes.unshift(
+    `search_trace: scanned=${fileBodies.size} files, hits=${searched.hitCount}, paths=${searched.paths.slice(0, 4).join(",") || "none"}`
+  );
 
-  // Contradiction: req mentions live/supabase/backend but mocks dominate
-  const wantsLive =
-    /supabase|postgres|api|auth|live|production|real\s+data|قاعدة/i.test(req.text);
-  if (wantsLive && index.usesMockData && uniqApp.some((p) => /mock/i.test(p))) {
-    return {
-      status: "contradicts",
-      codePaths: uniqApp,
-      evidenceNotes: [
-        ...evidenceNotes.slice(0, 4),
-        "mock-data usage contradicts live-backend requirement",
-      ],
-    };
-  }
-
-  // No app source at all
-  if (uniqApp.length === 0) {
-    if (uniqDoc.length > 0) {
-      return {
-        status: "unverified",
-        codePaths: [],
-        evidenceNotes: [
-          ...evidenceNotes.slice(0, 4),
-          "doc/keyword-only hits — not code-backed",
-        ],
-      };
-    }
-    return {
-      status: "missing",
-      codePaths: [],
-      evidenceNotes: [
-        ...evidenceNotes.slice(0, 4),
-        "no app-source evidence found",
-      ],
-    };
-  }
-
-  // Feature-family REQs (OCR/voice): without family APIs → missing.
-  // Screen names / keyword-only registration never elevate to partial.
+  // Feature-family REQs (OCR/voice): without family APIs -> missing.
+  // Screen names / nav registration never elevate to partial or contradicts.
+  // Run BEFORE mock-contradiction so "camera APIs" wording cannot mint contradicts
+  // from a name-only OcrScreen when usesMockData is true.
   const family = featureFamilySymbols(req.text);
   if (family && symbolHits === 0) {
     return {
@@ -249,36 +245,112 @@ function scoreAgainstRepo(
       codePaths: [],
       evidenceNotes: [
         ...evidenceNotes.slice(0, 4),
-        "feature-family REQ without camera/ocr/speech APIs — missing (screen names do not count)",
+        "feature-family REQ without camera/ocr/speech APIs - missing (screen names do not count)",
       ],
+      ...assessedMeta,
     };
   }
 
-  // Implemented requires app source + symbol/handler evidence (not keyword-only)
-  if (symbolHits >= 1 && uniqApp.length >= 1) {
+  // Contradiction: req mentions live/supabase/backend but mocks dominate.
+  // Use word boundaries so "camera APIs" does not match bare "api".
+  const wantsLive =
+    /supabase|postgres|\bapis?\b|\bauth\b|\blive\b|production|real\s+data|قاعدة/i.test(
+      req.text
+    );
+  if (wantsLive && index.usesMockData && uniqApp.length >= 1) {
+    return {
+      status: "contradicts",
+      codePaths: uniqApp,
+      evidenceNotes: [
+        ...evidenceNotes.slice(0, 5),
+        "mock-data usage contradicts live-backend requirement",
+      ],
+      ...assessedMeta,
+    };
+  }
+
+  // No app source at all (nav-only / mock-only hits never populate uniqApp)
+  if (uniqApp.length === 0) {
+    if (uniqDoc.length > 0) {
+      return {
+        status: "unverified",
+        codePaths: [],
+        evidenceNotes: [
+          ...evidenceNotes.slice(0, 5),
+          "doc/keyword-only hits - not code-backed",
+        ],
+        ...assessedMeta,
+      };
+    }
+    return {
+      status: "missing",
+      codePaths: [],
+      evidenceNotes: [
+        ...evidenceNotes.slice(0, 5),
+        "no app-source evidence found",
+      ],
+      ...assessedMeta,
+    };
+  }
+
+  // Real UI screen/component + handlers for the feature (even with mock data) ->
+  // at least partial. Mock-backed implementations are not "implemented".
+  const hasUiFeature =
+    symbolHits >= 1 ||
+    uniqApp.some((p) => {
+      const body = fileBodies.get(p) || "";
+      const base = p.split("/").pop() || "";
+      const nameHit = tokens.some(
+        (t) => t.length >= 4 && base.toLowerCase().includes(t.toLowerCase())
+      );
+      const handler =
+        /\bonPress\s*=|\bonClick\s*=|\bPressable\b|\bTouchable/i.test(body);
+      const screen =
+        /\b(Screen|Component|ViewModel)\b/.test(body) ||
+        /Screen\.(m?[jt]sx?|jsx?)$/i.test(p);
+      // Require path/name affinity OR in-body token hit — not bare keywordHits
+      // from unrelated files — so nav-adjacent noise cannot mint partial.
+      const bodyTok = tokens.some(
+        (t) => t.length >= 4 && body.toLowerCase().includes(t.toLowerCase())
+      );
+      return (nameHit || bodyTok) && (handler || screen);
+    });
+
+  // Implemented requires app source + symbol/handler evidence and no mock-only layer
+  if (symbolHits >= 1 && uniqApp.length >= 1 && !index.usesMockData) {
     return {
       status: "implemented",
       codePaths: uniqApp,
       evidenceNotes: evidenceNotes.slice(0, 6),
+      ...assessedMeta,
     };
   }
 
-  // Keyword hits in app source without symbol/handler → partial (not implemented)
-  if (keywordHits >= 1 || uniqApp.length >= 1) {
+  // UI feature present (handlers/screens) -> partial (mock data ok)
+  if (hasUiFeature) {
     return {
       status: "partial",
       codePaths: uniqApp,
       evidenceNotes: [
         ...evidenceNotes.slice(0, 4),
-        "keyword-only in app source — not symbol-backed implemented",
+        index.usesMockData
+          ? "feature UI present with mock data - partial (not live implemented)"
+          : "feature UI / handlers in app source - partial",
       ],
+      ...assessedMeta,
     };
   }
 
+  // App path keyword hit without feature UI/handlers -> missing
+  // (e.g. string mention with no Screen/component/handlers)
   return {
-    status: "unverified",
+    status: "missing",
     codePaths: [],
-    evidenceNotes: evidenceNotes.slice(0, 6),
+    evidenceNotes: [
+      ...evidenceNotes.slice(0, 4),
+      "app-source keyword hit without feature UI/handlers - missing",
+    ],
+    ...assessedMeta,
   };
 }
 
@@ -385,10 +457,19 @@ function recomputeCounts(rows: ReqTraceRow[]) {
   const unverifiedCount = rows.filter((r) => r.status === "unverified").length;
   const naCount = rows.filter((r) => r.status === "n/a").length;
   const eligible = rows.filter((r) => r.status !== "n/a");
-  // Code-backed only — n/a excluded from denominator; unverified/missing do not inflate
+  // Implementation coverage: code-backed only (reported metric / build gate)
   const codeBacked = implementedCount + partialCount + contradictsCount;
   const eligibleCount = eligible.length;
   const coverageRatio = eligibleCount ? codeBacked / eligibleCount : 0;
+  // Audit traceability: assessed with search trace (missing counts when assessed)
+  const assessedCount = eligible.filter(
+    (r) =>
+      r.assessed === true ||
+      (r.status !== "n/a" &&
+        Array.isArray(r.evidenceNotes) &&
+        r.evidenceNotes.some((n) => /search_trace:/i.test(n)))
+  ).length;
+  const assessedCoverageRatio = eligibleCount ? assessedCount / eligibleCount : 1;
   return {
     implementedCount,
     partialCount,
@@ -397,6 +478,8 @@ function recomputeCounts(rows: ReqTraceRow[]) {
     unverifiedCount,
     naCount,
     coverageRatio,
+    assessedCoverageRatio,
+    assessedCount,
     codeBacked,
     eligibleCount,
   };
@@ -417,7 +500,9 @@ export function buildReqTraceMatrix(
         section: req.section,
         status: "n/a" as const,
         codePaths: [],
-        evidenceNotes: ["spec heading / section title — excluded from coverage"],
+        evidenceNotes: ["spec heading / section title - excluded from coverage"],
+        assessed: false,
+        searchHitCount: 0,
       };
     }
     const scored = scoreAgainstRepo(req, index, bodies);
@@ -427,6 +512,7 @@ export function buildReqTraceMatrix(
       sourceFile: req.sourceFile,
       section: req.section,
       ...scored,
+      assessed: scored.assessed !== false,
     };
   });
   rows = applyP0FindingCaps(rows, checklistFindings);
@@ -437,18 +523,24 @@ export function buildReqTraceMatrix(
     codeBackedCount: counts.codeBacked,
     eligibleCount: counts.eligibleCount,
   });
+  const assessedLine = formatAssessedCoverageLine({
+    assessedCoverageRatio: counts.assessedCoverageRatio,
+    assessedCount: counts.assessedCount,
+    eligibleCount: counts.eligibleCount,
+  });
 
   const markdown = [
     `# Requirements traceability matrix`,
     ``,
     coverageLine,
+    assessedLine,
     `implemented=${counts.implementedCount} partial=${counts.partialCount} missing=${counts.missingCount} contradicts=${counts.contradictsCount} unverified=${counts.unverifiedCount} n/a=${counts.naCount}`,
     ``,
     `| ID | Status | Code paths | Requirement |`,
     `| --- | --- | --- | --- |`,
     ...rows.map(
       (r) =>
-        `| ${r.id} | ${r.status} | ${r.codePaths.map((p) => `\`${p}\``).join("<br>") || "—"} | ${r.text.replace(/\|/g, "/").slice(0, 120)} |`
+        `| ${r.id} | ${r.status} | ${r.codePaths.map((p) => `\`${p}\``).join("<br>") || "-"} | ${r.text.replace(/\|/g, "/").slice(0, 120)} |`
     ),
     ``,
   ].join("\n");
@@ -456,6 +548,8 @@ export function buildReqTraceMatrix(
   return {
     rows,
     coverageRatio: counts.coverageRatio,
+    assessedCoverageRatio: counts.assessedCoverageRatio,
+    assessedCount: counts.assessedCount,
     eligibleCount: counts.eligibleCount,
     codeBackedCount: counts.codeBacked,
     implementedCount: counts.implementedCount,
@@ -467,6 +561,8 @@ export function buildReqTraceMatrix(
     markdown,
     json: {
       coverageRatio: counts.coverageRatio,
+      assessedCoverageRatio: counts.assessedCoverageRatio,
+      assessedCount: counts.assessedCount,
       eligibleCount: counts.eligibleCount,
       codeBackedCount: counts.codeBacked,
       implementedCount: counts.implementedCount,

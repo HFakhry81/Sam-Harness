@@ -46,6 +46,8 @@ import {
   runStrategyConsistencyChecks,
   type ConsistencyGrounding,
 } from "./strategyConsistency.js";
+import { asciiGateReason, toAsciiDashes } from "./asciiText.js";
+import { classifyRouteIntent } from "./routeIntent.js";
 import {
   appendGateEntry,
   currentRunId,
@@ -71,7 +73,11 @@ import { withSpan } from "../lib/observability/index.js";
 const MAX_LOOPS = 5;
 /** Max writer rewrites when invalid claims are detected. */
 const MAX_CLAIM_REWRITES = 2;
-/** Min share of REQs that must be addressed (not missing) before APPROVED. */
+/**
+ * Min share of REQs for the coverage gate.
+ * Audit intent: assessed traceability (missing counts when searched).
+ * Build/implement intent: implementation coverage (code-backed).
+ */
 export const MIN_REQ_COVERAGE = 0.7;
 
 export { GROUNDED_FIDELITY_THRESHOLD };
@@ -223,8 +229,17 @@ export const ReviewState = Annotation.Root({
   loopDir: Annotation<string>,
   userGoal: Annotation<string>,
   targetRepo: Annotation<string>,
-  /** 0..1 from evidence REQ matrix; 1 when no REQs extracted. */
+  /**
+   * Gate coverage metric (0..1). For audit intent this is assessed
+   * traceability; for build/implement it is implementation coverage.
+   */
   reqCoverage: Annotation<number>,
+  /** Implementation coverage (code-backed) - reported metric always. */
+  implementationCoverage: Annotation<number>,
+  /** Audit assessed-traceability coverage. */
+  assessedCoverage: Annotation<number>,
+  /** audit | ops | quick | unknown - selects which coverage the gate uses. */
+  taskIntent: Annotation<string>,
   /** Eligible REQ denominator (excludes n/a headings). */
   eligibleCount: Annotation<number>,
   /** Code-backed REQ count (implemented+partial+contradicts). */
@@ -492,13 +507,25 @@ ${clip(state.evidenceMarkdown, 3000)}`;
       status: r.status,
       codePaths: r.codePaths,
     }));
+    const implCoverageForRtm =
+      typeof state.implementationCoverage === "number" &&
+      !Number.isNaN(state.implementationCoverage)
+        ? state.implementationCoverage
+        : typeof state.reqCoverage === "number"
+          ? state.reqCoverage
+          : 0;
+    const assessedCoverageForRtm =
+      typeof state.assessedCoverage === "number" &&
+      !Number.isNaN(state.assessedCoverage)
+        ? state.assessedCoverage
+        : 1;
     const groundedCoverage =
       typeof state.eligibleCount === "number" &&
       state.eligibleCount > 0 &&
       typeof state.codeBackedCount === "number"
         ? {
-            coverageRatio:
-              typeof state.reqCoverage === "number" ? state.reqCoverage : 0,
+            // Always implementation coverage for claim checks / RTM reported metric
+            coverageRatio: implCoverageForRtm,
             codeBackedCount: state.codeBackedCount,
             eligibleCount: state.eligibleCount,
           }
@@ -620,7 +647,12 @@ ${clip(state.evidenceMarkdown, 3000)}`;
         status: r.status,
         codePaths: r.codePaths || [],
       })),
-      coverageRatio: state.reqCoverage,
+      coverageRatio: implCoverageForRtm,
+      assessedCoverageRatio: assessedCoverageForRtm,
+      assessedCount:
+        typeof state.eligibleCount === "number"
+          ? Math.round(assessedCoverageForRtm * state.eligibleCount)
+          : undefined,
       eligibleCount: state.eligibleCount,
       codeBackedCount: state.codeBackedCount,
       groundedCurrency: currency,
@@ -658,6 +690,13 @@ ${clip(state.evidenceMarkdown, 3000)}`;
     const targetRepo = state.targetRepo || process.cwd();
     const currency = state.groundedCurrency || "EGP";
 
+    const implCoverageForConsistency =
+      typeof state.implementationCoverage === "number" &&
+      !Number.isNaN(state.implementationCoverage)
+        ? state.implementationCoverage
+        : typeof state.reqCoverage === "number"
+          ? state.reqCoverage
+          : 0;
     const consistencyGrounding: ConsistencyGrounding = {
       reqRows: (state.reqRows || []).map((r) => ({
         id: r.id,
@@ -666,7 +705,8 @@ ${clip(state.evidenceMarkdown, 3000)}`;
         codePaths: r.codePaths,
       })),
       checklistFindings: findingsAsChecklist(state.findings || []),
-      coverageRatio: state.reqCoverage,
+      // Consistency / RTM reported metric is always implementation coverage
+      coverageRatio: implCoverageForConsistency,
       eligibleCount: state.eligibleCount,
       codeBackedCount: state.codeBackedCount,
       groundedCurrency: currency,
@@ -792,14 +832,31 @@ ${REJECTION_FORMAT}`
       llmApproved = false;
     }
 
-    // Hard gate: REQ coverage
-    const reqCoverage =
-      typeof state.reqCoverage === "number" && !Number.isNaN(state.reqCoverage)
-        ? state.reqCoverage
+    // Hard gate: REQ coverage — audit uses assessed traceability; build uses implementation
+    const intentKind =
+      state.taskIntent ||
+      classifyRouteIntent(state.userGoal || state.brief || "").kind;
+    const isAuditIntent = intentKind === "audit" || intentKind === "unknown";
+    const implementationCoverage =
+      typeof state.implementationCoverage === "number" &&
+      !Number.isNaN(state.implementationCoverage)
+        ? state.implementationCoverage
+        : typeof state.reqCoverage === "number"
+          ? state.reqCoverage
+          : 1;
+    const assessedCoverage =
+      typeof state.assessedCoverage === "number" &&
+      !Number.isNaN(state.assessedCoverage)
+        ? state.assessedCoverage
         : 1;
+    const reqCoverage = isAuditIntent ? assessedCoverage : implementationCoverage;
     if (llmApproved && reqCoverage < MIN_REQ_COVERAGE) {
       rejectReasons.push(
-        `Requirements coverage ${(reqCoverage * 100).toFixed(1)}% < ${MIN_REQ_COVERAGE * 100}% — too many REQs still missing`
+        asciiGateReason(
+          isAuditIntent
+            ? `Audit traceability ${(reqCoverage * 100).toFixed(1)}% < ${MIN_REQ_COVERAGE * 100}% - too many REQs lack an assessed search/status trace`
+            : `Implementation coverage ${(reqCoverage * 100).toFixed(1)}% < ${MIN_REQ_COVERAGE * 100}% - too many REQs still missing`
+        )
       );
       llmApproved = false;
       goalPassed = false;
@@ -817,8 +874,7 @@ ${REJECTION_FORMAT}`
       state.eligibleCount > 0 &&
       typeof state.codeBackedCount === "number"
         ? {
-            coverageRatio:
-              typeof state.reqCoverage === "number" ? state.reqCoverage : 0,
+            coverageRatio: implementationCoverage,
             codeBackedCount: state.codeBackedCount,
             eligibleCount: state.eligibleCount,
           }
@@ -875,7 +931,12 @@ ${REJECTION_FORMAT}`
           status: r.status,
           codePaths: r.codePaths || [],
         })),
-        coverageRatio: state.reqCoverage,
+        coverageRatio: implementationCoverage,
+        assessedCoverageRatio: assessedCoverage,
+        assessedCount:
+          typeof state.eligibleCount === "number"
+            ? Math.round(assessedCoverage * state.eligibleCount)
+            : undefined,
         eligibleCount: state.eligibleCount,
         codeBackedCount: state.codeBackedCount,
         groundedCurrency: currency,
@@ -893,7 +954,7 @@ ${REJECTION_FORMAT}`
       rejectReasons.push(
         `Invalid currency claims detected (${residual.removedCurrencies
           .slice(0, 4)
-          .join(",")}) — must use ${currency}; never auto-substitute`
+          .join(",")}) - must use ${currency}; never auto-substitute`
       );
       llmApproved = false;
       goalPassed = false;
@@ -909,7 +970,7 @@ ${REJECTION_FORMAT}`
       goalPassed = false;
       warn(
         "Auditor",
-        `Pack claim assertion FAIL — ${packAssert.violations.join(", ")}`
+        `Pack claim assertion FAIL - ${packAssert.violations.join(", ")}`
       );
     }
 
@@ -930,11 +991,14 @@ ${REJECTION_FORMAT}`
       goalPassed = false;
     }
 
-    if (rejectReasons.length) {
+    // Windows-safe ASCII for every written gate reason (no em-dash mojibake)
+    const asciiRejectReasons = rejectReasons.map(asciiGateReason);
+
+    if (asciiRejectReasons.length) {
       auditReport = [
         `[REJECTED]`,
         ``,
-        ...rejectReasons.map(
+        ...asciiRejectReasons.map(
           (r, i) =>
             `### Issue ${i + 1}\n- Rejection reason: ${r}\n- Severity: Critical\n- How to fix: Ground claims in evidence-pack.md / evidence.json; cite only real paths; raise REQ coverage; never use erasure placeholders or invent wrong currencies/paths.\nFIX ${i + 1}: ${r}`
         ),
@@ -944,7 +1008,7 @@ ${REJECTION_FORMAT}`
       ].join("\n");
       warn(
         "Auditor",
-        `Grounded gates FAIL — ${rejectReasons.length} issue(s); forcing REJECT`
+        `Grounded gates FAIL - ${asciiRejectReasons.length} issue(s); forcing REJECT`
       );
     }
 
@@ -952,7 +1016,7 @@ ${REJECTION_FORMAT}`
     // Empty / failed gates => CLOSED (never OPEN without APPROVED)
     const gateOpen = auditPassed === true;
 
-    // Per-run gates.json (keyed by runId — never append prior-run loops)
+    // Per-run gates.json (keyed by runId - never append prior-run loops)
     try {
       appendGateEntry(
         {
@@ -970,8 +1034,11 @@ ${REJECTION_FORMAT}`
             applicable: i.applicable,
           })),
           reqCoverage,
+          implementationCoverage,
+          assessedCoverage,
+          taskIntent: intentKind,
           missingCitations: cites.missing.map((m) => m.raw),
-          rejectReasons,
+          rejectReasons: asciiRejectReasons,
           packClaimViolations: packAssert.ok ? [] : packAssert.violations,
         },
         runId
@@ -988,34 +1055,38 @@ ${REJECTION_FORMAT}`
       `goalFidelityScore: ${rubric.score.toFixed(3)} (rubric threshold ${GROUNDED_FIDELITY_THRESHOLD})`,
       `goalFidelityReason: ${rubric.reason}`,
       `keywordHits (informational): ${keywordInfo.hit}/${keywordInfo.total} ratio=${keywordInfo.ratio.toFixed(3)}`,
-      `reqCoverage: ${reqCoverage.toFixed(3)} (min ${MIN_REQ_COVERAGE})`,
+      `reqCoverage: ${reqCoverage.toFixed(3)} (min ${MIN_REQ_COVERAGE}; intent=${intentKind}; gateMetric=${isAuditIntent ? "assessed-traceability" : "implementation"})`,
+      `implementationCoverage: ${implementationCoverage.toFixed(3)} (reported)`,
+      `assessedCoverage: ${assessedCoverage.toFixed(3)} (audit traceability)`,
       `citationsOk: ${cites.ok}`,
       `packClaimsOk: ${packAssert.ok}`,
       `repetitionOk: ${rep.ok}`,
       ``,
       auditReport,
     ].join("\n");
-    // Scrub instructional residues before persisting — pack must not contain erasure placeholders
-    const cleanAudit = scrubPackMarkdown(auditDoc).text;
+    // Scrub instructional residues before persisting - pack must not contain erasure placeholders
+    const cleanAudit = scrubPackMarkdown(toAsciiDashes(auditDoc)).text;
     fs.writeFileSync(path.join(state.loopDir, `audit-v${loopNo}.md`), cleanAudit, "utf-8");
     fs.writeFileSync("audit-report.md", cleanAudit, "utf-8");
     if (!auditPassed) {
       fs.writeFileSync(
         path.join(state.loopDir, `rejection-v${loopNo}.md`),
-        `# Rejection v${loopNo}\n\ngate=CLOSED\ngoalPassed=${goalPassed}\n${auditReport}\n`,
+        toAsciiDashes(
+          `# Rejection v${loopNo}\n\ngate=CLOSED\ngoalPassed=${goalPassed}\n${auditReport}\n`
+        ),
         "utf-8"
       );
-      warn("Auditor", `[REJECTED] loop v${loopNo} → gate CLOSED`);
+      warn("Auditor", `[REJECTED] loop v${loopNo} -> gate CLOSED`);
     } else {
-      ok("Auditor", `[APPROVED] loop v${loopNo} — gate OPEN (grounded OK)`);
+      ok("Auditor", `[APPROVED] loop v${loopNo} - gate OPEN (grounded OK)`);
     }
     return {
-      auditReport: auditDoc,
+      auditReport: cleanAudit,
       auditPassed,
       goalPassed,
       goalFidelityScore: rubric.score,
       strategy: strategyText,
-      history: [auditDoc],
+      history: [cleanAudit],
     };
   };
 
@@ -1053,8 +1124,15 @@ export async function runReviewGraph(input: {
   loopDir: string;
   userGoal?: string;
   targetRepo?: string;
-  /** 0..1 REQ coverage from evidence matrix; default 1 when unknown. */
+  /**
+   * Gate coverage metric. Prefer assessedCoverage for audit intent;
+   * implementationCoverage for build/implement. If only reqCoverage is
+   * provided it is used as the gate metric.
+   */
   reqCoverage?: number;
+  implementationCoverage?: number;
+  assessedCoverage?: number;
+  taskIntent?: string;
   eligibleCount?: number;
   codeBackedCount?: number;
   groundedCurrency?: string;
@@ -1137,6 +1215,19 @@ export async function runReviewGraph(input: {
           targetRepo: input.targetRepo || process.cwd(),
           reqCoverage:
             typeof input.reqCoverage === "number" ? input.reqCoverage : 1,
+          implementationCoverage:
+            typeof input.implementationCoverage === "number"
+              ? input.implementationCoverage
+              : typeof input.reqCoverage === "number"
+                ? input.reqCoverage
+                : 1,
+          assessedCoverage:
+            typeof input.assessedCoverage === "number"
+              ? input.assessedCoverage
+              : 1,
+          taskIntent:
+            input.taskIntent ||
+            classifyRouteIntent(userGoal || input.brief || "").kind,
           eligibleCount:
             typeof input.eligibleCount === "number" ? input.eligibleCount : 0,
           codeBackedCount:

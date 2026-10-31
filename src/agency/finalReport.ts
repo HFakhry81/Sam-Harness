@@ -4,7 +4,10 @@
  */
 import type { AgencyVerdict } from "./agencyVerdict.js";
 import type { ChecklistFinding } from "./auditChecklist.js";
-import { formatGroundedCoverageLine } from "./reqTrace.js";
+import {
+  formatAssessedCoverageLine,
+  formatGroundedCoverageLine,
+} from "./reqTrace.js";
 
 const STATUS_WORDS =
   "implemented|partial|missing|contradicts|unverified|complete|done|n\\/a";
@@ -348,24 +351,29 @@ export function finalReportHasFindingsCoverage(text: string): boolean {
   );
 }
 
-/** Deterministic RTM block — model must not invent alternate coverage/status. */
+/** Deterministic RTM block - model must not invent alternate coverage/status. */
 export function buildDeterministicRtmBlock(input: {
   reqRows: Array<{
     id: string;
     text?: string;
     status: string;
     codePaths?: string[];
+    assessed?: boolean;
   }>;
+  /** Implementation coverage (reported metric / build gate). */
   coverageRatio?: number;
   eligibleCount?: number;
   codeBackedCount?: number;
+  /** Audit traceability (assessed REQs with search trace). */
+  assessedCoverageRatio?: number;
+  assessedCount?: number;
 }): string {
   const rows = input.reqRows || [];
   if (!rows.length) {
     return [
       `## Requirements traceability (deterministic)`,
       ``,
-      `_No REQs ingested — coverage N/A._`,
+      `_No REQs ingested - coverage N/A._`,
       ``,
     ].join("\n");
   }
@@ -394,12 +402,33 @@ export function buildDeterministicRtmBlock(input: {
     codeBackedCount: codeBacked,
     eligibleCount: eligible,
   });
+  const assessedCount =
+    typeof input.assessedCount === "number"
+      ? input.assessedCount
+      : rows.filter(
+          (r) =>
+            r.status !== "n/a" &&
+            (r.assessed === true || r.assessed === undefined)
+        ).length;
+  const assessedRatio =
+    typeof input.assessedCoverageRatio === "number" &&
+    !Number.isNaN(input.assessedCoverageRatio)
+      ? input.assessedCoverageRatio
+      : eligible
+        ? assessedCount / eligible
+        : 1;
+  const assessedLine = formatAssessedCoverageLine({
+    assessedCoverageRatio: assessedRatio,
+    assessedCount,
+    eligibleCount: eligible,
+  });
   return [
     `## Requirements traceability (deterministic)`,
     ``,
-    `SINGLE SOURCE OF TRUTH — do not invent alternate coverage percentages or N/M fractions.`,
+    `SINGLE SOURCE OF TRUTH - do not invent alternate coverage percentages or N/M fractions.`,
     `Authoritative statuses are in this table; narrative must match (if a REQ is missing here, never call it implemented).`,
     coverageLine,
+    assessedLine,
     `implemented=${implemented} partial=${partial} missing=${missing} contradicts=${contradicts} unverified=${unverified} n/a=${na}`,
     ``,
     `| ID | Status | Code paths | Requirement |`,
@@ -413,7 +442,7 @@ export function buildDeterministicRtmBlock(input: {
         .replace(/\|/g, "/")
         .replace(/\s+/g, " ")
         .slice(0, 100);
-      return `| ${r.id} | ${r.status} | ${paths || "—"} | ${text} |`;
+      return `| ${r.id} | ${r.status} | ${paths || "-"} | ${text} |`;
     }),
     ``,
   ].join("\n");
@@ -550,9 +579,12 @@ export function injectGroundedStrategyBlocks(
   input: {
     checklistFindings: ChecklistFinding[];
     reqRows: FinalReportEvidence["reqRows"];
+    /** Implementation coverage (reported / build gate). */
     coverageRatio?: number;
     eligibleCount?: number;
     codeBackedCount?: number;
+    assessedCoverageRatio?: number;
+    assessedCount?: number;
     groundedCurrency?: string;
   }
 ): string {
@@ -584,6 +616,8 @@ export function injectGroundedStrategyBlocks(
     coverageRatio: input.coverageRatio,
     eligibleCount: input.eligibleCount,
     codeBackedCount: input.codeBackedCount,
+    assessedCoverageRatio: input.assessedCoverageRatio,
+    assessedCount: input.assessedCount,
   });
   const findings = buildDeterministicKeyFindingsBlock({
     checklistFindings: input.checklistFindings || [],

@@ -1,7 +1,9 @@
 /**
- * Single-sourced agency verdict — console, final-report, and gates.json
+ * Single-sourced agency verdict - console, final-report, and gates.json
  * all read from one object so APPROVED/CLOSED never disagree.
  */
+import { asciiGateReason } from "./asciiText.js";
+
 export type AgencyVerdict = {
   auditPassed: boolean;
   goalPassed: boolean;
@@ -33,13 +35,13 @@ export function buildAgencyVerdict(input: {
   }
   let reason: string;
   if (auditPassed) {
-    reason = `APPROVED — gate OPEN (rubric score=${input.goalFidelityScore.toFixed(2)}, loop ${input.loop}/${input.maxLoops})`;
+    reason = `APPROVED - gate OPEN (rubric score=${input.goalFidelityScore.toFixed(2)}, loop ${input.loop}/${input.maxLoops})`;
   } else if (!packClaimsOk) {
-    reason = `REJECTED — pack claim residues forced gate CLOSED (loop ${input.loop}/${input.maxLoops}, score=${input.goalFidelityScore.toFixed(2)})`;
+    reason = `REJECTED - pack claim residues forced gate CLOSED (loop ${input.loop}/${input.maxLoops}, score=${input.goalFidelityScore.toFixed(2)})`;
   } else if (!input.auditPassed) {
-    reason = `REJECTED — auditor did not approve after ${input.loop}/${input.maxLoops} loops (score=${input.goalFidelityScore.toFixed(2)})`;
+    reason = `REJECTED - auditor did not approve after ${input.loop}/${input.maxLoops} loops (score=${input.goalFidelityScore.toFixed(2)})`;
   } else {
-    reason = `REJECTED — goal fidelity failed (score=${input.goalFidelityScore.toFixed(2)})`;
+    reason = `REJECTED - goal fidelity failed (score=${input.goalFidelityScore.toFixed(2)})`;
   }
   return {
     auditPassed,
@@ -49,8 +51,8 @@ export function buildAgencyVerdict(input: {
     loop: input.loop,
     maxLoops: input.maxLoops,
     packClaimsOk,
-    rejectReasons,
-    reason,
+    rejectReasons: rejectReasons.map(asciiGateReason),
+    reason: asciiGateReason(reason),
   };
 }
 
