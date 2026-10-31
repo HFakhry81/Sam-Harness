@@ -33,6 +33,8 @@ dist/
 /pack-location.md
 /task.md
 /task.ts
+/task.draft.json
+/task.pending.md
 /task.spec.json
 /task-last-failure.md
 /task-architecture.md

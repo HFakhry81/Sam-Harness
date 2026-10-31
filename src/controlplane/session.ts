@@ -27,8 +27,16 @@ export type SessionEntry = {
   /** Goal fidelity / ops verification */
   goalPassed?: boolean | null;
   goalFidelityScore?: number | null;
-  /** Lightweight path badge: Quick / Web / Agency */
-  replyPath?: "quick" | "web" | "agency";
+  /** Path badge: chat / research / task / complex (legacy quick/web/agency accepted) */
+  replyPath?:
+    | "quick"
+    | "web"
+    | "agency"
+    | "chat"
+    | "research"
+    | "task"
+    | "complex"
+    | "clarify";
   report?: {
     headline: string;
     bullets: string[];

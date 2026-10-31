@@ -202,8 +202,64 @@ async function main() {
     return;
   }
 
-  // Explicit force flags win over task.ts / quick path / heuristics.
+  // Explicit force flags win over task.ts / heuristics.
   const forceFlags = parseForceRouteFlags(argv);
+
+  // Intent router FIRST — before any pipeline, report pack, or task.ts mutation.
+  // Deterministic rules + optional tiny local model; chat/research/clarify never
+  // launch agency. --force-agency / FORCE_AGENCY=1 still forces the pipeline.
+  if (!implementOnly && !forceFlags.forceAgency && !forceFlags.forceOperational) {
+    const { tryRunQuickPath } = await import("./src/lib/quickPath/index.js");
+    const { appendMessage, newConversationId } = await import(
+      "./src/lib/conversation/history.js"
+    );
+    const quick = await tryRunQuickPath({
+      prompt: task,
+      cwd: process.cwd(),
+      forceAgency: false,
+      // Force-quick: still use router but prefer lightweight paths
+    });
+    if (quick?.result) {
+      const { result, classification } = quick;
+      const route =
+        result.route ||
+        classification.route ||
+        (result.replyPath as string) ||
+        "chat";
+      ok(
+        "Intent router",
+        `route=${route} | ${classification.reason} | ${result.durationMs}ms | ${
+          result.model ||
+          (result.skippedModel ? "deterministic" : "fallback")
+        }`
+      );
+      console.log(`\n${result.reply}\n`);
+      try {
+        const convId =
+          String(process.env.SAM_CONVERSATION_ID || "").trim() ||
+          newConversationId();
+        appendMessage(convId, { role: "user", content: task });
+        appendMessage(convId, {
+          role: "assistant",
+          content: result.reply,
+          route: (result.route || classification.route || "chat") as any,
+          sources: result.sources,
+          notePath: result.notePath,
+          noArtifacts: result.noArtifacts !== false,
+        });
+      } catch {
+        /* conversation mirror is best-effort */
+      }
+      // Chat/clarify must never leave report packs or FAILED agency state.
+      return;
+    }
+    if (forceFlags.forceQuick) {
+      warn("Intent router", "forced quick/chat but classifier chose task/complex — stopping");
+      process.exitCode = 1;
+      return;
+    }
+  }
+
   const earlyDecision = resolveAppRoute({
     task,
     argv,
@@ -212,48 +268,6 @@ async function main() {
         ? taskConfig.route
         : null,
   });
-
-  // Quick path: only when not forced to agency/ops, and not an audit intent.
-  const skipQuick =
-    implementOnly ||
-    forceFlags.forceAgency ||
-    forceFlags.forceOperational ||
-    earlyDecision.route === "architecture" ||
-    earlyDecision.kind === "audit";
-  if (!skipQuick && !forceFlags.forceQuick) {
-    const { tryRunQuickPath } = await import("./src/lib/quickPath/index.js");
-    const quick = await tryRunQuickPath({
-      prompt: task,
-      cwd: process.cwd(),
-      forceAgency: false,
-    });
-    if (quick?.result.ok) {
-      const { result } = quick;
-      ok(
-        "Quick path",
-        `${result.replyPath} · ${result.intent} · ${result.durationMs}ms · ${result.model || "n/a"}`
-      );
-      console.log(`\n${result.reply}\n`);
-      return;
-    }
-    if (quick && !quick.result.ok) {
-      warn("Quick path", quick.result.error || "failed — continuing to agency");
-    }
-  } else if (forceFlags.forceQuick) {
-    const { tryRunQuickPath } = await import("./src/lib/quickPath/index.js");
-    const quick = await tryRunQuickPath({
-      prompt: task,
-      cwd: process.cwd(),
-      forceAgency: false,
-    });
-    if (quick?.result.ok) {
-      console.log(`\n${quick.result.reply}\n`);
-      return;
-    }
-    warn("Quick path", quick?.result.error || "forced quick failed — stopping");
-    process.exitCode = 1;
-    return;
-  }
 
   const layout = ensureOutputHome();
   cleanOutputTemp();
@@ -418,7 +432,7 @@ async function main() {
     `${colors.cyan} L2 outputs: ceo-draft / audit / execution-plan / help / marketing / final-report${colors.reset}`
   );
   console.log(
-    `${colors.cyan} Packs (self): ${layout.reports} · Run: ${outputRun.runDir}${colors.reset}`
+    `${colors.cyan} Packs (self): ${layout.reports} | Run: ${outputRun.runDir}${colors.reset}`
   );
   console.log(
     `${colors.cyan} L3 outputs: <repo>/docs/sam-harness/* + implementation-result.md${colors.reset}`

@@ -204,6 +204,10 @@ const els = {
   btnPreview: $("btnPreview"),
   btnSave: $("btnSave"),
   btnSaveRun: $("btnSaveRun"),
+  btnSend: $("btnSend"),
+  chatForm: $("chatForm"),
+  chatMessages: $("chatMessages"),
+  btnClearChat: $("btnClearChat"),
   btnBack: $("btnBack"),
   btnStop: $("btnStop"),
   btnNewTask: $("btnNewTask"),
@@ -225,6 +229,7 @@ const els = {
   reportNext: $("reportNext"),
   badgeAudit: $("badgeAudit"),
   badgeGoal: $("badgeGoal"),
+  artifactPanel: $("artifactPanel"),
   artifactGrid: $("artifactGrid"),
   artifactPackMeta: $("artifactPackMeta"),
   artifactViewer: $("artifactViewer"),
@@ -244,6 +249,8 @@ let lastFailed = false;
 let pendingQuestions = [];
 let artifactCache = { items: [], packDir: null };
 let viewerRelPath = null;
+let conversationId = sessionStorage.getItem("sh_conv") || "";
+let conversationMessages = [];
 
 function kindLabel(kind) {
   const key = `kind.${kind}`;
@@ -1216,8 +1223,138 @@ async function loadArtifacts() {
 }
 
 function pathLabel(path) {
-  const key = `compose.path.${path || "agency"}`;
-  return t(key) || (path === "quick" ? "Quick" : path === "web" ? "Web" : "Agency");
+  const p = path || "complex";
+  const key = `compose.path.${p}`;
+  const translated = t(key);
+  if (translated && translated !== key) return translated;
+  if (p === "quick" || p === "chat") return t("compose.path.chat") || "chat";
+  if (p === "web" || p === "research") return t("compose.path.research") || "research";
+  if (p === "clarify") return t("compose.path.clarify") || "clarify";
+  if (p === "task") return t("compose.path.task") || "task";
+  return t("compose.path.complex") || "complex";
+}
+
+function isChatRoute(route) {
+  return (
+    route === "chat" ||
+    route === "clarify" ||
+    route === "research" ||
+    route === "quick" ||
+    route === "web"
+  );
+}
+
+function appendChatBubble(role, content, route) {
+  if (!els.chatMessages) return;
+  const empty = els.chatMessages.querySelector(".chat-empty");
+  if (empty) empty.remove();
+  const div = document.createElement("div");
+  div.className = `chat-bubble ${role}`;
+  if (role === "assistant" && route) {
+    const tag = document.createElement("span");
+    tag.className = "route-tag";
+    tag.dataset.path = route;
+    tag.textContent = pathLabel(route);
+    div.appendChild(tag);
+  }
+  const body = document.createElement("div");
+  body.textContent = content || "";
+  div.appendChild(body);
+  els.chatMessages.appendChild(div);
+  els.chatMessages.scrollTop = els.chatMessages.scrollHeight;
+}
+
+function renderConversation(messages) {
+  if (!els.chatMessages) return;
+  els.chatMessages.innerHTML = "";
+  const list = messages || [];
+  if (!list.length) {
+    const empty = document.createElement("p");
+    empty.className = "chat-empty";
+    empty.textContent = t("compose.chatEmpty") || "Start a conversation";
+    els.chatMessages.appendChild(empty);
+    return;
+  }
+  list.forEach((m) => {
+    appendChatBubble(m.role === "user" ? "user" : "assistant", m.content, m.route);
+  });
+}
+
+async function loadConversation() {
+  try {
+    const q = conversationId ? `?id=${encodeURIComponent(conversationId)}` : "";
+    const res = await api(`/api/conversation${q}`);
+    const data = await res.json();
+    if (!data.ok) return;
+    conversationId = data.conversationId || conversationId;
+    if (conversationId) sessionStorage.setItem("sh_conv", conversationId);
+    conversationMessages = data.conversation?.messages || [];
+    renderConversation(conversationMessages);
+  } catch {
+    renderConversation([]);
+  }
+}
+
+async function sendChatMessage() {
+  if (busy) return;
+  const text = (els.prompt?.value || "").trim();
+  if (!text) return;
+  const forceAgency = Boolean(els.forceAgency?.checked);
+  appendChatBubble("user", text);
+  els.prompt.value = "";
+  busy = true;
+  if (els.btnSend) els.btnSend.disabled = true;
+  els.healthMeta.textContent = "chat: routing…";
+  try {
+    const res = await api("/api/chat", {
+      method: "POST",
+      body: JSON.stringify({
+        message: text,
+        forceAgency,
+        conversationId: conversationId || undefined,
+      }),
+    });
+    const data = await res.json();
+    if (!res.ok || !data.ok) throw new Error(data.error || res.statusText);
+    if (data.conversationId) {
+      conversationId = data.conversationId;
+      sessionStorage.setItem("sh_conv", conversationId);
+    }
+    const route = data.route || "chat";
+    setPathBadge(route, data.decision?.reason || "");
+    if (data.pipeline) {
+      appendChatBubble(
+        "assistant",
+        t("compose.pipelineStarting") || "Running task…",
+        route
+      );
+      lastDraft = data.draft || lastDraft;
+      showStage("run");
+      await runMode("agency");
+      return;
+    }
+    appendChatBubble("assistant", data.reply || "", route);
+    if (data.conversation?.messages) {
+      conversationMessages = data.conversation.messages;
+    }
+    // Chat-style: stay on compose; never show FAILED done stage
+    if (els.artifactPanel) {
+      els.artifactPanel.hidden = true;
+      els.artifactPanel.open = false;
+    }
+    els.healthMeta.textContent = `ready · ${pathLabel(route)}`;
+  } catch (e) {
+    appendChatBubble(
+      "assistant",
+      e?.message || String(e),
+      "chat"
+    );
+    els.healthMeta.textContent = "ready";
+  } finally {
+    busy = false;
+    if (els.btnSend) els.btnSend.disabled = false;
+    els.prompt?.focus();
+  }
 }
 
 function setPathBadge(path, reason) {
@@ -1234,6 +1371,25 @@ function setPathBadge(path, reason) {
 
 function showDone(entry) {
   lastEntry = entry;
+  const chatStyle = isChatRoute(entry.replyPath) || entry.chatStyle;
+  // Chat-route failures must never show FAILED / task saved for retry
+  if (chatStyle) {
+    lastFailed = false;
+    busy = false;
+    els.btnStop.disabled = true;
+    els.runGrid?.classList.remove("is-busy");
+    if (entry.replyPath) setPathBadge(entry.replyPath);
+    if (entry.summary) {
+      appendChatBubble("assistant", entry.summary, entry.replyPath || "chat");
+    }
+    if (els.artifactPanel) {
+      els.artifactPanel.hidden = true;
+      els.artifactPanel.open = false;
+    }
+    showStage("compose");
+    els.healthMeta.textContent = `ready · ${pathLabel(entry.replyPath || "chat")}`;
+    return;
+  }
   lastFailed = !entry.success;
   busy = false;
   els.btnStop.disabled = true;
@@ -1243,13 +1399,20 @@ function showDone(entry) {
   els.doneMeta.textContent = `${entry.title} · ${entry.route} · ${entry.mode}${pathBit} · exit ${entry.exitCode}`;
   if (entry.replyPath) setPathBadge(entry.replyPath);
   fillReport(entry);
-  // Rerun only useful after failure (success task was cleared)
+  const showReports =
+    entry.replyPath === "complex" ||
+    entry.replyPath === "agency" ||
+    entry.replyPath === "task" ||
+    (entry.artifacts && entry.artifacts.length > 0);
+  if (els.artifactPanel) {
+    els.artifactPanel.hidden = !showReports;
+    els.artifactPanel.open = false;
+  }
   els.btnRerun.style.display = entry.success ? "none" : "";
   if (entry.success) clearLocalDraft();
-  // Keep prompt text on failure so user can edit & retry; on success leave text until «مهمة جديدة»
   showStage("done");
   els.healthMeta.textContent = entry.success ? "ready · task cleared" : "ready · retry kept";
-  loadArtifacts();
+  if (showReports) loadArtifacts();
 }
 
 async function resetForNewTask() {
@@ -1374,7 +1537,36 @@ async function runMode(mode) {
   els.healthMeta.textContent = "run: active";
 }
 
-els.btnPreview.addEventListener("click", async () => {
+els.chatForm?.addEventListener("submit", (ev) => {
+  ev.preventDefault();
+  void sendChatMessage();
+});
+
+els.prompt?.addEventListener("keydown", (ev) => {
+  if (ev.key === "Enter" && !ev.shiftKey) {
+    ev.preventDefault();
+    void sendChatMessage();
+  }
+});
+
+els.btnClearChat?.addEventListener("click", async () => {
+  if (!confirm(t("compose.clearChatConfirm") || "Clear conversation?")) return;
+  try {
+    const res = await api("/api/conversation/reset", {
+      method: "POST",
+      body: JSON.stringify({}),
+    });
+    const data = await res.json();
+    conversationId = data.conversationId || "";
+    sessionStorage.setItem("sh_conv", conversationId);
+    conversationMessages = [];
+    renderConversation([]);
+  } catch (e) {
+    alert(e?.message || String(e));
+  }
+});
+
+els.btnPreview?.addEventListener("click", async () => {
   try {
     await compose(false);
   } catch (e) {
@@ -1382,7 +1574,7 @@ els.btnPreview.addEventListener("click", async () => {
   }
 });
 
-els.btnSave.addEventListener("click", async () => {
+els.btnSave?.addEventListener("click", async () => {
   try {
     const data = await compose(true);
     if (data.blocked) return;
@@ -1392,12 +1584,9 @@ els.btnSave.addEventListener("click", async () => {
   }
 });
 
-els.btnSaveRun.addEventListener("click", async () => {
+els.btnSaveRun?.addEventListener("click", async () => {
   try {
-    const data = await compose(true);
-    if (data.blocked) return;
-    showRun(data.draft);
-    await runMode("agency");
+    await sendChatMessage();
   } catch (e) {
     alert(e.message || String(e));
   }
@@ -1780,8 +1969,9 @@ async function bootApp() {
 
   await loadOperatorContext();
   await restoreActiveTask();
-  syncWorkspacePanels(els.route.value, lastDraft?.spec || null);
+  syncWorkspacePanels(els.route?.value || "auto", lastDraft?.spec || null);
   showStage("compose");
+  await loadConversation();
   await loadProfiles();
 
   if (!bootAppReady) {

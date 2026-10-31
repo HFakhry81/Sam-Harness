@@ -35,6 +35,8 @@ UI: http://127.0.0.1:8787/ (owner token required — see `.controlplane-token` o
 
 Default UI locale is **Arabic (RTL)**. Switch to English in the header, or set `SAM_LOCALE=en` in `.env`. Health check: `pnpm run doctor`.
 
+**Intent router (chat-first):** every Control Plane / CLI message is classified *before* any pipeline into **chat** (greetings & simple Q&A — no reports), **research**, **task**, or **complex** (full agency). UI is a single chat input + Send; `--force-agency` still forces the pipeline. See `docs/help/en/quick-path.md`.
+
 Filesystem tools use a **desktop-controller** sandbox: normal user environment (home, Desktop/Documents/Downloads, accessible drives) with a DENY list for OS/credential paths. Optional `WORKSPACE_ROOTS` restricts; `WORKSPACE_DENY` extends denies. Agent-generated packs/reports land under `~/Documents/Sam-Harness` (`SAM_OUTPUT_HOME`). Daily cloud cap defaults to **$0.50** (`$0` forbids cloud).
 
 **Phase 2:** generic Level-3 (`level3-plan.json`), MCP client (`mcp.json`), `run_node_sandbox`, real email (SMTP/Resend or dry-run), Daily Ops cron scheduler.
@@ -48,6 +50,8 @@ Filesystem tools use a **desktop-controller** sandbox: normal user environment (
 **Phase 6:** Verifiable gates & trust — acceptance gates per step (never silent success), HITL approvals for destructive FS / email / spend / sensitive desktop apps, hash-chained SQLite audit log + `pnpm run trust:verify`, run evidence bundles under `SAM_OUTPUT_HOME`. See `docs/PHASE6_GATES_TRUST.md`.
 
 **Phase 7:** Arabic-first i18n (RTL UI, Arabic agent/reports, intent cues) + one-click install (Windows PowerShell + macOS/Linux shell) + `pnpm run doctor`. See `docs/PHASE7_ARABIC_INSTALL.md`.
+
+**Self-learning memory:** lessons + skills persist under `SAM_OUTPUT_HOME/memory/` (deduped, retrieved into Strategist/Auditor prompts, promotable to deterministic pre-checks). CLI: `pnpm run memory -- list|show|prune`. See `docs/SELF_LEARNING_MEMORY.md`.
 
 ## Layout
 
@@ -101,5 +105,6 @@ Control Plane: **Help** tab · API `GET /api/help` · bilingual docs under `docs
 - `docs/PHASE5_NEAR_ZERO_COST.md`
 - `docs/PHASE6_GATES_TRUST.md`
 - `docs/PHASE7_ARABIC_INSTALL.md`
+- `docs/SELF_LEARNING_MEMORY.md`
 - `docs/AGENCY_OPS.md`
 - `docs/engagements/EXAMPLE-CLIENT.md`
