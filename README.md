@@ -35,6 +35,8 @@ UI: http://127.0.0.1:8787/ (owner token required — see `.controlplane-token` o
 
 Default UI locale is **Arabic (RTL)**. Switch to English in the header, or set `SAM_LOCALE=en` in `.env`. Health check: `pnpm run doctor`.
 
+**Intent router (chat-first):** every Control Plane / CLI message is classified *before* any pipeline into **chat** (greetings & simple Q&A — no reports), **research**, **task**, or **complex** (full agency). UI is a single chat input + Send; `--force-agency` still forces the pipeline. See `docs/help/en/quick-path.md`.
+
 Filesystem tools use a **desktop-controller** sandbox: normal user environment (home, Desktop/Documents/Downloads, accessible drives) with a DENY list for OS/credential paths. Optional `WORKSPACE_ROOTS` restricts; `WORKSPACE_DENY` extends denies. Agent-generated packs/reports land under `~/Documents/Sam-Harness` (`SAM_OUTPUT_HOME`). Daily cloud cap defaults to **$0.50** (`$0` forbids cloud).
 
 **Phase 2:** generic Level-3 (`level3-plan.json`), MCP client (`mcp.json`), `run_node_sandbox`, real email (SMTP/Resend or dry-run), Daily Ops cron scheduler.

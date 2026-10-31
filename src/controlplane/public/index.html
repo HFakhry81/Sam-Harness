@@ -76,104 +76,67 @@
 
       <main class="shell">
         <section class="stage" id="stageCompose">
-          <p class="eyebrow" data-i18n="compose.eyebrow">المهمة</p>
-          <h1 class="hero-title"><span data-i18n="compose.hero">اكتب مهمتك.</span><br /><em data-i18n="compose.heroEm">الوكالة تبني وتنفّذ.</em></h1>
-          <p class="lede" data-i18n="compose.lede">
-            مهمة → مواصفة → تشغيل → تقرير → مهمة تالية. مشغّل متعدد المسارات أو تحليل مستودع — بدون إعادة تشغيل.
+          <p class="eyebrow" data-i18n="compose.eyebrow">محادثة</p>
+          <h1 class="hero-title chat-hero">
+            <span data-i18n="brand.name">Sam-Harness</span>
+          </h1>
+          <p class="lede chat-lede" data-i18n="compose.lede">
+            اكتب أي شيء — النظام يختار المسار: محادثة، بحث، مهمة، أو وكالة كاملة.
           </p>
 
-          <label class="field-label" for="prompt" data-i18n="compose.promptLabel">ماذا تريد من الوكالة؟</label>
-          <textarea
-            id="prompt"
-            class="composer"
-            rows="8"
-            data-i18n-placeholder="compose.promptPlaceholder"
-            placeholder="مثال: اعمل ملف Excel على سطح المكتب… أو حلّل Maw3ed وأخرج حزمة تقارير…"
-            autofocus
-          ></textarea>
-
-          <div class="meta-row">
-            <div class="field">
-              <label for="title" data-i18n="compose.titleLabel">عنوان مختصر (اختياري)</label>
-              <input id="title" type="text" data-i18n-placeholder="compose.titlePlaceholder" placeholder="يُستنتج تلقائياً إن تُرك فارغاً" />
-            </div>
-            <div class="field">
-              <label for="route" data-i18n="compose.routeLabel">المسار</label>
-              <select id="route">
-                <option value="auto" data-i18n="compose.route.auto">تلقائي ذكي</option>
-                <option value="architecture" data-i18n="compose.route.architecture">تحليل / تقارير</option>
-                <option value="operational" data-i18n="compose.route.operational">مهام سطح المكتب</option>
-                <option value="implement" data-i18n="compose.route.implement">تنفيذ (يتطلب GO لاحقاً)</option>
-              </select>
+          <div class="chat-panel" id="chatPanel">
+            <div class="chat-messages" id="chatMessages" role="log" aria-live="polite" aria-relevant="additions"></div>
+            <form class="chat-composer" id="chatForm" autocomplete="off">
+              <label class="sr-only" for="prompt" data-i18n="compose.promptLabel">رسالتك</label>
+              <textarea
+                id="prompt"
+                class="chat-input"
+                rows="2"
+                data-i18n-placeholder="compose.promptPlaceholder"
+                placeholder="مرحبا… أو اسأل، أو صف مهمة"
+                autofocus
+              ></textarea>
+              <button type="submit" class="btn primary chat-send" id="btnSend" data-i18n="compose.send">إرسال</button>
+            </form>
+            <div class="chat-tools">
+              <label class="check force-agency" for="forceAgency">
+                <input type="checkbox" id="forceAgency" />
+                <span data-i18n="compose.forceAgency">تشغيل كوكالة كاملة</span>
+              </label>
+              <span class="path-badge" id="pathBadge" data-path="chat" title="">chat</span>
+              <button type="button" class="linkish" id="btnClearChat" data-i18n="compose.clearChat">مسح المحادثة</button>
             </div>
           </div>
 
-          <div id="codeWorkspaceFields" class="meta-row hidden">
-            <div class="field grow">
-              <label for="targetRepo">مستودع الكود</label>
-              <input id="targetRepo" type="text" value="E:\UpNexa.com\Sam-Harness" />
-            </div>
-            <div class="field grow">
-              <label for="packDir">مجلد الحزم (docs)</label>
-              <input id="packDir" type="text" value="E:\UpNexa.com\Sam-Harness\docs" />
-            </div>
-          </div>
-
-          <section id="operatorWorkspacePanel" class="workspace-panel">
-            <p class="workspace-title">نمط المشغّل · مسارات متعددة</p>
-            <p class="workspace-lede">
-              لا مستودع واحد — كل خطوة بمسارها. بعد المعاينة تظهر جذور المهمة وخطوات التنفيذ.
-            </p>
-            <div class="roots-row">
-              <div>
-                <span class="roots-label">Allowlist</span>
-                <ul id="allowlistRoots" class="roots-list"></ul>
-              </div>
-              <div>
-                <span class="roots-label">جذور هذه المهمة</span>
-                <ul id="taskRoots" class="roots-list">
-                  <li class="dim">بعد المعاينة / الحفظ</li>
-                </ul>
-              </div>
-            </div>
-            <ol id="planStepsPreview" class="plan-steps"></ol>
-          </section>
-
-          <label class="check hidden" id="allowCodeWrap">
+          <!-- Hidden advanced fields kept for pipeline / legacy JS -->
+          <div class="hidden" aria-hidden="true">
+            <input id="title" type="text" />
+            <select id="route">
+              <option value="auto" selected>auto</option>
+              <option value="architecture">architecture</option>
+              <option value="operational">operational</option>
+              <option value="implement">implement</option>
+            </select>
+            <input id="targetRepo" type="text" value="" />
+            <input id="packDir" type="text" value="" />
             <input type="checkbox" id="allowCode" />
-            السماح لاحقاً بتنفيذ على كود العميل (مع GO صريح عند التشغيل)
-          </label>
-
-          <div class="path-row" id="pathRow">
-            <span class="path-badge" id="pathBadge" data-path="agency" title="">Agency</span>
-            <span class="path-hint" id="pathHint" data-i18n="compose.pathHint">المسار المتوقع بعد المعاينة</span>
-            <label class="check force-agency" for="forceAgency">
-              <input type="checkbox" id="forceAgency" />
-              <span data-i18n="compose.forceAgency">تشغيل كوكالة كاملة</span>
-            </label>
+            <div id="codeWorkspaceFields"></div>
+            <div id="operatorWorkspacePanel"></div>
+            <ul id="allowlistRoots"></ul>
+            <ul id="taskRoots"></ul>
+            <ol id="planStepsPreview"></ol>
+            <div id="allowCodeWrap"></div>
+            <span id="pathHint"></span>
+            <button type="button" id="btnPreview"></button>
+            <button type="button" id="btnSave"></button>
+            <button type="button" id="btnSaveRun"></button>
+            <section id="clarifyBox" class="hidden">
+              <p id="clarifyMeta"></p>
+              <div id="clarifyFields"></div>
+              <button type="button" id="btnClarifySubmit"></button>
+            </section>
+            <details id="previewBox" hidden><pre id="previewBody"></pre></details>
           </div>
-
-          <div class="actions">
-            <button type="button" class="btn ghost" id="btnPreview" data-i18n="compose.preview">معاينة Spec</button>
-            <button type="button" class="btn ghost" id="btnSave" data-i18n="compose.save">احفظ Task</button>
-            <button type="button" class="btn primary" id="btnSaveRun" data-i18n="compose.saveRun">احفظ وشغّل</button>
-          </div>
-
-          <section class="clarify hidden" id="clarifyBox">
-            <p class="clarify-title">توضيح مطلوب قبل كتابة Task</p>
-            <p class="clarify-meta" id="clarifyMeta">—</p>
-            <div id="clarifyFields"></div>
-            <div class="actions">
-              <button type="button" class="btn primary" id="btnClarifySubmit">
-                أكّد وأكمل المواصفة
-              </button>
-            </div>
-          </section>
-
-          <details class="preview" id="previewBox" hidden>
-            <summary>معاينة Task Spec</summary>
-            <pre id="previewBody"></pre>
-          </details>
         </section>
 
         <section class="stage hidden" id="stageDaily">
@@ -529,13 +492,13 @@
               <ul id="reportNext"></ul>
             </div>
 
-            <section class="artifact-panel" id="artifactPanel">
-              <div class="artifact-panel-head">
+            <details class="artifact-panel" id="artifactPanel" hidden>
+              <summary class="artifact-panel-head">
                 <h3>التقارير والمخرجات</h3>
                 <p class="lede-sm" id="artifactPackMeta">افتح التقرير داخل الواجهة أو في النظام.</p>
-              </div>
+              </summary>
               <div class="artifact-grid" id="artifactGrid"></div>
-            </section>
+            </details>
 
             <details class="report-raw">
               <summary>تفاصيل تقنية / ملخص خام</summary>

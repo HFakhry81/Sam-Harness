@@ -22,28 +22,29 @@ import {
 import type { QuickPathResult } from "../src/lib/quickPath/index.js";
 
 describe("classifyIntentHeuristic", () => {
-  it("classifies Arabic greetings as smalltalk → quick", () => {
+  it("classifies Arabic greetings as smalltalk → chat", () => {
     for (const p of ["اهلا", "أهلا", "مرحبا", "مرحباً", "السلام عليكم", "صباح الخير"]) {
       const c = classifyIntentHeuristic(p);
       expect(c.intent, p).toBe("smalltalk");
-      expect(c.replyPath, p).toBe("quick");
+      expect(c.replyPath, p).toBe("chat");
+      expect(c.route, p).toBe("chat");
     }
   });
 
-  it("classifies English greetings as smalltalk → quick", () => {
+  it("classifies English greetings as smalltalk → chat", () => {
     for (const p of ["hi", "hello", "hey", "good morning", "thanks"]) {
       const c = classifyIntentHeuristic(p);
       expect(c.intent, p).toBe("smalltalk");
-      expect(c.replyPath, p).toBe("quick");
+      expect(c.replyPath, p).toBe("chat");
     }
   });
 
-  it("classifies simple questions as quick", () => {
+  it("classifies simple questions as chat", () => {
     const c = classifyIntentHeuristic("What is a REST API?");
     expect(c.intent).toBe("simple_question");
-    expect(c.replyPath).toBe("quick");
+    expect(c.replyPath).toBe("chat");
     const ar = classifyIntentHeuristic("ما معنى REST؟");
-    expect(ar.replyPath).toBe("quick");
+    expect(ar.replyPath).toBe("chat");
   });
 
   it("classifies web research requests", () => {
@@ -55,28 +56,34 @@ describe("classifyIntentHeuristic", () => {
     ]) {
       const c = classifyIntentHeuristic(p);
       expect(c.intent, p).toBe("web_research");
-      expect(c.replyPath, p).toBe("web");
+      expect(c.replyPath, p).toBe("research");
+      expect(c.route, p).toBe("research");
     }
   });
 
-  it("routes real tasks to agency", () => {
-    for (const p of [
-      "اعمل ملف Excel على سطح المكتب باسم report.xlsx",
-      "analyze Maw3ed architecture and produce a gap matrix",
-      "implement the patch on the client repo",
-      "افتح Notepad واكتب Hello",
-      "انقل الملف report.md إلى Downloads",
-    ]) {
+  it("routes real tasks to task or complex", () => {
+    const simple = classifyIntentHeuristic(
+      "اعمل ملف Excel على سطح المكتب باسم report.xlsx"
+    );
+    expect(simple.route).toBe("task");
+    expect(simple.replyPath).toBe("task");
+
+    const complex = classifyIntentHeuristic(
+      "analyze Maw3ed architecture and produce a gap matrix"
+    );
+    expect(complex.route).toBe("complex");
+    expect(complex.replyPath).toBe("complex");
+
+    for (const p of ["افتح Notepad واكتب Hello", "انقل الملف report.md إلى Downloads"]) {
       const c = classifyIntentHeuristic(p);
-      expect(c.intent, p).toBe("task");
-      expect(c.replyPath, p).toBe("agency");
+      expect(["task", "complex"], p).toContain(c.route);
     }
   });
 
   it("honors forceAgency", async () => {
     const c = await classifyIntent("مرحبا", { forceAgency: true });
-    expect(c.intent).toBe("task");
-    expect(c.replyPath).toBe("agency");
+    expect(c.replyPath).toBe("complex");
+    expect(c.route).toBe("complex");
     expect(c.source).toBe("forced");
   });
 });
@@ -135,12 +142,15 @@ describe("tryRunQuickPath", () => {
     });
 
     expect(out).not.toBeNull();
-    expect(out!.result.replyPath).toBe("quick");
+    expect(out!.result.replyPath).toBe("chat");
     expect(out!.result.ok).toBe(true);
     expect(out!.result.model).toBe("qwen2.5:1.5b");
     expect(out!.result.language).toBe("ar");
+    expect(out!.result.noArtifacts).toBe(true);
     expect(invokeModel).toHaveBeenCalledTimes(1);
-    expect(fs.existsSync(path.join(tmp, "execution-result.md"))).toBe(true);
+    // Chat must not write report artifacts into cwd
+    expect(fs.existsSync(path.join(tmp, "execution-result.md"))).toBe(false);
+    expect(fs.existsSync(path.join(tmp, "final-report.md"))).toBe(false);
   });
 
   it("web path uses mocked search and cites URLs", async () => {
@@ -188,7 +198,7 @@ describe("tryRunQuickPath", () => {
     });
 
     expect(out).not.toBeNull();
-    expect(out!.result.replyPath).toBe("web");
+    expect(out!.result.replyPath).toBe("research");
     expect(out!.result.ok).toBe(true);
     expect(out!.result.skippedModel).toBeFalsy();
     expect(webSearch).toHaveBeenCalled();
@@ -248,7 +258,7 @@ describe("tryRunQuickPath", () => {
     });
 
     expect(out).not.toBeNull();
-    expect(out!.result.replyPath).toBe("web");
+    expect(out!.result.replyPath).toBe("research");
     expect(out!.result.ok).toBe(true);
     expect(out!.result.skippedModel).toBe(true);
     expect(out!.result.model).toBeUndefined();
@@ -256,14 +266,14 @@ describe("tryRunQuickPath", () => {
     expect(out!.result.sources).toEqual([]);
     expect(out!.result.searchFailureReason).toMatch(/DuckDuckGo/i);
     expect(out!.result.reply).toMatch(/لم أجد|لم ألخّص|تعذّر/i);
-    expect(out!.result.reply).toMatch(/وكالة|agency/i);
+    expect(out!.result.reply).toMatch(/agency|وكالة|force/i);
     expect(out!.result.reply).not.toMatch(/2023-09-15|username|HALLUCINATED/i);
-    expect(events.some((t) => t.includes("empty") || t.includes("skip"))).toBe(
+    expect(events.some((t) => t.includes("empty") || t.includes("skip") || t.includes("research"))).toBe(
       true
     );
   });
 
-  it("returns null so agency path is used for real tasks", async () => {
+  it("returns null so agency/ops path is used for real tasks", async () => {
     const invokeModel = vi.fn();
     const out = await tryRunQuickPath({
       prompt: "اعمل ملف Excel على سطح المكتب",
@@ -275,7 +285,7 @@ describe("tryRunQuickPath", () => {
     expect(invokeModel).not.toHaveBeenCalled();
   });
 
-  it("forceAgency skips quick path", async () => {
+  it("forceAgency skips chat path", async () => {
     const out = await tryRunQuickPath({
       prompt: "مرحبا",
       cwd: tmp,

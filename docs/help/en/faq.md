@@ -19,7 +19,7 @@ Under `SAM_OUTPUT_HOME` — usually `Documents/Sam-Harness`, with numbered packs
 Role `help` writes `help-system-spec.md` inside an analysis pack. Product Help is `docs/help` + `pnpm run help` + the UI tab.
 
 **Why did a greeting run the full agency?**  
-It used to. Now greetings and simple questions take the **Quick** path (local model). Check **Run as full agency task** to force the pipeline. See [`quick-path`](quick-path.md).
+It used to (including name intros like «مرحبا اسمي …»). The **intent router** now classifies chat vs research vs task vs complex *before* any pipeline. Greetings stay **chat** — no reports, no `task.ts`. Use **Run as full agency task** / `--force-agency` to force the pipeline. See [`quick-path`](quick-path.md).
 
 **Can it exceed the $0.50 cap?**  
 Not automatically. Raise the cap in the hybrid profile if you want; the system refuses charges that would exceed the cap.
