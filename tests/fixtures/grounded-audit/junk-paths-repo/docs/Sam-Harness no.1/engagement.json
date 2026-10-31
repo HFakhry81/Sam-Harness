@@ -1,0 +1,4 @@
+{
+  "note": "prior Sam-Harness report must not count as OCR/voice implementation",
+  "findings": ["voice recognition", "OCR scan", "supabase auth"]
+}

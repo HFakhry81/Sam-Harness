@@ -12,6 +12,7 @@ import * as path from "path";
 import type { RepoIndexResult } from "./repoIndex.js";
 import type { SpecIngestResult } from "./specIngest.js";
 import type { LocaleCurrencyProfile } from "./localeCurrency.js";
+import { isJunkDirName, isJunkEvidencePath } from "./pathFilters.js";
 
 export type ChecklistFinding = {
   id: string;
@@ -61,7 +62,6 @@ function readJsonSafe(p: string): Record<string, unknown> | null {
 
 function walkFiles(root: string, max = 80): string[] {
   const out: string[] = [];
-  const skip = new Set(["node_modules", ".git", "dist", "build", ".next", "coverage"]);
   const stack = [root];
   while (stack.length && out.length < max) {
     const dir = stack.pop()!;
@@ -72,10 +72,18 @@ function walkFiles(root: string, max = 80): string[] {
       continue;
     }
     for (const e of entries) {
-      if (skip.has(e.name)) continue;
+      if (isJunkDirName(e.name)) continue;
       const full = path.join(dir, e.name);
-      if (e.isDirectory()) stack.push(full);
-      else if (/\.(m?[jt]sx?|tsx?|jsx?)$/i.test(e.name)) out.push(full);
+      const rel = path.relative(root, full).replace(/\\/g, "/");
+      if (e.isDirectory()) {
+        if (isJunkEvidencePath(rel + "/x")) continue;
+        stack.push(full);
+      } else if (
+        !isJunkEvidencePath(rel) &&
+        /\.(m?[jt]sx?|tsx?|jsx?|dart|py)$/i.test(e.name)
+      ) {
+        out.push(full);
+      }
       if (out.length >= max) break;
     }
   }
@@ -148,12 +156,13 @@ export function scanMissingHandlers(root: string): ChecklistFinding[] {
       if (!/\bonPress\s*=/.test(attrs) && !/\bonClick\s*=/.test(attrs)) {
         // allow self-closing with spread props that might include handlers
         if (/\{\.\.\./.test(attrs)) continue;
+        const line = text.slice(0, m.index || 0).split(/\r?\n/).length;
         findings.push({
           id: `UI-HANDLER-${findings.length + 1}`,
           category: "ui_handler",
           severity: "P0",
-          summary: `<${m[1]}> without onPress/onClick in ${rel}`,
-          paths: [rel],
+          summary: `<${m[1]}> without onPress/onClick in ${rel}:${line}`,
+          paths: [`${rel}:${line}`],
           detail: `Opening tag lacks onPress/onClick: <${m[1]}${attrs.slice(0, 80)}>`,
         });
       }
@@ -161,12 +170,17 @@ export function scanMissingHandlers(root: string): ChecklistFinding[] {
     // Also catch logout buttons as object literals: { title: 'Logout' } without onPress nearby
     if (/logout/i.test(text) && !/logout[\s\S]{0,120}onPress/i.test(text)) {
       if (/logout/i.test(text) && /button|pressable|touchable/i.test(text)) {
+        const logoutIdx = text.search(/logout/i);
+        const line =
+          logoutIdx >= 0
+            ? text.slice(0, logoutIdx).split(/\r?\n/).length
+            : 1;
         findings.push({
           id: `UI-HANDLER-LOGOUT-${findings.length + 1}`,
           category: "ui_handler",
           severity: "P0",
-          summary: `Logout control appears without nearby onPress in ${rel}`,
-          paths: [rel],
+          summary: `Logout control appears without nearby onPress in ${rel}:${line}`,
+          paths: [`${rel}:${line}`],
           detail: "Logout mention found without onPress within 120 chars",
         });
       }
@@ -257,9 +271,10 @@ export function runAuditChecklist(input: {
       id: `DEP-${specifier.replace(/[^\w]+/g, "_").slice(0, 40)}`,
       category: "dependency",
       severity: "P0",
-      summary: `Imported '${specifier}' is not listed in package.json dependencies`,
-      paths: files.slice(0, 4),
-      detail: "Install the dependency or remove the import before claiming the integration works.",
+      summary: `Missing dependency '${specifier}' in package.json (imported from ${files[0] || "source"})`,
+      // Always cite package.json so Key Findings carry a durable file citation
+      paths: ["package.json", ...files.slice(0, 3)],
+      detail: `Add '${specifier}' to package.json dependencies (or remove the import) before claiming the integration works.`,
     });
   }
 

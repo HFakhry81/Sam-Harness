@@ -33,6 +33,22 @@ import {
   type RubricContext,
 } from "./fidelityRubric.js";
 import {
+  clipStrategyForPrompt,
+  injectGroundedStrategyBlocks,
+} from "./finalReport.js";
+import {
+  hasStructuralMarkdownHoles,
+  normalizeMarkdownStructure,
+} from "./markdownNormalize.js";
+import type { ChecklistFinding } from "./auditChecklist.js";
+import {
+  repairStrategyDeterministically,
+  runStrategyConsistencyChecks,
+  type ConsistencyGrounding,
+} from "./strategyConsistency.js";
+import { asciiGateReason, toAsciiDashes } from "./asciiText.js";
+import { classifyRouteIntent } from "./routeIntent.js";
+import {
   appendGateEntry,
   currentRunId,
   ensureGatesForRun,
@@ -57,7 +73,11 @@ import { withSpan } from "../lib/observability/index.js";
 const MAX_LOOPS = 5;
 /** Max writer rewrites when invalid claims are detected. */
 const MAX_CLAIM_REWRITES = 2;
-/** Min share of REQs that must be addressed (not missing) before APPROVED. */
+/**
+ * Min share of REQs for the coverage gate.
+ * Audit intent: assessed traceability (missing counts when searched).
+ * Build/implement intent: implementation coverage (code-backed).
+ */
 export const MIN_REQ_COVERAGE = 0.7;
 
 export { GROUNDED_FIDELITY_THRESHOLD };
@@ -106,6 +126,65 @@ function extractFixes(report: string): string[] {
   return [...new Set(fixes)].slice(0, 14);
 }
 
+/** Pull explicit auditor rejection reasons for the next rewrite prompt. */
+export function extractAuditorIssues(report: string): string[] {
+  const issues: string[] = [];
+  const text = String(report || "");
+  for (const line of text.split(/\r?\n/)) {
+    const reason = line.match(
+      /(?:Rejection reason|أسباب الرفض)\s*(?:\/\s*Rejection reason)?\s*:\s*(.+)$/i
+    );
+    if (reason?.[1] && reason[1].trim().length > 6) {
+      issues.push(reason[1].trim());
+      continue;
+    }
+    const how = line.match(/(?:How to fix|طريقة الحل)\s*(?:\/\s*How to fix)?\s*:\s*(.+)$/i);
+    if (how?.[1] && how[1].trim().length > 6) {
+      issues.push(`Fix: ${how[1].trim()}`);
+    }
+  }
+  for (const f of extractFixes(text)) {
+    if (!issues.some((x) => x.includes(f.slice(0, 40)))) issues.push(f);
+  }
+  // Catch common structural / RTM complaints even without FIX lines
+  if (/empty (section|bullet|list)|structural|trailing colon|incomplete content|erasure placeholder/i.test(text)) {
+    issues.push(
+      "Repair structural holes: no empty sections/bullets, renumber lists, fill or remove empty headings"
+    );
+  }
+  if (/RTM|traceability|coverage|implemented.*docx|hallucin/i.test(text)) {
+    issues.push(
+      "Use deterministic RTM statuses/coverage from evidence; never mark Implemented from spec-only citations"
+    );
+  }
+  if (/P0|dependency|onPress|mock data|Key Findings/i.test(text)) {
+    issues.push(
+      "Include all P0 checklist findings with real file:line code citations from evidence"
+    );
+  }
+  return [...new Set(issues)].slice(0, 20);
+}
+
+function findingsAsChecklist(
+  findings: Array<{
+    id?: string;
+    severity?: string;
+    summary?: string;
+    category?: string;
+    paths?: string[];
+    detail?: string;
+  }>
+): ChecklistFinding[] {
+  return (findings || []).map((f, i) => ({
+    id: f.id || `F-${i + 1}`,
+    category: (f.category as ChecklistFinding["category"]) || "mock_data",
+    severity: (f.severity as ChecklistFinding["severity"]) || "P0",
+    summary: f.summary || "",
+    paths: f.paths || [],
+    detail: f.detail || "",
+  }));
+}
+
 async function invoke(
   model: ReturnType<typeof makeSpecialistModel>,
   prompt: string
@@ -150,17 +229,41 @@ export const ReviewState = Annotation.Root({
   loopDir: Annotation<string>,
   userGoal: Annotation<string>,
   targetRepo: Annotation<string>,
-  /** 0..1 from evidence REQ matrix; 1 when no REQs extracted. */
+  /**
+   * Gate coverage metric (0..1). For audit intent this is assessed
+   * traceability; for build/implement it is implementation coverage.
+   */
   reqCoverage: Annotation<number>,
+  /** Implementation coverage (code-backed) - reported metric always. */
+  implementationCoverage: Annotation<number>,
+  /** Audit assessed-traceability coverage. */
+  assessedCoverage: Annotation<number>,
+  /** audit | ops | quick | unknown - selects which coverage the gate uses. */
+  taskIntent: Annotation<string>,
+  /** Eligible REQ denominator (excludes n/a headings). */
+  eligibleCount: Annotation<number>,
+  /** Code-backed REQ count (implemented+partial+contradicts). */
+  codeBackedCount: Annotation<number>,
   groundedCurrency: Annotation<string>,
   /** Per-run id for gates.json isolation. */
   runId: Annotation<string>,
   /** Spec files ingested (rubric: specs_read). */
   specsReadCount: Annotation<number>,
-  /** REQ rows for rubric scoring. */
-  reqRows: Annotation<Array<{ id: string; status: string; codePaths?: string[] }>>,
-  /** Checklist findings for P0/P1 rubric. */
-  findings: Annotation<Array<{ severity?: string; summary?: string; category?: string }>>,
+  /** REQ rows for rubric scoring + deterministic RTM injection. */
+  reqRows: Annotation<
+    Array<{ id: string; status: string; codePaths?: string[]; text?: string }>
+  >,
+  /** Checklist findings for P0/P1 rubric + Key Findings injection. */
+  findings: Annotation<
+    Array<{
+      id?: string;
+      severity?: string;
+      summary?: string;
+      category?: string;
+      paths?: string[];
+      detail?: string;
+    }>
+  >,
   strategy: Annotation<string>,
   auditReport: Annotation<string>,
   loop: Annotation<number>,
@@ -262,12 +365,16 @@ ${clip(state.brief, 8000)}`
       );
     } else {
       const fixes = extractFixes(state.auditReport || "");
+      const auditorIssues = extractAuditorIssues(state.auditReport || "");
       const checklistItems = [
         `You MUST address EVERY item below. Mark each as DONE or GAP with a real path citation.`,
         `1. Remove any non-${currency} currency claims; rewrite using ${currency} only.`,
         `2. Remove citations to nonexistent paths (invented monorepo roots, etc.).`,
         `3. Cover failing REQs / checklist items from the rejection (auth wiring, mock data, missing deps, stack conflict, UI handlers without onPress).`,
         `4. Do NOT copy the prior strategy verbatim — change structure and fill the gaps.`,
+        `5. Do NOT leave empty sections, empty bullets, skipped list numbers, or trailing colons with no content.`,
+        `6. Do NOT mark REQs Implemented from spec .docx alone — cite code paths; use the deterministic RTM block.`,
+        ...auditorIssues.map((f, i) => `AUDITOR ISSUE ${i + 1}: ${f}`),
         ...fixes.map((f, i) => `FIX ${i + 1}: ${f}`),
       ];
       const briefRem = [
@@ -281,8 +388,8 @@ ${clip(state.brief, 8000)}`
         `FULL REJECTION REPORT:`,
         clip(state.auditReport, 4000),
         ``,
-        `PRIOR STRATEGY (do not reproduce unchanged):`,
-        clip(state.strategy, 5000),
+        `PRIOR STRATEGY (do not reproduce unchanged; deterministic RTM/Key Findings are summarized — full blocks stay in the written file):`,
+        clipStrategyForPrompt(state.strategy || "", 4500),
         ``,
         `EVIDENCE (cite only these real paths):`,
         clip(state.evidenceMarkdown, 4000),
@@ -368,8 +475,8 @@ ${clip(userGoal, 1500)}`
           temperature: 0.2,
         });
         const retryPrompt = `Rewrite the strategy WITHOUT repeated lines. Keep substance; vary wording. Currency=${currency}.
-PRIOR DRAFT (degenerate):
-${clip(strategy, 4000)}
+PRIOR DRAFT (degenerate; deterministic blocks summarized):
+${clipStrategyForPrompt(strategy, 3500)}
 GOAL:
 ${clip(userGoal, 2000)}
 EVIDENCE:
@@ -395,9 +502,45 @@ ${clip(state.evidenceMarkdown, 3000)}`;
 
     // Claim sanitizer: detect → rewrite (max 2) → clean-delete (never [REMOVED] / never auto-sub currency)
     const runId = state.runId || currentRunId();
+    const groundedReqRows = (state.reqRows || []).map((r) => ({
+      id: r.id,
+      status: r.status,
+      codePaths: r.codePaths,
+    }));
+    const implCoverageForRtm =
+      typeof state.implementationCoverage === "number" &&
+      !Number.isNaN(state.implementationCoverage)
+        ? state.implementationCoverage
+        : typeof state.reqCoverage === "number"
+          ? state.reqCoverage
+          : 0;
+    const assessedCoverageForRtm =
+      typeof state.assessedCoverage === "number" &&
+      !Number.isNaN(state.assessedCoverage)
+        ? state.assessedCoverage
+        : 1;
+    const groundedCoverage =
+      typeof state.eligibleCount === "number" &&
+      state.eligibleCount > 0 &&
+      typeof state.codeBackedCount === "number"
+        ? {
+            // Always implementation coverage for claim checks / RTM reported metric
+            coverageRatio: implCoverageForRtm,
+            codeBackedCount: state.codeBackedCount,
+            eligibleCount: state.eligibleCount,
+          }
+        : null;
+    const priorAuditorIssues = extractAuditorIssues(state.auditReport || "");
     {
       let claimErrors: ModelClaimError[] = [];
-      let detected = sanitizeDraftClaims(strategy, targetRepo, currency);
+      let detected = sanitizeDraftClaims(
+        strategy,
+        targetRepo,
+        currency,
+        groundedReqRows,
+        priorAuditorIssues,
+        groundedCoverage
+      );
       if (detected.modelErrors.length) {
         claimErrors = claimErrors.concat(
           detected.modelErrors.map((e) => ({ ...e, loop: loopNo }))
@@ -419,6 +562,7 @@ ${clip(state.evidenceMarkdown, 3000)}`;
             invalid: detected.invalid,
             groundedCurrency: currency,
             evidenceClip: clip(state.evidenceMarkdown, 3500),
+            priorAuditorIssues,
           });
         // Inject full evidence clip into rewrite prompt
         const fullRewrite = rewritePrompt.includes("EVIDENCE (real paths only):")
@@ -434,7 +578,14 @@ ${clip(state.evidenceMarkdown, 3000)}`;
             fullRewrite
           );
           strategy = rewritten;
-          detected = sanitizeDraftClaims(strategy, targetRepo, currency);
+          detected = sanitizeDraftClaims(
+            strategy,
+            targetRepo,
+            currency,
+            groundedReqRows,
+            priorAuditorIssues,
+            groundedCoverage
+          );
           if (detected.modelErrors.length) {
             claimErrors = claimErrors.concat(
               detected.modelErrors.map((e) => ({
@@ -453,7 +604,13 @@ ${clip(state.evidenceMarkdown, 3000)}`;
         }
       }
       if (detected.needsRewrite) {
-        const cleaned = finalizeClaimsClean(strategy, targetRepo, currency);
+        const cleaned = finalizeClaimsClean(
+          strategy,
+          targetRepo,
+          currency,
+          groundedReqRows,
+          groundedCoverage
+        );
         strategy = cleaned.text;
         if (cleaned.flags.length) {
           warn("Strategist", `Claim clean-delete: ${cleaned.flags.join("; ")}`);
@@ -468,17 +625,41 @@ ${clip(state.evidenceMarkdown, 3000)}`;
       }
       // Absolute ban residues — strip any leftover placeholders without substituting currency
       strategy = strategy.replace(/\s*\[REMOVED[^\]]*\]\s*/gi, " ");
-      strategy = strategy.replace(/\n{3,}/g, "\n\n").trim() + "\n";
+      strategy = normalizeMarkdownStructure(strategy);
       if (claimErrors.length) {
         logModelClaimErrors(claimErrors, runId);
       }
-      const packCheck = assertCleanPackClaims(strategy);
+      const packCheck = assertCleanPackClaims(strategy, currency);
       if (!packCheck.ok) {
         warn(
           "Strategist",
           `Pack claim assertion FAIL after sanitize: ${packCheck.violations.join(", ")}`
         );
       }
+    }
+
+    // Inject deterministic RTM + Key Findings so auditor always sees grounded P0s / coverage
+    strategy = injectGroundedStrategyBlocks(strategy, {
+      checklistFindings: findingsAsChecklist(state.findings || []),
+      reqRows: (state.reqRows || []).map((r) => ({
+        id: r.id,
+        text: r.text || "",
+        status: r.status,
+        codePaths: r.codePaths || [],
+      })),
+      coverageRatio: implCoverageForRtm,
+      assessedCoverageRatio: assessedCoverageForRtm,
+      assessedCount:
+        typeof state.eligibleCount === "number"
+          ? Math.round(assessedCoverageForRtm * state.eligibleCount)
+          : undefined,
+      eligibleCount: state.eligibleCount,
+      codeBackedCount: state.codeBackedCount,
+      groundedCurrency: currency,
+    });
+    strategy = normalizeMarkdownStructure(strategy);
+    if (hasStructuralMarkdownHoles(strategy)) {
+      strategy = normalizeMarkdownStructure(strategy);
     }
 
     if (stallCount >= MAX_CONSECUTIVE_STALLS) {
@@ -509,12 +690,60 @@ ${clip(state.evidenceMarkdown, 3000)}`;
     const targetRepo = state.targetRepo || process.cwd();
     const currency = state.groundedCurrency || "EGP";
 
+    const implCoverageForConsistency =
+      typeof state.implementationCoverage === "number" &&
+      !Number.isNaN(state.implementationCoverage)
+        ? state.implementationCoverage
+        : typeof state.reqCoverage === "number"
+          ? state.reqCoverage
+          : 0;
+    const consistencyGrounding: ConsistencyGrounding = {
+      reqRows: (state.reqRows || []).map((r) => ({
+        id: r.id,
+        text: r.text,
+        status: r.status,
+        codePaths: r.codePaths,
+      })),
+      checklistFindings: findingsAsChecklist(state.findings || []),
+      // Consistency / RTM reported metric is always implementation coverage
+      coverageRatio: implCoverageForConsistency,
+      eligibleCount: state.eligibleCount,
+      codeBackedCount: state.codeBackedCount,
+      groundedCurrency: currency,
+      targetRepo,
+    };
+
+    // —— Deterministic pre-check BEFORE any LLM auditor call ——
+    let strategyForAudit = state.strategy || "";
+    let pre = runStrategyConsistencyChecks(strategyForAudit, consistencyGrounding);
+    if (!pre.ok) {
+      warn(
+        "Auditor",
+        `Deterministic consistency FAIL (${pre.issues.length}) — repairing without LLM loop`
+      );
+      strategyForAudit = repairStrategyDeterministically(
+        strategyForAudit,
+        consistencyGrounding
+      );
+      try {
+        fs.writeFileSync("ceo-draft.md", strategyForAudit, "utf-8");
+        fs.writeFileSync(
+          path.join(state.loopDir, `strategy-v${loopNo}-consistency-repair.md`),
+          strategyForAudit,
+          "utf-8"
+        );
+      } catch {
+        /* ignore */
+      }
+      pre = runStrategyConsistencyChecks(strategyForAudit, consistencyGrounding);
+    }
+
     // Keyword hits are informational only — gate uses task rubric
-    const keywordInfo = keywordHitInfo(userGoal, state.strategy || "");
-    const keywordFidelity = scoreGoalFidelity(userGoal, state.strategy || "");
+    const keywordInfo = keywordHitInfo(userGoal, strategyForAudit);
+    const keywordFidelity = scoreGoalFidelity(userGoal, strategyForAudit);
 
     const rubricCtx: RubricContext = {
-      strategy: state.strategy || "",
+      strategy: strategyForAudit,
       evidenceMarkdown: state.evidenceMarkdown,
       specsReadCount: state.specsReadCount || 0,
       reqRows: state.reqRows || [],
@@ -523,23 +752,52 @@ ${clip(state.evidenceMarkdown, 3000)}`;
     };
     const rubricPre = scoreGroundedAuditRubric(rubricCtx);
 
-    const bookingRules = bookingMode
-      ? `REJECT clinic-only framing, missing BookingTypes, missing token lifecycle, missing QR→invoice,
+    const clipOpts = {
+      reqRowCount: (state.reqRows || []).length,
+      findingCount: (state.findings || []).filter((f) => {
+        if (!f) return false;
+        if (/^CUR-OK$/i.test(String(f.id || ""))) return false;
+        return true;
+      }).length,
+    };
+
+    let auditReport = "";
+    let llmApproved = false;
+    const rejectReasons: string[] = [];
+
+    if (!pre.ok) {
+      // Still inconsistent after deterministic repair — reject without spending LLM
+      auditReport = [
+        `[REJECTED]`,
+        `### Issue 1`,
+        `- Rejection reason: Deterministic consistency checks failed after repair`,
+        `- Severity: Critical`,
+        `- How to fix: Align narrative with reqTrace RTM; remove invented statuses/coverage/deps; keep deterministic blocks intact`,
+        ...pre.issues.slice(0, 8).map((i, n) => `FIX ${n + 1}: [${i.kind}] ${i.detail}`),
+      ].join("\n");
+      rejectReasons.push(
+        ...pre.issues.slice(0, 6).map((i) => `${i.kind}: ${i.detail}`)
+      );
+      warn("Auditor", "Skipped LLM auditor — deterministic consistency still failing");
+    } else {
+      const bookingRules = bookingMode
+        ? `REJECT clinic-only framing, missing BookingTypes, missing token lifecycle, missing QR→invoice,
 or "will include later" language.`
-      : `REJECT topic drift away from ORIGINAL USER GOAL (e.g. BookingType/clinic blueprints when the goal was memory/Daily Ops/Control Plane UI).
+        : `REJECT topic drift away from ORIGINAL USER GOAL (e.g. BookingType/clinic blueprints when the goal was memory/Daily Ops/Control Plane UI).
 REJECT strategies that ignore the stated goal.`;
 
-    let auditReport = await invokeWithCloudFallback(
-      auditor,
-      auditorOpts,
-      `You are Agency Auditor (evidence-grounded + goal-fidelity).
+      auditReport = await invokeWithCloudFallback(
+        auditor,
+        auditorOpts,
+        `You are Agency Auditor (evidence-grounded + goal-fidelity).
 REJECT rubber-stamp checklists. Prefer citing EVIDENCE paths.
 REJECT invented files not in evidence.
 REJECT drafts that contain erasure placeholders or invent wrong currencies / nonexistent monorepo roots.
+Do NOT invent per-REQ statuses, coverage percentages, counts, or dependency lists — those are deterministic from reqTrace.
 ${bookingRules}
 
 APPROVE only if strategy is concrete, consistent with evidence (or honestly marks gaps),
-AND clearly answers ORIGINAL USER GOAL (specs cited, REQ statuses, stack conflict, P0/P1 findings, recommendations).
+AND clearly answers ORIGINAL USER GOAL (specs cited, REQ statuses from RTM, stack conflict, P0/P1 findings, recommendations).
 
 ORIGINAL USER GOAL:
 ${clip(userGoal, 2000)}
@@ -550,22 +808,21 @@ Keyword hits (informational only, not a gate): ${keywordInfo.hit}/${keywordInfo.
 EVIDENCE PACK:
 ${clip(state.evidenceMarkdown, 5000)}
 
-STRATEGY-v${loopNo}:
-${clip(state.strategy, 8000)}
+STRATEGY-v${loopNo} (deterministic RTM/Key Findings summarized here; full blocks are in ceo-draft.md / written strategy — never reject solely for prompt truncation):
+${clipStrategyForPrompt(strategyForAudit, 5500, clipOpts)}
 
 Line 1: [APPROVED] or [REJECTED]
 ${REJECTION_FORMAT}`
-    );
+      );
+      llmApproved = parseApproved(auditReport);
+    }
 
-    let llmApproved = parseApproved(auditReport);
-
-    // Re-score rubric against current strategy (may have been cleaned in strategize)
+    // Re-score rubric against repaired strategy
     const rubric = scoreGroundedAuditRubric({
       ...rubricCtx,
-      strategy: state.strategy || "",
+      strategy: strategyForAudit,
     });
     let goalPassed = rubric.passed;
-    const rejectReasons: string[] = [];
 
     // Hard gate: grounded-audit rubric (NOT keyword count)
     if (llmApproved && !goalPassed) {
@@ -575,28 +832,73 @@ ${REJECTION_FORMAT}`
       llmApproved = false;
     }
 
-    // Hard gate: REQ coverage
-    const reqCoverage =
-      typeof state.reqCoverage === "number" && !Number.isNaN(state.reqCoverage)
-        ? state.reqCoverage
+    // Hard gate: REQ coverage — audit uses assessed traceability; build uses implementation
+    const intentKind =
+      state.taskIntent ||
+      classifyRouteIntent(state.userGoal || state.brief || "").kind;
+    const isAuditIntent = intentKind === "audit" || intentKind === "unknown";
+    const implementationCoverage =
+      typeof state.implementationCoverage === "number" &&
+      !Number.isNaN(state.implementationCoverage)
+        ? state.implementationCoverage
+        : typeof state.reqCoverage === "number"
+          ? state.reqCoverage
+          : 1;
+    const assessedCoverage =
+      typeof state.assessedCoverage === "number" &&
+      !Number.isNaN(state.assessedCoverage)
+        ? state.assessedCoverage
         : 1;
+    const reqCoverage = isAuditIntent ? assessedCoverage : implementationCoverage;
     if (llmApproved && reqCoverage < MIN_REQ_COVERAGE) {
       rejectReasons.push(
-        `Requirements coverage ${(reqCoverage * 100).toFixed(1)}% < ${MIN_REQ_COVERAGE * 100}% — too many REQs still missing`
+        asciiGateReason(
+          isAuditIntent
+            ? `Audit traceability ${(reqCoverage * 100).toFixed(1)}% < ${MIN_REQ_COVERAGE * 100}% - too many REQs lack an assessed search/status trace`
+            : `Implementation coverage ${(reqCoverage * 100).toFixed(1)}% < ${MIN_REQ_COVERAGE * 100}% - too many REQs still missing`
+        )
       );
       llmApproved = false;
       goalPassed = false;
     }
 
-    // Detect residual invalid claims (strategize should have rewritten/deleted)
-    let strategyText = state.strategy || "";
-    const residual = sanitizeDraftClaims(strategyText, targetRepo, currency);
+    // Detect residual invalid claims (strategize / consistency repair should have cleaned)
+    let strategyText = strategyForAudit;
+    const groundedReqRows = (state.reqRows || []).map((r) => ({
+      id: r.id,
+      status: r.status,
+      codePaths: r.codePaths,
+    }));
+    const groundedCoverage =
+      typeof state.eligibleCount === "number" &&
+      state.eligibleCount > 0 &&
+      typeof state.codeBackedCount === "number"
+        ? {
+            coverageRatio: implementationCoverage,
+            codeBackedCount: state.codeBackedCount,
+            eligibleCount: state.eligibleCount,
+          }
+        : null;
+    const residual = sanitizeDraftClaims(
+      strategyText,
+      targetRepo,
+      currency,
+      groundedReqRows,
+      extractAuditorIssues(state.auditReport || ""),
+      groundedCoverage
+    );
     if (residual.needsRewrite || residual.invalid.length) {
       logModelClaimErrors(
         residual.modelErrors.map((e) => ({ ...e, loop: loopNo })),
         runId
       );
-      const cleaned = finalizeClaimsClean(strategyText, targetRepo, currency);
+      const cleaned = finalizeClaimsClean(
+        strategyText,
+        targetRepo,
+        currency,
+        groundedReqRows,
+        groundedCoverage
+      );
       strategyText = cleaned.text;
       try {
         fs.writeFileSync("ceo-draft.md", strategyText, "utf-8");
@@ -615,6 +917,32 @@ ${REJECTION_FORMAT}`
         );
       }
     }
+    // Keep structure clean before grounded gates / auditor persistence
+    strategyText = normalizeMarkdownStructure(strategyText);
+    if (
+      !/##\s*Key Findings\b/i.test(strategyText) ||
+      !/##\s*Requirements traceability \(deterministic\)/i.test(strategyText)
+    ) {
+      strategyText = injectGroundedStrategyBlocks(strategyText, {
+        checklistFindings: findingsAsChecklist(state.findings || []),
+        reqRows: (state.reqRows || []).map((r) => ({
+          id: r.id,
+          text: r.text || "",
+          status: r.status,
+          codePaths: r.codePaths || [],
+        })),
+        coverageRatio: implementationCoverage,
+        assessedCoverageRatio: assessedCoverage,
+        assessedCount:
+          typeof state.eligibleCount === "number"
+            ? Math.round(assessedCoverage * state.eligibleCount)
+            : undefined,
+        eligibleCount: state.eligibleCount,
+        codeBackedCount: state.codeBackedCount,
+        groundedCurrency: currency,
+      });
+      strategyText = normalizeMarkdownStructure(strategyText);
+    }
 
     const cites = verifyCitationsAgainstRepo(strategyText, targetRepo);
     if (llmApproved && !cites.ok) {
@@ -626,14 +954,14 @@ ${REJECTION_FORMAT}`
       rejectReasons.push(
         `Invalid currency claims detected (${residual.removedCurrencies
           .slice(0, 4)
-          .join(",")}) — must use ${currency}; never auto-substitute`
+          .join(",")}) - must use ${currency}; never auto-substitute`
       );
       llmApproved = false;
       goalPassed = false;
     }
 
-    // Pack-level assertion: 0 SAR / packages/ / apps/web / [REMOVED]
-    const packAssert = assertCleanPackClaims(strategyText);
+    // Pack-level assertion: 0 wrong-currency / packages/ / apps/web / [REMOVED]
+    const packAssert = assertCleanPackClaims(strategyText, currency);
     if (!packAssert.ok) {
       rejectReasons.push(
         `Pack claim assertion FAIL: forbidden residues ${packAssert.violations.join(", ")}`
@@ -642,7 +970,7 @@ ${REJECTION_FORMAT}`
       goalPassed = false;
       warn(
         "Auditor",
-        `Pack claim assertion FAIL — ${packAssert.violations.join(", ")}`
+        `Pack claim assertion FAIL - ${packAssert.violations.join(", ")}`
       );
     }
 
@@ -663,11 +991,14 @@ ${REJECTION_FORMAT}`
       goalPassed = false;
     }
 
-    if (rejectReasons.length) {
+    // Windows-safe ASCII for every written gate reason (no em-dash mojibake)
+    const asciiRejectReasons = rejectReasons.map(asciiGateReason);
+
+    if (asciiRejectReasons.length) {
       auditReport = [
         `[REJECTED]`,
         ``,
-        ...rejectReasons.map(
+        ...asciiRejectReasons.map(
           (r, i) =>
             `### Issue ${i + 1}\n- Rejection reason: ${r}\n- Severity: Critical\n- How to fix: Ground claims in evidence-pack.md / evidence.json; cite only real paths; raise REQ coverage; never use erasure placeholders or invent wrong currencies/paths.\nFIX ${i + 1}: ${r}`
         ),
@@ -677,7 +1008,7 @@ ${REJECTION_FORMAT}`
       ].join("\n");
       warn(
         "Auditor",
-        `Grounded gates FAIL — ${rejectReasons.length} issue(s); forcing REJECT`
+        `Grounded gates FAIL - ${asciiRejectReasons.length} issue(s); forcing REJECT`
       );
     }
 
@@ -685,7 +1016,7 @@ ${REJECTION_FORMAT}`
     // Empty / failed gates => CLOSED (never OPEN without APPROVED)
     const gateOpen = auditPassed === true;
 
-    // Per-run gates.json (keyed by runId — never append prior-run loops)
+    // Per-run gates.json (keyed by runId - never append prior-run loops)
     try {
       appendGateEntry(
         {
@@ -703,8 +1034,11 @@ ${REJECTION_FORMAT}`
             applicable: i.applicable,
           })),
           reqCoverage,
+          implementationCoverage,
+          assessedCoverage,
+          taskIntent: intentKind,
           missingCitations: cites.missing.map((m) => m.raw),
-          rejectReasons,
+          rejectReasons: asciiRejectReasons,
           packClaimViolations: packAssert.ok ? [] : packAssert.violations,
         },
         runId
@@ -721,34 +1055,38 @@ ${REJECTION_FORMAT}`
       `goalFidelityScore: ${rubric.score.toFixed(3)} (rubric threshold ${GROUNDED_FIDELITY_THRESHOLD})`,
       `goalFidelityReason: ${rubric.reason}`,
       `keywordHits (informational): ${keywordInfo.hit}/${keywordInfo.total} ratio=${keywordInfo.ratio.toFixed(3)}`,
-      `reqCoverage: ${reqCoverage.toFixed(3)} (min ${MIN_REQ_COVERAGE})`,
+      `reqCoverage: ${reqCoverage.toFixed(3)} (min ${MIN_REQ_COVERAGE}; intent=${intentKind}; gateMetric=${isAuditIntent ? "assessed-traceability" : "implementation"})`,
+      `implementationCoverage: ${implementationCoverage.toFixed(3)} (reported)`,
+      `assessedCoverage: ${assessedCoverage.toFixed(3)} (audit traceability)`,
       `citationsOk: ${cites.ok}`,
       `packClaimsOk: ${packAssert.ok}`,
       `repetitionOk: ${rep.ok}`,
       ``,
       auditReport,
     ].join("\n");
-    // Scrub instructional residues before persisting — pack must not contain erasure placeholders
-    const cleanAudit = scrubPackMarkdown(auditDoc).text;
+    // Scrub instructional residues before persisting - pack must not contain erasure placeholders
+    const cleanAudit = scrubPackMarkdown(toAsciiDashes(auditDoc)).text;
     fs.writeFileSync(path.join(state.loopDir, `audit-v${loopNo}.md`), cleanAudit, "utf-8");
     fs.writeFileSync("audit-report.md", cleanAudit, "utf-8");
     if (!auditPassed) {
       fs.writeFileSync(
         path.join(state.loopDir, `rejection-v${loopNo}.md`),
-        `# Rejection v${loopNo}\n\ngate=CLOSED\ngoalPassed=${goalPassed}\n${auditReport}\n`,
+        toAsciiDashes(
+          `# Rejection v${loopNo}\n\ngate=CLOSED\ngoalPassed=${goalPassed}\n${auditReport}\n`
+        ),
         "utf-8"
       );
-      warn("Auditor", `[REJECTED] loop v${loopNo} → gate CLOSED`);
+      warn("Auditor", `[REJECTED] loop v${loopNo} -> gate CLOSED`);
     } else {
-      ok("Auditor", `[APPROVED] loop v${loopNo} — gate OPEN (grounded OK)`);
+      ok("Auditor", `[APPROVED] loop v${loopNo} - gate OPEN (grounded OK)`);
     }
     return {
-      auditReport: auditDoc,
+      auditReport: cleanAudit,
       auditPassed,
       goalPassed,
       goalFidelityScore: rubric.score,
       strategy: strategyText,
-      history: [auditDoc],
+      history: [cleanAudit],
     };
   };
 
@@ -786,13 +1124,34 @@ export async function runReviewGraph(input: {
   loopDir: string;
   userGoal?: string;
   targetRepo?: string;
-  /** 0..1 REQ coverage from evidence matrix; default 1 when unknown. */
+  /**
+   * Gate coverage metric. Prefer assessedCoverage for audit intent;
+   * implementationCoverage for build/implement. If only reqCoverage is
+   * provided it is used as the gate metric.
+   */
   reqCoverage?: number;
+  implementationCoverage?: number;
+  assessedCoverage?: number;
+  taskIntent?: string;
+  eligibleCount?: number;
+  codeBackedCount?: number;
   groundedCurrency?: string;
   /** Spec files ingested — rubric specs_read. */
   specsReadCount?: number;
-  reqRows?: Array<{ id: string; status: string; codePaths?: string[] }>;
-  findings?: Array<{ severity?: string; summary?: string; category?: string }>;
+  reqRows?: Array<{
+    id: string;
+    status: string;
+    codePaths?: string[];
+    text?: string;
+  }>;
+  findings?: Array<{
+    id?: string;
+    severity?: string;
+    summary?: string;
+    category?: string;
+    paths?: string[];
+    detail?: string;
+  }>;
   /** LangGraph thread id — stable across resume after crash/restart */
   threadId?: string;
   /** When true, resume from last checkpoint instead of fresh state */
@@ -856,6 +1215,25 @@ export async function runReviewGraph(input: {
           targetRepo: input.targetRepo || process.cwd(),
           reqCoverage:
             typeof input.reqCoverage === "number" ? input.reqCoverage : 1,
+          implementationCoverage:
+            typeof input.implementationCoverage === "number"
+              ? input.implementationCoverage
+              : typeof input.reqCoverage === "number"
+                ? input.reqCoverage
+                : 1,
+          assessedCoverage:
+            typeof input.assessedCoverage === "number"
+              ? input.assessedCoverage
+              : 1,
+          taskIntent:
+            input.taskIntent ||
+            classifyRouteIntent(userGoal || input.brief || "").kind,
+          eligibleCount:
+            typeof input.eligibleCount === "number" ? input.eligibleCount : 0,
+          codeBackedCount:
+            typeof input.codeBackedCount === "number"
+              ? input.codeBackedCount
+              : 0,
           groundedCurrency: input.groundedCurrency || "EGP",
           runId,
           specsReadCount: input.specsReadCount || 0,

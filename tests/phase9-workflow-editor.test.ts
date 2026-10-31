@@ -37,6 +37,10 @@ import {
 } from "../src/agency/workflowLayout.js";
 import { getPersistence } from "../src/lib/db/index.js";
 import { makeIsolatedCpEnv } from "./helpers/isolatedCpEnv.js";
+import {
+  waitForListenPort,
+  waitForLocalHealth,
+} from "./helpers/ephemeralPort.js";
 
 const REPO_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 
@@ -271,8 +275,8 @@ describe("undo/redo history", () => {
 });
 
 describe("Control Plane workflow API", () => {
-  // Distinct from help-system (18797) / controlplane-http (18787)
-  const PORT = 18798;
+  // Ephemeral CONTROL_PLANE_PORT=0 on 127.0.0.1 — avoids Windows fixed-port conflicts
+  let PORT = 0;
   const TOKEN = "phase9-test-owner-token-0123456789abcdef";
   let child: ChildProcess | null = null;
   let cpIso: ReturnType<typeof makeIsolatedCpEnv> | null = null;
@@ -286,7 +290,7 @@ describe("Control Plane workflow API", () => {
     layoutBackup = fs.existsSync(layoutPath) ? fs.readFileSync(layoutPath, "utf-8") : null;
 
     cpIso = makeIsolatedCpEnv({
-      CONTROL_PLANE_PORT: String(PORT),
+      CONTROL_PLANE_PORT: "0",
       CONTROL_PLANE_TOKEN: TOKEN,
     });
     const tsxBin = path.join(REPO_ROOT, "node_modules", "tsx", "dist", "cli.mjs");
@@ -295,17 +299,8 @@ describe("Control Plane workflow API", () => {
       env: cpIso.env,
       stdio: ["ignore", "pipe", "pipe"],
     });
-    const start = Date.now();
-    while (Date.now() - start < 20000) {
-      try {
-        const res = await fetch(`http://127.0.0.1:${PORT}/api/auth/status`);
-        if (res.ok) return;
-      } catch {
-        /* retry */
-      }
-      await new Promise((r) => setTimeout(r, 200));
-    }
-    throw new Error("Control Plane (phase9) did not become ready");
+    PORT = await waitForListenPort(child!, 20000);
+    await waitForLocalHealth(PORT, "/api/auth/status", 15000);
   }, 30000);
 
   afterAll(async () => {

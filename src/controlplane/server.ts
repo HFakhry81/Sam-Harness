@@ -168,7 +168,10 @@ import {
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const ROOT = path.resolve(__dirname, "..", "..");
 const PUBLIC = path.join(__dirname, "public");
-const PORT = Number(process.env.CONTROL_PLANE_PORT || 8787);
+/** Requested bind port; 0 = ephemeral (OS-assigned). */
+const REQUESTED_PORT = Number(process.env.CONTROL_PLANE_PORT || 8787);
+/** Actual bound port after listen (equals REQUESTED_PORT unless ephemeral). */
+let LISTEN_PORT = REQUESTED_PORT > 0 ? REQUESTED_PORT : 0;
 const OWNER_TOKEN = loadOrCreateOwnerToken(ROOT);
 const log = createLogger("controlplane");
 
@@ -1108,18 +1111,18 @@ function isPublicHelpPath(p: string): boolean {
 
 const server = http.createServer(async (req, res) => {
   try {
-    const url = new URL(req.url || "/", `http://127.0.0.1:${PORT}`);
+    const url = new URL(req.url || "/", `http://127.0.0.1:${LISTEN_PORT || 8787}`);
     const p = url.pathname;
     const method = req.method || "GET";
 
     // —— Auth: login / status / logout (unauthenticated) ——
     if (method === "POST" && p === "/api/login") {
-      if (!isAllowedHost(req.headers.host as string | undefined, PORT)) {
+      if (!isAllowedHost(req.headers.host as string | undefined, LISTEN_PORT)) {
         sendJson(res, 403, { ok: false, error: "Forbidden: invalid Host" });
         return;
       }
       const origin = req.headers.origin as string | undefined;
-      if (origin && !isAllowedOrigin(origin, undefined, PORT)) {
+      if (origin && !isAllowedOrigin(origin, undefined, LISTEN_PORT)) {
         sendJson(res, 403, { ok: false, error: "Forbidden: foreign Origin" });
         return;
       }
@@ -1146,7 +1149,7 @@ const server = http.createServer(async (req, res) => {
     }
     if (method === "GET" && p === "/api/auth/status") {
       const auth = authenticateRequest(req, OWNER_TOKEN, {
-        port: PORT,
+        port: LISTEN_PORT,
         requireCsrf: false,
         allowMissingOriginWithBearer: true,
       });
@@ -1314,7 +1317,7 @@ const server = http.createServer(async (req, res) => {
     // —— Require auth for every other /api/* route ——
     if (p.startsWith("/api/") && !PUBLIC_API.has(p) && !isPublicHelpPath(p)) {
       const auth = authenticateRequest(req, OWNER_TOKEN, {
-        port: PORT,
+        port: LISTEN_PORT,
         requireCsrf: true,
         allowMissingOriginWithBearer: true,
       });
@@ -1332,7 +1335,7 @@ const server = http.createServer(async (req, res) => {
         phase: lastRun?.phase || (activeChild ? "running" : "idle"),
         lastRun,
         tasksInSession: session.entries.length,
-        port: PORT,
+        port: LISTEN_PORT,
         auth: true,
         tenantId: getActiveTenantId(),
         metrics: getMetrics(),
@@ -2275,8 +2278,16 @@ async function boot() {
     /* optional */
   }
 
-  server.listen(PORT, "127.0.0.1", () => {
-    const url = `http://127.0.0.1:${PORT}/`;
+  server.listen(REQUESTED_PORT, "127.0.0.1", () => {
+    const addr = server.address();
+    if (addr && typeof addr === "object" && addr.port) {
+      LISTEN_PORT = addr.port;
+    } else if (REQUESTED_PORT > 0) {
+      LISTEN_PORT = REQUESTED_PORT;
+    }
+    // Machine-parseable for tests that bind CONTROL_PLANE_PORT=0
+    console.log(`[Control Plane] LISTEN_PORT=${LISTEN_PORT}`);
+    const url = `http://127.0.0.1:${LISTEN_PORT}/`;
     try {
       seedHarnessLessons(ROOT);
     } catch {
