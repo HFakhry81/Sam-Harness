@@ -220,6 +220,10 @@ export const ReviewState = Annotation.Root({
   targetRepo: Annotation<string>,
   /** 0..1 from evidence REQ matrix; 1 when no REQs extracted. */
   reqCoverage: Annotation<number>,
+  /** Eligible REQ denominator (excludes n/a headings). */
+  eligibleCount: Annotation<number>,
+  /** Code-backed REQ count (implemented+partial+contradicts). */
+  codeBackedCount: Annotation<number>,
   groundedCurrency: Annotation<string>,
   /** Per-run id for gates.json isolation. */
   runId: Annotation<string>,
@@ -483,6 +487,17 @@ ${clip(state.evidenceMarkdown, 3000)}`;
       status: r.status,
       codePaths: r.codePaths,
     }));
+    const groundedCoverage =
+      typeof state.eligibleCount === "number" &&
+      state.eligibleCount > 0 &&
+      typeof state.codeBackedCount === "number"
+        ? {
+            coverageRatio:
+              typeof state.reqCoverage === "number" ? state.reqCoverage : 0,
+            codeBackedCount: state.codeBackedCount,
+            eligibleCount: state.eligibleCount,
+          }
+        : null;
     const priorAuditorIssues = extractAuditorIssues(state.auditReport || "");
     {
       let claimErrors: ModelClaimError[] = [];
@@ -491,7 +506,8 @@ ${clip(state.evidenceMarkdown, 3000)}`;
         targetRepo,
         currency,
         groundedReqRows,
-        priorAuditorIssues
+        priorAuditorIssues,
+        groundedCoverage
       );
       if (detected.modelErrors.length) {
         claimErrors = claimErrors.concat(
@@ -535,7 +551,8 @@ ${clip(state.evidenceMarkdown, 3000)}`;
             targetRepo,
             currency,
             groundedReqRows,
-            priorAuditorIssues
+            priorAuditorIssues,
+            groundedCoverage
           );
           if (detected.modelErrors.length) {
             claimErrors = claimErrors.concat(
@@ -559,7 +576,8 @@ ${clip(state.evidenceMarkdown, 3000)}`;
           strategy,
           targetRepo,
           currency,
-          groundedReqRows
+          groundedReqRows,
+          groundedCoverage
         );
         strategy = cleaned.text;
         if (cleaned.flags.length) {
@@ -598,6 +616,8 @@ ${clip(state.evidenceMarkdown, 3000)}`;
         codePaths: r.codePaths || [],
       })),
       coverageRatio: state.reqCoverage,
+      eligibleCount: state.eligibleCount,
+      codeBackedCount: state.codeBackedCount,
       groundedCurrency: currency,
     });
     strategy = normalizeMarkdownStructure(strategy);
@@ -719,12 +739,24 @@ ${REJECTION_FORMAT}`
       status: r.status,
       codePaths: r.codePaths,
     }));
+    const groundedCoverage =
+      typeof state.eligibleCount === "number" &&
+      state.eligibleCount > 0 &&
+      typeof state.codeBackedCount === "number"
+        ? {
+            coverageRatio:
+              typeof state.reqCoverage === "number" ? state.reqCoverage : 0,
+            codeBackedCount: state.codeBackedCount,
+            eligibleCount: state.eligibleCount,
+          }
+        : null;
     const residual = sanitizeDraftClaims(
       strategyText,
       targetRepo,
       currency,
       groundedReqRows,
-      extractAuditorIssues(state.auditReport || "")
+      extractAuditorIssues(state.auditReport || ""),
+      groundedCoverage
     );
     if (residual.needsRewrite || residual.invalid.length) {
       logModelClaimErrors(
@@ -735,7 +767,8 @@ ${REJECTION_FORMAT}`
         strategyText,
         targetRepo,
         currency,
-        groundedReqRows
+        groundedReqRows,
+        groundedCoverage
       );
       strategyText = cleaned.text;
       try {
@@ -770,6 +803,8 @@ ${REJECTION_FORMAT}`
           codePaths: r.codePaths || [],
         })),
         coverageRatio: state.reqCoverage,
+        eligibleCount: state.eligibleCount,
+        codeBackedCount: state.codeBackedCount,
         groundedCurrency: currency,
       });
       strategyText = normalizeMarkdownStructure(strategyText);
@@ -947,6 +982,8 @@ export async function runReviewGraph(input: {
   targetRepo?: string;
   /** 0..1 REQ coverage from evidence matrix; default 1 when unknown. */
   reqCoverage?: number;
+  eligibleCount?: number;
+  codeBackedCount?: number;
   groundedCurrency?: string;
   /** Spec files ingested — rubric specs_read. */
   specsReadCount?: number;
@@ -1027,6 +1064,12 @@ export async function runReviewGraph(input: {
           targetRepo: input.targetRepo || process.cwd(),
           reqCoverage:
             typeof input.reqCoverage === "number" ? input.reqCoverage : 1,
+          eligibleCount:
+            typeof input.eligibleCount === "number" ? input.eligibleCount : 0,
+          codeBackedCount:
+            typeof input.codeBackedCount === "number"
+              ? input.codeBackedCount
+              : 0,
           groundedCurrency: input.groundedCurrency || "EGP",
           runId,
           specsReadCount: input.specsReadCount || 0,

@@ -4,6 +4,7 @@
  */
 import type { AgencyVerdict } from "./agencyVerdict.js";
 import type { ChecklistFinding } from "./auditChecklist.js";
+import { formatGroundedCoverageLine } from "./reqTrace.js";
 
 export type FinalReportEvidence = {
   verdict: AgencyVerdict;
@@ -25,6 +26,46 @@ const ISSUE_REQ_STATUSES = new Set([
   "contradicts",
   "unverified",
 ]);
+
+/** Remove prompt/model truncation markers from any written pack text. */
+export function stripTruncationMarkers(text: string): string {
+  return String(text || "")
+    .replace(/\n?[^\n]*\.\.\.\(\s*truncated(?:\s+narrative(?:\s+only)?)?\s*\)[^\n]*\n?/gi, "\n")
+    .replace(/\n?\.\.\.\(\s*truncated[^)]*\)\s*/gi, "")
+    .replace(/\n{3,}/g, "\n\n")
+    .trim() + (String(text || "").trim() ? "\n" : "");
+}
+
+/** Strip model-invented coverage lines (percent or N/M) outside the RTM block. */
+export function stripModelCoverageClaims(text: string): string {
+  const lines = String(text || "").split(/\r?\n/);
+  const out: string[] = [];
+  let inRtm = false;
+  for (const line of lines) {
+    if (/##\s*Requirements traceability/i.test(line)) {
+      inRtm = true;
+      out.push(line);
+      continue;
+    }
+    if (inRtm && /^##\s+/.test(line) && !/Requirements traceability/i.test(line)) {
+      inRtm = false;
+    }
+    if (inRtm) {
+      out.push(line);
+      continue;
+    }
+    // Drop model coverage prose — RTM is the single source of truth
+    if (
+      /deterministic\s+coverage/i.test(line) ||
+      (/coverage/i.test(line) &&
+        (/(\d+(?:\.\d+)?)\s*%/.test(line) || /\b\d+\s*\/\s*\d+\b/.test(line)))
+    ) {
+      continue;
+    }
+    out.push(line);
+  }
+  return out.join("\n");
+}
 
 /** Checklist items that represent failures / partial gaps (not OK confirmations). */
 export function selectFailedChecklistFindings(
@@ -163,11 +204,17 @@ export function composeFinalReport(input: {
       .trim();
   }
 
+  if (extra) {
+    extra = stripTruncationMarkers(stripModelCoverageClaims(extra)).trim();
+  }
+
   const parts = [deterministic.trim()];
   if (extra) {
     parts.push(``, `## Additional narrative`, ``, extra);
   }
-  return parts.join("\n").replace(/\n{3,}/g, "\n\n").trim() + "\n";
+  return stripTruncationMarkers(
+    parts.join("\n").replace(/\n{3,}/g, "\n\n").trim() + "\n"
+  );
 }
 
 /** Markers used by the fidelity rubric for findings coverage. */
@@ -189,6 +236,8 @@ export function buildDeterministicRtmBlock(input: {
     codePaths?: string[];
   }>;
   coverageRatio?: number;
+  eligibleCount?: number;
+  codeBackedCount?: number;
 }): string {
   const rows = input.reqRows || [];
   if (!rows.length) {
@@ -204,19 +253,33 @@ export function buildDeterministicRtmBlock(input: {
   const missing = rows.filter((r) => r.status === "missing").length;
   const contradicts = rows.filter((r) => r.status === "contradicts").length;
   const unverified = rows.filter((r) => r.status === "unverified").length;
-  const codeBacked = implemented + partial + contradicts;
+  const na = rows.filter((r) => r.status === "n/a").length;
+  const codeBacked =
+    typeof input.codeBackedCount === "number"
+      ? input.codeBackedCount
+      : implemented + partial + contradicts;
+  const eligible =
+    typeof input.eligibleCount === "number"
+      ? input.eligibleCount
+      : Math.max(1, rows.length - na);
   const ratio =
     typeof input.coverageRatio === "number" && !Number.isNaN(input.coverageRatio)
       ? input.coverageRatio
-      : rows.length
-        ? codeBacked / rows.length
+      : eligible
+        ? codeBacked / eligible
         : 0;
+  const coverageLine = formatGroundedCoverageLine({
+    coverageRatio: ratio,
+    codeBackedCount: codeBacked,
+    eligibleCount: eligible,
+  });
   return [
     `## Requirements traceability (deterministic)`,
     ``,
-    `Do NOT restate or invent alternate REQ statuses or coverage percentages.`,
-    `Coverage (code-backed: implemented+partial+contradicts): ${(ratio * 100).toFixed(1)}% (${codeBacked}/${rows.length})`,
-    `implemented=${implemented} partial=${partial} missing=${missing} contradicts=${contradicts} unverified=${unverified}`,
+    `SINGLE SOURCE OF TRUTH — do not invent alternate coverage percentages or N/M fractions.`,
+    `Authoritative statuses are in this table; narrative must match (if a REQ is missing here, never call it implemented).`,
+    coverageLine,
+    `implemented=${implemented} partial=${partial} missing=${missing} contradicts=${contradicts} unverified=${unverified} n/a=${na}`,
     ``,
     `| ID | Status | Code paths | Requirement |`,
     `| --- | --- | --- | --- |`,
@@ -313,7 +376,10 @@ export function clipStrategyForPrompt(strategy: string, max = 6000): string {
   ].join("\n");
 
   if (narrative.length > max) {
-    narrative = narrative.slice(0, max) + "\n...(truncated narrative only)";
+    // Prompt-only marker — must never be copied into written pack files
+    narrative =
+      narrative.slice(0, max) +
+      "\n<!-- PROMPT_NARRATIVE_CLIPPED: full text remains in written strategy file -->";
   }
   return `${narrative}\n\n${summary}\n`;
 }
@@ -328,10 +394,13 @@ export function injectGroundedStrategyBlocks(
     checklistFindings: ChecklistFinding[];
     reqRows: FinalReportEvidence["reqRows"];
     coverageRatio?: number;
+    eligibleCount?: number;
+    codeBackedCount?: number;
     groundedCurrency?: string;
   }
 ): string {
   let body = String(strategy || "");
+  body = stripTruncationMarkers(body);
   // Strip model-authored RTM / Key Findings so deterministic blocks win
   body = body
     .replace(
@@ -345,10 +414,13 @@ export function injectGroundedStrategyBlocks(
     )
     .replace(/\n{3,}/g, "\n\n")
     .trim();
+  body = stripModelCoverageClaims(body);
 
   const rtm = buildDeterministicRtmBlock({
     reqRows: input.reqRows || [],
     coverageRatio: input.coverageRatio,
+    eligibleCount: input.eligibleCount,
+    codeBackedCount: input.codeBackedCount,
   });
   const findings = buildDeterministicKeyFindingsBlock({
     checklistFindings: input.checklistFindings || [],
@@ -357,7 +429,9 @@ export function injectGroundedStrategyBlocks(
   });
 
   const parts = [body, ``, rtm.trim(), ``, findings.trim(), ``];
-  return parts.join("\n").replace(/\n{3,}/g, "\n\n").trim() + "\n";
+  return stripTruncationMarkers(
+    parts.join("\n").replace(/\n{3,}/g, "\n\n").trim() + "\n"
+  );
 }
 
 /**

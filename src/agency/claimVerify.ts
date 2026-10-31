@@ -24,11 +24,22 @@ export type ClaimVerifyResult = {
 };
 
 export type InvalidClaim = {
-  kind: "invalid_path" | "invalid_currency" | "invalid_req_status";
+  kind:
+    | "invalid_path"
+    | "invalid_currency"
+    | "invalid_req_status"
+    | "invalid_coverage";
   claim: string;
   detail: string;
   /** Approximate sentence containing the claim (for deletion). */
   sentence?: string;
+};
+
+/** Grounded coverage from reqTrace — single source of truth for %. */
+export type GroundedCoverage = {
+  coverageRatio: number;
+  codeBackedCount: number;
+  eligibleCount: number;
 };
 
 export type GroundedReqRow = {
@@ -183,7 +194,12 @@ export function detectHallucinatedImplementedStatus(
 
   for (const line of lines) {
     // Skip the deterministic RTM block we inject (authoritative)
-    if (/^\|\s*REQ/i.test(line) && /\|\s*(missing|partial|implemented|contradicts)\s*\|/i.test(line)) {
+    if (
+      /^\|\s*REQ/i.test(line) &&
+      /\|\s*(missing|partial|implemented|contradicts|unverified|n\/a)\s*\|/i.test(
+        line
+      )
+    ) {
       continue;
     }
     const m = line.match(implRe);
@@ -248,13 +264,94 @@ function sentenceContaining(text: string, claim: string): string | undefined {
 }
 
 /**
+ * Reject model-written coverage % or N/M that disagree with reqTrace.
+ * Skips the deterministic RTM block (authoritative).
+ */
+export function detectMismatchedCoverageClaims(
+  text: string,
+  grounded?: GroundedCoverage | null
+): InvalidClaim[] {
+  if (
+    !grounded ||
+    typeof grounded.coverageRatio !== "number" ||
+    typeof grounded.eligibleCount !== "number" ||
+    typeof grounded.codeBackedCount !== "number" ||
+    grounded.eligibleCount < 1
+  ) {
+    return [];
+  }
+  const expectedPct = (Number(grounded.coverageRatio) * 100).toFixed(1);
+  const expectedPctNum = Number(expectedPct);
+  const expectedFrac = `${grounded.codeBackedCount}/${grounded.eligibleCount}`;
+  const invalid: InvalidClaim[] = [];
+  const seen = new Set<string>();
+
+  const lines = String(text || "").split(/\r?\n/);
+  let inRtm = false;
+  for (const line of lines) {
+    if (/##\s*Requirements traceability/i.test(line)) {
+      inRtm = true;
+      continue;
+    }
+    if (inRtm && /^##\s+/.test(line) && !/Requirements traceability/i.test(line)) {
+      inRtm = false;
+    }
+    if (inRtm) continue;
+
+    const coverageCtx =
+      /coverage|deterministic\s+coverage|traceability|req\s*coverage|implemented\s*\+/i.test(
+        line
+      );
+    if (!coverageCtx) continue;
+
+    for (const m of line.matchAll(/(\d+(?:\.\d+)?)\s*%/g)) {
+      const val = Number(m[1]);
+      if (Number.isNaN(val)) continue;
+      if (Math.abs(val - expectedPctNum) < 0.05) continue;
+      const key = `pct:${m[1]}`;
+      if (seen.has(key)) continue;
+      seen.add(key);
+      invalid.push({
+        kind: "invalid_coverage",
+        claim: `${m[1]}%`,
+        detail: `coverage claim ${m[1]}% ≠ grounded ${expectedPct}% (${expectedFrac}) from reqTrace`,
+        sentence: line.trim(),
+      });
+    }
+
+    for (const m of line.matchAll(/\b(\d+)\s*\/\s*(\d+)\b/g)) {
+      const frac = `${m[1]}/${m[2]}`;
+      if (frac === expectedFrac) continue;
+      // Same denominator as eligible count (e.g. N/16) or explicit coverage fraction
+      if (
+        Number(m[2]) !== grounded.eligibleCount &&
+        !/coverage|deterministic/i.test(line)
+      ) {
+        continue;
+      }
+      const key = `frac:${frac}`;
+      if (seen.has(key)) continue;
+      seen.add(key);
+      invalid.push({
+        kind: "invalid_coverage",
+        claim: frac,
+        detail: `coverage fraction ${frac} ≠ grounded ${expectedFrac} (${expectedPct}%) from reqTrace`,
+        sentence: line.trim(),
+      });
+    }
+  }
+  return invalid;
+}
+
+/**
  * Detect invalid claims without mutating text.
  */
 export function detectInvalidClaims(
   text: string,
   targetRepo: string,
   groundedCurrency = "EGP",
-  groundedReqRows: GroundedReqRow[] = []
+  groundedReqRows: GroundedReqRow[] = [],
+  groundedCoverage?: GroundedCoverage | null
 ): DetectClaimsResult {
   const invalid: InvalidClaim[] = [];
   const verify = verifyCitationsAgainstRepo(text, targetRepo);
@@ -298,6 +395,10 @@ export function detectInvalidClaims(
 
   for (const h of detectHallucinatedImplementedStatus(text, groundedReqRows)) {
     invalid.push(h);
+  }
+
+  for (const c of detectMismatchedCoverageClaims(text, groundedCoverage)) {
+    invalid.push(c);
   }
 
   return { invalid, ok: invalid.length === 0 };
@@ -399,7 +500,8 @@ GROUNDED CURRENCY: ${input.groundedCurrency} (never write SAR/USD/AED unless tha
 Cite ONLY paths that exist in EVIDENCE. Do not mention packages/ or apps/web unless those folders exist.
 Do NOT write erasure placeholders (bracketed REMOVED tokens) or the bare word REMOVED as a stand-in.
 Do NOT mark a REQ Implemented unless you cite real code paths (not only .docx / spec files).
-Do NOT invent RTM coverage percentages — use the deterministic RTM block from evidence.
+Do NOT invent RTM coverage percentages or N/M fractions — use ONLY the grounded reqTrace figure in the deterministic RTM block.
+If narrative says a REQ is missing/partial, the RTM status for that REQ must match (never Implemented).
 After edits, every heading must have content; no empty bullets; ordered lists must be contiguous 1..N.
 
 EVIDENCE (real paths only):
@@ -427,13 +529,15 @@ export function sanitizeDraftClaims(
   targetRepo: string,
   groundedCurrency = "EGP",
   groundedReqRows: GroundedReqRow[] = [],
-  priorAuditorIssues: string[] = []
+  priorAuditorIssues: string[] = [],
+  groundedCoverage?: GroundedCoverage | null
 ): SanitizeDraftResult {
   const detected = detectInvalidClaims(
     text,
     targetRepo,
     groundedCurrency,
-    groundedReqRows
+    groundedReqRows,
+    groundedCoverage
   );
   const removedPaths = detected.invalid
     .filter((i) => i.kind === "invalid_path")
@@ -487,13 +591,15 @@ export function finalizeClaimsClean(
   text: string,
   targetRepo: string,
   groundedCurrency = "EGP",
-  groundedReqRows: GroundedReqRow[] = []
+  groundedReqRows: GroundedReqRow[] = [],
+  groundedCoverage?: GroundedCoverage | null
 ): SanitizeDraftResult {
   const detected = detectInvalidClaims(
     text,
     targetRepo,
     groundedCurrency,
-    groundedReqRows
+    groundedReqRows,
+    groundedCoverage
   );
   if (detected.ok) {
     return {
@@ -515,7 +621,8 @@ export function finalizeClaimsClean(
       current,
       targetRepo,
       groundedCurrency,
-      groundedReqRows
+      groundedReqRows,
+      groundedCoverage
     );
     if (round.ok) break;
     lastInvalid = round.invalid;
@@ -525,7 +632,8 @@ export function finalizeClaimsClean(
     current,
     targetRepo,
     groundedCurrency,
-    groundedReqRows
+    groundedReqRows,
+    groundedCoverage
   );
   // Absolute ban: strip any leftover [REMOVED] if a prior version left them
   let finalText = current.replace(/\s*\[REMOVED[^\]]*\]\s*/gi, " ");
@@ -565,7 +673,8 @@ export async function remediateInvalidClaims(
   rewriteFn?: (prompt: string) => Promise<string>,
   maxRewrites = MAX_CLAIM_REWRITES,
   groundedReqRows: GroundedReqRow[] = [],
-  priorAuditorIssues: string[] = []
+  priorAuditorIssues: string[] = [],
+  groundedCoverage?: GroundedCoverage | null
 ): Promise<SanitizeDraftResult> {
   let current = String(text || "");
   let detected = sanitizeDraftClaims(
@@ -573,7 +682,8 @@ export async function remediateInvalidClaims(
     targetRepo,
     groundedCurrency,
     groundedReqRows,
-    priorAuditorIssues
+    priorAuditorIssues,
+    groundedCoverage
   );
   if (!detected.needsRewrite) {
     return { ...detected, text: normalizeMarkdownStructure(current) };
@@ -598,7 +708,8 @@ export async function remediateInvalidClaims(
           targetRepo,
           groundedCurrency,
           groundedReqRows,
-          priorAuditorIssues
+          priorAuditorIssues,
+          groundedCoverage
         );
       } catch {
         break;
@@ -611,7 +722,8 @@ export async function remediateInvalidClaims(
       current,
       targetRepo,
       groundedCurrency,
-      groundedReqRows
+      groundedReqRows,
+      groundedCoverage
     );
   }
   // Strip placeholders even when rewrite succeeded

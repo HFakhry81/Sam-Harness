@@ -120,7 +120,9 @@ export function scoreGroundedAuditRubric(
   const rows = ctx.reqRows || [];
   const reqApplicable = rows.length > 0;
   const allHaveStatus = rows.every((r) =>
-    /^(implemented|partial|missing|contradicts|unverified)$/i.test(r.status || "")
+    /^(implemented|partial|missing|contradicts|unverified|n\/a)$/i.test(
+      r.status || ""
+    )
   );
   // missing with empty codePaths is fine (explicit no-evidence status)
   items.push({

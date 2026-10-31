@@ -319,6 +319,8 @@ export async function runAgencyArchitecture(task: string): Promise<AgencyRunResu
     userGoal,
     targetRepo: engagement.targetRepo,
     reqCoverage: evidence.reqMatrix?.coverageRatio ?? 1,
+    eligibleCount: evidence.reqMatrix?.eligibleCount ?? 0,
+    codeBackedCount: evidence.reqMatrix?.codeBackedCount ?? 0,
     groundedCurrency: evidence.localeCurrency?.currency || "EGP",
     specsReadCount: evidence.spec?.filesRead?.length || 0,
     reqRows: (evidence.reqMatrix?.rows || []).map((r) => ({

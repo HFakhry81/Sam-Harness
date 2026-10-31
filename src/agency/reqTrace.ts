@@ -12,6 +12,8 @@ import {
   isAppSourcePath,
   isJunkDirName,
   isJunkEvidencePath,
+  isNonFeatureEvidencePath,
+  isSpecHeadingNotRequirement,
 } from "./pathFilters.js";
 
 export type ReqStatus =
@@ -19,7 +21,8 @@ export type ReqStatus =
   | "partial"
   | "missing"
   | "contradicts"
-  | "unverified";
+  | "unverified"
+  | "n/a";
 
 export type ReqTraceRow = {
   id: string;
@@ -33,16 +36,33 @@ export type ReqTraceRow = {
 
 export type ReqTraceMatrix = {
   rows: ReqTraceRow[];
-  /** Share of REQs with code-backed statuses (implemented/partial/contradicts). */
+  /**
+   * Share of eligible REQs (excludes n/a) with code-backed statuses
+   * (implemented/partial/contradicts).
+   */
   coverageRatio: number;
+  /** Eligible REQ count (denominator — excludes n/a headings). */
+  eligibleCount: number;
+  codeBackedCount: number;
   implementedCount: number;
   partialCount: number;
   missingCount: number;
   contradictsCount: number;
   unverifiedCount: number;
+  naCount: number;
   markdown: string;
   json: object;
 };
+
+/** Canonical coverage line used everywhere (strategy / final-report / claims). */
+export function formatGroundedCoverageLine(input: {
+  coverageRatio: number;
+  codeBackedCount: number;
+  eligibleCount: number;
+}): string {
+  const pct = (Number(input.coverageRatio) * 100).toFixed(1);
+  return `Coverage (code-backed: implemented+partial+contradicts): ${pct}% (${input.codeBackedCount}/${input.eligibleCount})`;
+}
 
 const STOP_TOKENS = new Set(
   [
@@ -127,13 +147,24 @@ function scoreAgainstRepo(
 
   const considerPath = (rel: string, body?: string) => {
     if (!rel || isJunkEvidencePath(rel)) return;
+    const src = body ?? fileBodies.get(rel) ?? "";
+    // Nav / mock / constants: never implementation evidence (weak partial at most)
+    if (isNonFeatureEvidencePath(rel)) {
+      if (isAppSourcePath(rel)) {
+        keywordHits += 1;
+        evidenceNotes.push(
+          `non-feature path ${rel} (nav/mock/constants) — at most partial`
+        );
+      }
+      return;
+    }
     if (isAppSourcePath(rel)) {
-      appPaths.push(rel);
-      const src = body ?? fileBodies.get(rel) ?? "";
-      if (hasSymbolOrHandlerEvidence(src, tokens)) {
+      if (hasSymbolOrHandlerEvidence(src, tokens, req.text, rel)) {
+        appPaths.push(rel);
         symbolHits += 1;
         evidenceNotes.push(`symbol/handler evidence in ${rel}`);
       } else {
+        appPaths.push(rel);
         keywordHits += 1;
         evidenceNotes.push(`keyword hit in app source ${rel}`);
       }
@@ -201,7 +232,10 @@ function scoreAgainstRepo(
     return {
       status: "missing",
       codePaths: [],
-      evidenceNotes: ["no app-source evidence found"],
+      evidenceNotes: [
+        ...evidenceNotes.slice(0, 4),
+        "no app-source evidence found",
+      ],
     };
   }
 
@@ -334,17 +368,22 @@ function recomputeCounts(rows: ReqTraceRow[]) {
   const missingCount = rows.filter((r) => r.status === "missing").length;
   const contradictsCount = rows.filter((r) => r.status === "contradicts").length;
   const unverifiedCount = rows.filter((r) => r.status === "unverified").length;
-  // Code-backed only — unverified/missing do not inflate coverage
+  const naCount = rows.filter((r) => r.status === "n/a").length;
+  const eligible = rows.filter((r) => r.status !== "n/a");
+  // Code-backed only — n/a excluded from denominator; unverified/missing do not inflate
   const codeBacked = implementedCount + partialCount + contradictsCount;
-  const coverageRatio = rows.length ? codeBacked / rows.length : 0;
+  const eligibleCount = eligible.length;
+  const coverageRatio = eligibleCount ? codeBacked / eligibleCount : 0;
   return {
     implementedCount,
     partialCount,
     missingCount,
     contradictsCount,
     unverifiedCount,
+    naCount,
     coverageRatio,
     codeBacked,
+    eligibleCount,
   };
 }
 
@@ -355,6 +394,17 @@ export function buildReqTraceMatrix(
 ): ReqTraceMatrix {
   const bodies = loadSampleBodies(index.targetRepo);
   let rows: ReqTraceRow[] = requirements.map((req) => {
+    if (isSpecHeadingNotRequirement(req.text)) {
+      return {
+        id: req.id,
+        text: req.text,
+        sourceFile: req.sourceFile,
+        section: req.section,
+        status: "n/a" as const,
+        codePaths: [],
+        evidenceNotes: ["spec heading / section title — excluded from coverage"],
+      };
+    }
     const scored = scoreAgainstRepo(req, index, bodies);
     return {
       id: req.id,
@@ -367,12 +417,17 @@ export function buildReqTraceMatrix(
   rows = applyP0FindingCaps(rows, checklistFindings);
 
   const counts = recomputeCounts(rows);
+  const coverageLine = formatGroundedCoverageLine({
+    coverageRatio: counts.coverageRatio,
+    codeBackedCount: counts.codeBacked,
+    eligibleCount: counts.eligibleCount,
+  });
 
   const markdown = [
     `# Requirements traceability matrix`,
     ``,
-    `Coverage (code-backed: implemented+partial+contradicts): ${(counts.coverageRatio * 100).toFixed(1)}% (${counts.codeBacked}/${rows.length})`,
-    `implemented=${counts.implementedCount} partial=${counts.partialCount} missing=${counts.missingCount} contradicts=${counts.contradictsCount} unverified=${counts.unverifiedCount}`,
+    coverageLine,
+    `implemented=${counts.implementedCount} partial=${counts.partialCount} missing=${counts.missingCount} contradicts=${counts.contradictsCount} unverified=${counts.unverifiedCount} n/a=${counts.naCount}`,
     ``,
     `| ID | Status | Code paths | Requirement |`,
     `| --- | --- | --- | --- |`,
@@ -386,19 +441,25 @@ export function buildReqTraceMatrix(
   return {
     rows,
     coverageRatio: counts.coverageRatio,
+    eligibleCount: counts.eligibleCount,
+    codeBackedCount: counts.codeBacked,
     implementedCount: counts.implementedCount,
     partialCount: counts.partialCount,
     missingCount: counts.missingCount,
     contradictsCount: counts.contradictsCount,
     unverifiedCount: counts.unverifiedCount,
+    naCount: counts.naCount,
     markdown,
     json: {
       coverageRatio: counts.coverageRatio,
+      eligibleCount: counts.eligibleCount,
+      codeBackedCount: counts.codeBacked,
       implementedCount: counts.implementedCount,
       partialCount: counts.partialCount,
       missingCount: counts.missingCount,
       contradictsCount: counts.contradictsCount,
       unverifiedCount: counts.unverifiedCount,
+      naCount: counts.naCount,
       rows,
     },
   };

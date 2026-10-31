@@ -10,8 +10,10 @@ import { fileURLToPath } from "url";
 import {
   isAppSourcePath,
   isJunkEvidencePath,
+  isNonFeatureEvidencePath,
+  isSpecHeadingNotRequirement,
 } from "../src/agency/pathFilters.js";
-import { buildReqTraceMatrix } from "../src/agency/reqTrace.js";
+import { buildReqTraceMatrix, formatGroundedCoverageLine } from "../src/agency/reqTrace.js";
 import { indexRepo } from "../src/agency/repoIndex.js";
 import { scanRepoEvidence } from "../src/agency/evidence.js";
 import { ingestSpecFolder } from "../src/agency/specIngest.js";
@@ -27,6 +29,7 @@ const HERE = path.dirname(fileURLToPath(import.meta.url));
 const FIX = path.join(HERE, "fixtures", "grounded-audit");
 const JUNK_REPO = path.join(FIX, "junk-paths-repo");
 const JUNK_SPEC = path.join(FIX, "junk-paths-spec");
+const HEADING_SPEC = path.join(FIX, "heading-reqs-spec");
 const SPENDY_REPO = path.join(FIX, "spendy-repo");
 const SPENDY_SPEC = path.join(FIX, "spendy-spec");
 
@@ -94,6 +97,15 @@ describe("path filters — junk / backup / prior reports", () => {
 
     // Coverage must not be inflated by junk "hits"
     expect(pack.reqMatrix!.coverageRatio).toBeLessThan(0.875);
+    // Nav / mock paths must never appear as codePaths for OCR/voice
+    for (const r of [voice!, ocr!]) {
+      expect(
+        r.codePaths.some((p) =>
+          /AuthStack|BottomTabs|mockData|navigation\//i.test(p)
+        )
+      ).toBe(false);
+      expect(r.status).toBe("missing");
+    }
     // EGP home screen may be partial/implemented from real src — fine
     const egp = rows.find((r) => /EGP/i.test(r.text));
     expect(egp).toBeTruthy();
@@ -102,6 +114,56 @@ describe("path filters — junk / backup / prior reports", () => {
         true
       );
     }
+  });
+
+  it("classifies navigation/mock/constants as non-feature evidence paths", () => {
+    expect(isNonFeatureEvidencePath("src/navigation/AuthStack.js")).toBe(true);
+    expect(isNonFeatureEvidencePath("src/navigation/BottomTabs.js")).toBe(true);
+    expect(isNonFeatureEvidencePath("src/data/mockData.js")).toBe(true);
+    expect(isNonFeatureEvidencePath("src/constants/theme.js")).toBe(true);
+    expect(isNonFeatureEvidencePath("src/screens/HomeScreen.js")).toBe(false);
+    expect(isSpecHeadingNotRequirement("Project Overview")).toBe(true);
+    expect(isSpecHeadingNotRequirement("Functional Requirements Analysis")).toBe(
+      true
+    );
+    expect(isSpecHeadingNotRequirement("Tech Stack")).toBe(true);
+    expect(
+      isSpecHeadingNotRequirement("MUST support OCR receipt scanning via camera")
+    ).toBe(false);
+  });
+
+  it("marks section-heading REQs as n/a and excludes them from coverage denominator", async () => {
+    const spec = await ingestSpecFolder(HEADING_SPEC);
+    const headings = spec.requirements.filter((r) =>
+      isSpecHeadingNotRequirement(r.text)
+    );
+    expect(headings.length).toBeGreaterThanOrEqual(3);
+    const index = indexRepo(JUNK_REPO);
+    const matrix = buildReqTraceMatrix(spec.requirements, index, []);
+    const na = matrix.rows.filter((r) => r.status === "n/a");
+    expect(na.length).toBeGreaterThanOrEqual(3);
+    expect(matrix.naCount).toBe(na.length);
+    expect(matrix.eligibleCount).toBe(matrix.rows.length - matrix.naCount);
+    expect(matrix.eligibleCount).toBeLessThan(matrix.rows.length);
+    // Coverage denominator is eligible only
+    const line = formatGroundedCoverageLine({
+      coverageRatio: matrix.coverageRatio,
+      codeBackedCount: matrix.codeBackedCount,
+      eligibleCount: matrix.eligibleCount,
+    });
+    expect(matrix.markdown).toContain(line);
+    expect(matrix.markdown).toMatch(/n\/a=/);
+    const rtm = buildDeterministicRtmBlock({
+      reqRows: matrix.rows,
+      coverageRatio: matrix.coverageRatio,
+      eligibleCount: matrix.eligibleCount,
+      codeBackedCount: matrix.codeBackedCount,
+    });
+    expect(rtm).toContain(line);
+    // Single coverage figure — no alternate N/totalRows
+    expect(rtm).not.toMatch(
+      new RegExp(`${matrix.codeBackedCount}/${matrix.rows.length}\\)`)
+    );
   });
 
   it("P0 mock/auth findings cap related REQs at partial (Spendy)", () => {
@@ -138,11 +200,13 @@ describe("deterministic blocks never truncated in written files", () => {
     });
     const longNarrative = ("Gap analysis paragraph. ").repeat(400);
     const strategy = injectGroundedStrategyBlocks(
-      `## Direct answer\n${longNarrative}\n`,
+      `## Direct answer\n${longNarrative}\nDeterministic Coverage: 2/16 (12.5%)\n...(truncated narrative only)\n`,
       {
         checklistFindings: pack.checklist!.findings,
         reqRows: pack.reqMatrix!.rows,
         coverageRatio: pack.reqMatrix!.coverageRatio,
+        eligibleCount: pack.reqMatrix!.eligibleCount,
+        codeBackedCount: pack.reqMatrix!.codeBackedCount,
         groundedCurrency: "EGP",
       }
     );
@@ -150,6 +214,19 @@ describe("deterministic blocks never truncated in written files", () => {
     // Written strategy must contain full deterministic blocks (no truncation marker)
     expect(strategy).toMatch(/## Requirements traceability \(deterministic\)/);
     expect(strategy).toMatch(/## Key Findings/);
+    expect(strategy).not.toMatch(/\.\.\.\(\s*truncated/);
+    expect(strategy).not.toMatch(/Deterministic Coverage:\s*2\/16/);
+    const groundedLine = formatGroundedCoverageLine({
+      coverageRatio: pack.reqMatrix!.coverageRatio,
+      codeBackedCount: pack.reqMatrix!.codeBackedCount,
+      eligibleCount: pack.reqMatrix!.eligibleCount,
+    });
+    expect(strategy).toContain(groundedLine);
+    // Exactly one coverage figure in the written strategy
+    const coverageHits = strategy.match(
+      /Coverage \(code-backed: implemented\+partial\+contradicts\):/g
+    );
+    expect(coverageHits?.length).toBe(1);
     const rtmSection = strategy.match(
       /## Requirements traceability \(deterministic\)[\s\S]*?(?=\n## Key Findings)/
     )?.[0];

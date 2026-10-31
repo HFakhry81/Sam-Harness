@@ -13,6 +13,7 @@ import {
   deleteClaimSentences,
   detectHallucinatedImplementedStatus,
   detectInvalidClaims,
+  detectMismatchedCoverageClaims,
   finalizeClaimsClean,
   buildClaimRewritePrompt,
 } from "../src/agency/claimVerify.js";
@@ -20,6 +21,8 @@ import {
   buildDeterministicKeyFindingsBlock,
   buildDeterministicRtmBlock,
   injectGroundedStrategyBlocks,
+  stripModelCoverageClaims,
+  stripTruncationMarkers,
 } from "../src/agency/finalReport.js";
 import { extractAuditorIssues } from "../src/agency/reviewGraph.js";
 import { scanRepoEvidence } from "../src/agency/evidence.js";
@@ -137,16 +140,62 @@ describe("Implemented status claim checker", () => {
 
   it("allows Implemented when citing real code paths matching grounded status", () => {
     const draft =
-      "REQ-002 is Implemented in `src/data/mockData.js` for EGP currency display.";
+      "REQ-002 is Implemented in `src/screens/HomeScreen.js` for EGP currency display.";
     const grounded = [
       {
         id: "REQ-002",
         status: "implemented",
-        codePaths: ["src/data/mockData.js"],
+        codePaths: ["src/screens/HomeScreen.js"],
       },
     ];
     const hits = detectHallucinatedImplementedStatus(draft, grounded);
     expect(hits.length).toBe(0);
+  });
+
+  it("rejects model coverage % or N/M that disagree with grounded reqTrace", () => {
+    const grounded = {
+      coverageRatio: 0.25,
+      codeBackedCount: 4,
+      eligibleCount: 16,
+    };
+    const draft = [
+      `## Direct answer`,
+      `Deterministic Coverage: 2/16 (12.5%)`,
+      `Coverage looks like 12.5% overall.`,
+      `## Requirements traceability (deterministic)`,
+      `Coverage (code-backed: implemented+partial+contradicts): 25.0% (4/16)`,
+    ].join("\n");
+    const hits = detectMismatchedCoverageClaims(draft, grounded);
+    expect(hits.some((h) => h.kind === "invalid_coverage")).toBe(true);
+    expect(hits.some((h) => /12\.5%/.test(h.claim) || h.claim === "2/16")).toBe(
+      true
+    );
+    // Authoritative RTM line must not be flagged
+    expect(hits.every((h) => !/25\.0%/.test(h.claim))).toBe(true);
+
+    const detected = detectInvalidClaims(draft, REPO, "EGP", [], grounded);
+    expect(detected.ok).toBe(false);
+    expect(detected.invalid.some((i) => i.kind === "invalid_coverage")).toBe(
+      true
+    );
+
+    const stripped = stripModelCoverageClaims(draft);
+    expect(stripped).not.toMatch(/Deterministic Coverage:\s*2\/16/);
+    expect(stripped).not.toMatch(/Coverage looks like 12\.5%/);
+    expect(stripped).toMatch(/25\.0% \(4\/16\)/);
+  });
+
+  it("stripTruncationMarkers removes ...(truncated narrative only) from written text", () => {
+    const dirty = [
+      `## Direct answer`,
+      `Gap analysis ...(truncated narrative only)`,
+      `## Requirements traceability (deterministic)`,
+      `| REQ-001 | missing | — | voice |`,
+      `...(truncated)`,
+    ].join("\n");
+    const clean = stripTruncationMarkers(dirty);
+    expect(clean).not.toMatch(/\.\.\.\(\s*truncated/);
+    expect(clean).toMatch(/REQ-001/);
   });
 });
 
