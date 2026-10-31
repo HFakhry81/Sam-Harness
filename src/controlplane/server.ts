@@ -899,6 +899,9 @@ async function handleChat(req: http.IncomingMessage, res: http.ServerResponse) {
       sources: result?.sources || [],
       notePath: result?.notePath || null,
       noArtifacts: true,
+      skippedModel: result?.skippedModel !== false,
+      durationMs: result?.durationMs || 0,
+      model: result?.model || null,
     });
   } catch (e: any) {
     // Chat failures: still reply, never FAILED / task retained
@@ -2606,7 +2609,9 @@ async function boot() {
           .join(" | ") +
         (listAllowlistRoots(ROOT).length > 8 ? " | …" : "")
     );
-    console.log(`[Control Plane] Session ${session.id} · ${session.entries.length} prior entries`);
+    console.log(
+      `[Control Plane] Session ${session.id} | ${session.entries.length} prior entries`
+    );
     console.log(
       `[Control Plane] Daily Ops scheduler on (tick ${process.env.DAILY_OPS_TICK_MS || 30000}ms)`
     );

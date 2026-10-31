@@ -1,6 +1,7 @@
 /**
  * Cheap local model helpers for intent triage + chat/research replies.
  * Models for triage must stay <=3B (default qwen2.5:1.5b).
+ * Ambiguous triage only — short timeout; never used for deterministic greetings.
  */
 import {
   invokeQuickModel,
@@ -9,6 +10,7 @@ import {
   QUICK_ROLE_ID,
 } from "../quickPath/quickModel.js";
 import type { IntentRoute } from "./types.js";
+import { isHermeticIntentMode } from "./classify.js";
 
 export {
   invokeQuickModel,
@@ -17,37 +19,69 @@ export {
   QUICK_ROLE_ID,
 };
 
+/** Short wall-clock budget for ambiguous-intent model triage (ms). */
+export const CLASSIFIER_TIMEOUT_MS = 1500;
+
+/** Short wall-clock budget for non-greeting chat model replies (ms). */
+export const CHAT_MODEL_TIMEOUT_MS = 2500;
+
 const ALLOWED: IntentRoute[] = ["chat", "research", "task", "complex", "clarify"];
+
+export async function withTimeout<T>(
+  promise: Promise<T>,
+  ms: number,
+  label = "timeout"
+): Promise<T> {
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  try {
+    return await Promise.race([
+      promise,
+      new Promise<T>((_, reject) => {
+        timer = setTimeout(
+          () => reject(new Error(`${label} after ${ms}ms`)),
+          ms
+        );
+      }),
+    ]);
+  } finally {
+    if (timer) clearTimeout(timer);
+  }
+}
 
 /**
  * Tiny classifier for ambiguous prompts. Returns one IntentRoute or null.
- * Uses the quick role local model only (forceLocal).
+ * Uses the quick role local model only (forceLocal). Skipped in hermetic mode.
  */
 export async function modelClassifyIntentRoute(
   prompt: string,
   cwd: string = process.cwd()
 ): Promise<IntentRoute | null> {
+  if (isHermeticIntentMode()) return null;
   try {
-    const call = await invokeQuickModel({
-      cwd,
-      numPredict: 12,
-      temperature: 0,
-      allowCloud: false,
-      prompt: [
-        "Classify the user message into EXACTLY one label:",
-        "chat | research | task | complex | clarify",
-        "Rules:",
-        "- chat: greetings, thanks, name intros, simple questions, small talk",
-        "- research: needs web/current info / search",
-        "- task: one simple file/desktop/command action",
-        "- complex: multi-step, architecture, audit a path, build/fix systems",
-        "- clarify: too ambiguous to choose chat vs task safely",
-        "Reply with only the label.",
-        "",
-        `Message: ${prompt.slice(0, 500)}`,
-      ].join("\n"),
-      system: "You are a strict intent classifier. Reply with one label only.",
-    });
+    const call = await withTimeout(
+      invokeQuickModel({
+        cwd,
+        numPredict: 12,
+        temperature: 0,
+        allowCloud: false,
+        prompt: [
+          "Classify the user message into EXACTLY one label:",
+          "chat | research | task | complex | clarify",
+          "Rules:",
+          "- chat: greetings, thanks, name intros, simple questions, small talk",
+          "- research: needs web/current info / search",
+          "- task: one simple file/desktop/command action",
+          "- complex: multi-step, architecture, audit a path, build/fix systems",
+          "- clarify: too ambiguous to choose chat vs task safely",
+          "Reply with only the label.",
+          "",
+          `Message: ${prompt.slice(0, 500)}`,
+        ].join("\n"),
+        system: "You are a strict intent classifier. Reply with one label only.",
+      }),
+      CLASSIFIER_TIMEOUT_MS,
+      "intent classifier"
+    );
     const label = call.text
       .trim()
       .toLowerCase()

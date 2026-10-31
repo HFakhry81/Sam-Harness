@@ -228,7 +228,10 @@ async function main() {
         "chat";
       ok(
         "Intent router",
-        `route=${route} · ${classification.reason} · ${result.durationMs}ms · ${result.model || "local-fallback"}`
+        `route=${route} | ${classification.reason} | ${result.durationMs}ms | ${
+          result.model ||
+          (result.skippedModel ? "deterministic" : "fallback")
+        }`
       );
       console.log(`\n${result.reply}\n`);
       try {
@@ -429,7 +432,7 @@ async function main() {
     `${colors.cyan} L2 outputs: ceo-draft / audit / execution-plan / help / marketing / final-report${colors.reset}`
   );
   console.log(
-    `${colors.cyan} Packs (self): ${layout.reports} · Run: ${outputRun.runDir}${colors.reset}`
+    `${colors.cyan} Packs (self): ${layout.reports} | Run: ${outputRun.runDir}${colors.reset}`
   );
   console.log(
     `${colors.cyan} L3 outputs: <repo>/docs/sam-harness/* + implementation-result.md${colors.reset}`

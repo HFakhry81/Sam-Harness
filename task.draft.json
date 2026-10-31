@@ -1,0 +1,45 @@
+{
+  "savedAt": "2026-10-31T10:13:16.507Z",
+  "prompt": "حلل الكود في المسار E:\\UpNexa.com\\spendy",
+  "title": "حلل الكود في المسار E:\\UpNexa.com\\spendy",
+  "ready": true,
+  "confidence": 0.6,
+  "needsClarification": [],
+  "spec": {
+    "id": "----e-upnexa-com-spendy-mvw8tkd6",
+    "locale": "mixed",
+    "route": "architecture",
+    "intent": "analyze",
+    "confidence": 0.6,
+    "title": "حلل الكود في المسار E:\\UpNexa.com\\spendy",
+    "goal": "حلل الكود في المسار E:\\UpNexa.com\\spendy",
+    "rawPrompt": "حلل الكود في المسار E:\\UpNexa.com\\spendy",
+    "entities": {
+      "sources": [],
+      "destinations": [],
+      "names": [],
+      "constraints": []
+    },
+    "planSteps": [],
+    "workspaceMode": "code",
+    "roots": [],
+    "risk": "low",
+    "successCriteria": [
+      {
+        "type": "pack_created",
+        "note": "Sam-Harness no.X with audit + execution-plan"
+      }
+    ],
+    "forbidden": [
+      "client_code_edit_without_go"
+    ],
+    "assumptions": [
+      "targetRepo=/workspace"
+    ],
+    "needsClarification": [],
+    "targetRepo": "/workspace",
+    "packDir": "/workspace/docs",
+    "allowClientCodeEdits": false
+  },
+  "body": "# Sam-Harness Task\n\n## Route\narchitecture\n\n## Title\nحلل الكود في المسار E:\\UpNexa.com\\spendy\n\n## Goal\nحلل الكود في المسار E:\\UpNexa.com\\spendy\n\n## Task Spec\n- id: `----e-upnexa-com-spendy-mvw8tkd6`\n- intent: analyze\n- confidence: 0.60\n- risk: `low`\n\n## Target\n- targetRepo: `/workspace`\n- packDir: `/workspace/docs`\n\n## Hard boundary\n- READ for evidence; WRITE pack under `Sam-Harness no.X` only unless GO.\n- On [REJECTED]: أسباب الرفض + درجة الخطورة + طريقة الحل.\n- Forbidden: client_code_edit_without_go\n\n## Mission\n1. Intake / Evidence\n2. Strategist ↔ Auditor (≤5)\n3. Architect / Help / Marketer after APPROVED\n4. Delivery OS + pack archive\n\n## Success criteria\n- [pack_created] Sam-Harness no.X with audit + execution-plan"
+}

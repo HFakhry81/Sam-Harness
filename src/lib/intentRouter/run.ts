@@ -11,11 +11,18 @@ import { appendAudit } from "../trust/auditLog.js";
 import { getOutputHome, ensureOutputHome } from "../outputHome.js";
 import {
   classifyIntent,
+  isHermeticIntentMode,
+  shouldSkipChatModel,
   type ClassifyOptions,
 } from "./classify.js";
 import type { IntentDecision, IntentRoute } from "./types.js";
 import { detectUserLanguage, languageReplyDirective } from "../quickPath/language.js";
-import { invokeQuickModel, modelClassifyIntentRoute } from "./model.js";
+import {
+  invokeQuickModel,
+  modelClassifyIntentRoute,
+  withTimeout,
+  CHAT_MODEL_TIMEOUT_MS,
+} from "./model.js";
 import {
   runWebSearch,
   sourcesFromSearch,
@@ -126,40 +133,63 @@ export function emptyResearchReply(
 
 async function runChatReply(input: {
   prompt: string;
-  intent: IntentDecision["intent"];
+  decision: IntentDecision;
   invokeModel: typeof invokeQuickModel;
   cwd: string;
   runId?: string;
+  /** Caller injected a model stub (unit tests) — may use it for non-greeting chat. */
+  allowInjectedModel?: boolean;
 }): Promise<{
   reply: string;
   model?: string;
   costUsd?: number;
   cloud?: boolean;
   language: DetectedLanguage;
+  skippedModel?: boolean;
 }> {
   const lang = detectUserLanguage(input.prompt);
+  // Greetings / high-confidence heuristic chat: instantaneous deterministic reply.
+  // Never wait on Ollama for "مرحبا اسمي …" / hi / thanks.
+  const skip =
+    shouldSkipChatModel(input.decision) ||
+    (isHermeticIntentMode() && !input.allowInjectedModel);
+  if (skip) {
+    return {
+      reply: fallbackChatReply(input.prompt, lang),
+      language: lang,
+      costUsd: 0,
+      cloud: false,
+      skippedModel: true,
+    };
+  }
+
   const kind =
-    input.intent === "smalltalk"
+    input.decision.intent === "smalltalk"
       ? "Respond as a brief friendly greeting/acknowledgment."
       : "Answer the simple question briefly and accurately. No tools. No files.";
   try {
-    const call = await input.invokeModel({
-      cwd: input.cwd,
-      runId: input.runId,
-      numPredict: 220,
-      prompt: input.prompt,
-      system: [
-        "You are Sam-Harness chat assistant.",
-        kind,
-        languageReplyDirective(lang),
-      ].join("\n"),
-    });
+    const call = await withTimeout(
+      input.invokeModel({
+        cwd: input.cwd,
+        runId: input.runId,
+        numPredict: 220,
+        prompt: input.prompt,
+        system: [
+          "You are Sam-Harness chat assistant.",
+          kind,
+          languageReplyDirective(lang),
+        ].join("\n"),
+      }),
+      CHAT_MODEL_TIMEOUT_MS,
+      "chat model"
+    );
     return {
       reply: call.text || fallbackChatReply(input.prompt, lang),
       model: call.model,
       costUsd: call.costUsd,
       cloud: call.cloud,
       language: lang,
+      skippedModel: false,
     };
   } catch {
     return {
@@ -167,6 +197,7 @@ async function runChatReply(input: {
       language: lang,
       costUsd: 0,
       cloud: false,
+      skippedModel: true,
     };
   }
 }
@@ -180,6 +211,7 @@ async function runResearch(input: {
   networkApproved?: boolean | string;
   onEvent?: (ev: IntentRouterEvent) => void;
   writeResearchNote?: boolean;
+  allowInjectedModel?: boolean;
 }): Promise<{
   reply: string;
   model?: string;
@@ -258,31 +290,46 @@ async function runResearch(input: {
   let model: string | undefined;
   let costUsd = 0;
   let cloud = false;
-  try {
-    const call = await input.invokeModel({
-      cwd: input.cwd,
-      runId: input.runId,
-      allowCloud: false,
-      numPredict: 400,
-      prompt: [
-        `User request: ${input.prompt}`,
-        "",
-        "Evidence from fetched pages ONLY (cite by number):",
-        evidence,
-        "",
-        "Rules: summarize ONLY evidence; cite [1],[2]; do not invent facts.",
-      ].join("\n"),
-      system: [
-        "You are a grounded research summarizer.",
-        languageReplyDirective(lang),
-      ].join("\n"),
-    });
-    text = call.text;
-    model = call.model;
-    costUsd = call.costUsd;
-    cloud = call.cloud;
-  } catch (e: any) {
-    text = emptyResearchReply(lang, e?.message || String(e));
+  let skippedModel = false;
+  // Hermetic / no-model mode: cite sources without calling a real LLM.
+  if (isHermeticIntentMode() && !input.allowInjectedModel) {
+    text =
+      lang === "ar" || lang === "mixed"
+        ? "ملخص سريع من المصادر (وضع اختبار — بدون نموذج)."
+        : "Brief source-backed summary (test mode — no model).";
+    skippedModel = true;
+  } else {
+    try {
+      const call = await withTimeout(
+        input.invokeModel({
+          cwd: input.cwd,
+          runId: input.runId,
+          allowCloud: false,
+          numPredict: 400,
+          prompt: [
+            `User request: ${input.prompt}`,
+            "",
+            "Evidence from fetched pages ONLY (cite by number):",
+            evidence,
+            "",
+            "Rules: summarize ONLY evidence; cite [1],[2]; do not invent facts.",
+          ].join("\n"),
+          system: [
+            "You are a grounded research summarizer.",
+            languageReplyDirective(lang),
+          ].join("\n"),
+        }),
+        CHAT_MODEL_TIMEOUT_MS * 2,
+        "research model"
+      );
+      text = call.text;
+      model = call.model;
+      costUsd = call.costUsd;
+      cloud = call.cloud;
+    } catch (e: any) {
+      text = emptyResearchReply(lang, e?.message || String(e));
+      skippedModel = true;
+    }
   }
 
   const reply = formatReplyWithSources(text, sources, lang);
@@ -316,7 +363,7 @@ async function runResearch(input: {
     costUsd,
     cloud,
     notePath,
-    skippedModel: false,
+    skippedModel,
   };
 }
 
@@ -329,11 +376,17 @@ export async function runIntentRouter(
   const cwd = input.cwd || process.cwd();
   const started = Date.now();
   const classify = input.classify || classifyIntent;
+  const injectedModel = Boolean(input.invokeModel);
+  // Model triage ONLY when heuristic is ambiguous — never for greetings.
+  // Hermetic / test isolation never calls a real classifier model.
+  const allowModelTriage =
+    !input.heuristicOnly &&
+    !(isHermeticIntentMode() && !injectedModel);
   const decision = await classify(input.prompt, {
     forceAgency: input.forceAgency,
-    modelClassify: input.heuristicOnly
-      ? undefined
-      : (p) => modelClassifyIntentRoute(p, cwd),
+    modelClassify: allowModelTriage
+      ? (p) => modelClassifyIntentRoute(p, cwd)
+      : undefined,
   });
 
   if (decision.route === "task" || decision.route === "complex") {
@@ -405,6 +458,7 @@ export async function runIntentRouter(
         networkApproved: input.networkApproved,
         onEvent: emit,
         writeResearchNote: input.writeResearchNote,
+        allowInjectedModel: injectedModel,
       });
       return {
         ok: true,
@@ -419,10 +473,11 @@ export async function runIntentRouter(
     // chat
     const partial = await runChatReply({
       prompt: input.prompt,
-      intent: decision.intent,
+      decision,
       invokeModel,
       cwd,
       runId: input.runId,
+      allowInjectedModel: injectedModel,
     });
     return {
       ok: true,

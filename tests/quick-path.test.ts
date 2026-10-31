@@ -125,9 +125,9 @@ describe("tryRunQuickPath", () => {
     fs.rmSync(tmp, { recursive: true, force: true });
   });
 
-  it("quick path uses injected local model for greetings", async () => {
+  it("greetings use deterministic reply — never call a model", async () => {
     const invokeModel = vi.fn(async () => ({
-      text: "أهلاً! كيف أقدر أساعدك اليوم؟",
+      text: "SHOULD_NOT_RUN",
       model: "qwen2.5:1.5b",
       cloud: false,
       costUsd: 0,
@@ -144,13 +144,34 @@ describe("tryRunQuickPath", () => {
     expect(out).not.toBeNull();
     expect(out!.result.replyPath).toBe("chat");
     expect(out!.result.ok).toBe(true);
-    expect(out!.result.model).toBe("qwen2.5:1.5b");
+    expect(out!.result.skippedModel).toBe(true);
     expect(out!.result.language).toBe("ar");
     expect(out!.result.noArtifacts).toBe(true);
-    expect(invokeModel).toHaveBeenCalledTimes(1);
+    expect(out!.result.reply).toMatch(/أهلا|مرحبا|Sam-Harness/i);
+    expect(invokeModel).not.toHaveBeenCalled();
+    expect(out!.result.durationMs).toBeLessThan(500);
     // Chat must not write report artifacts into cwd
     expect(fs.existsSync(path.join(tmp, "execution-result.md"))).toBe(false);
     expect(fs.existsSync(path.join(tmp, "final-report.md"))).toBe(false);
+  });
+
+  it("owner greeting مرحبا اسمي مز هيثم never calls a model", async () => {
+    const invokeModel = vi.fn(async () => ({
+      text: "SHOULD_NOT_RUN",
+      model: "qwen2.5:1.5b",
+      cloud: false,
+      costUsd: 0,
+      baseUrl: "http://localhost:11434",
+    }));
+    const out = await tryRunQuickPath({
+      prompt: "مرحبا اسمي مز هيثم",
+      cwd: tmp,
+      heuristicOnly: false,
+      invokeModel: invokeModel as any,
+    });
+    expect(out!.result.route).toBe("chat");
+    expect(out!.result.skippedModel).toBe(true);
+    expect(invokeModel).not.toHaveBeenCalled();
   });
 
   it("web path uses mocked search and cites URLs", async () => {
@@ -339,23 +360,19 @@ describe("web parse helpers", () => {
 });
 
 describe("reply language for Arabic greeting", () => {
-  it("quick result language is ar for اهلا", async () => {
+  it("deterministic Arabic greeting reply (no model)", async () => {
     const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "sh-quick-lang-"));
     try {
       const out = await tryRunQuickPath({
         prompt: "مرحبا",
         cwd: tmp,
         heuristicOnly: true,
-        invokeModel: async () =>
-          ({
-            text: "مرحباً بك! كيف يمكنني مساعدتك؟",
-            model: "qwen2.5:1.5b",
-            cloud: false,
-            costUsd: 0,
-            baseUrl: "http://127.0.0.1:11434",
-          }) as QuickPathResult extends never ? never : any,
+        invokeModel: async () => {
+          throw new Error("model must not be called");
+        },
       });
       expect(out!.result.language).toBe("ar");
+      expect(out!.result.skippedModel).toBe(true);
       expect(replyMatchesLanguage(out!.result.reply, "ar")).toBe(true);
     } finally {
       fs.rmSync(tmp, { recursive: true, force: true });

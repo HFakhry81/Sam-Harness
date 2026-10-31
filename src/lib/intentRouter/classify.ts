@@ -19,7 +19,40 @@ const SMALLTALK_ONLY_RE =
 
 /** Greeting + self-intro / name fluff — still chat (the owner greeting from the bug report). */
 const GREETING_INTRO_RE =
-  /^(?:hi+|hello|hey+|أهلاً?|اهلاً?|مرحباً?|مرحبه|هلا+|سلام)(?:[\s,.،!]+(?:(?:my\s+name\s+is|i(?:'m| am)|اسمي|انا|أنا)\s+[\p{L}\p{N}.'_-]{1,40})|(?:[\s,.،]+[\p{L}\p{N}.'_-]{1,24}){1,6})[\s!?.،؟!~]*$/iu;
+  /^(?:hi+|hello|hey+|أهلاً?|اهلاً?|مرحباً?|مرحبه|هاي|هلا+|سلام)(?:[\s,.،!]+(?:(?:my\s+name\s+is|i(?:'m| am)|اسمي|انا|أنا)\s+[\p{L}\p{N}.'_-]{1,40})|(?:[\s,.،]+[\p{L}\p{N}.'_-]{1,24}){1,6})[\s!?.،؟!~]*$/iu;
+
+/** Confidence at/above this for heuristic chat → never call a model for the reply. */
+export const DETERMINISTIC_CHAT_MIN = 0.9;
+
+/**
+ * True when tests / CI must not call a real local model (Ollama).
+ * SAM_INTENT_HERMETIC=1 forces it; SAM_TEST_ISOLATION=1 (Vitest / CP child) also.
+ */
+export function isHermeticIntentMode(
+  env: NodeJS.ProcessEnv = process.env
+): boolean {
+  return (
+    String(env.SAM_INTENT_HERMETIC || "").trim() === "1" ||
+    String(env.SAM_QUICK_NO_MODEL || "").trim() === "1" ||
+    String(env.SAM_TEST_ISOLATION || "").trim() === "1"
+  );
+}
+
+/**
+ * Greetings / high-confidence heuristic chat must reply instantly — no model.
+ */
+export function shouldSkipChatModel(d: IntentDecision): boolean {
+  if (d.intent === "smalltalk") return true;
+  if (d.route === "clarify") return true;
+  if (
+    d.route === "chat" &&
+    d.source === "heuristic" &&
+    d.confidence >= DETERMINISTIC_CHAT_MIN
+  ) {
+    return true;
+  }
+  return false;
+}
 
 const WEB_RE =
   /(?:search\s+(?:the\s+)?web|google|look\s+up\s+online|web\s+search|browse|current\s+(?:news|events|price)|latest\s+news|give\s+me\s+details\s+about|what(?:'s| is)\s+happening|news\s+about|ابحث\s+(?:لي\s+)?(?:على|في)\s*(?:النت|الإنترنت|الانترنت|الويب)|بحث\s+ويب|تفاصيل\s+عن|أخبار|اخر\s+ال?أخبار|آخر\s+ال?أخبار|ما\s+آخر|ما\s+اخر)/iu;

@@ -10,6 +10,7 @@ import {
   classifyIntent,
   runIntentRouter,
   fallbackChatReply,
+  shouldSkipChatModel,
 } from "../src/lib/intentRouter/index.js";
 import { appendMessage, loadConversation, newConversationId } from "../src/lib/conversation/history.js";
 import { getOutputHome, ensureOutputHome } from "../src/lib/outputHome.js";
@@ -38,6 +39,24 @@ describe("intent router heuristics", () => {
     expect(c.route).toBe("chat");
     expect(c.intent).toBe("smalltalk");
     expect(c.confidence).toBeGreaterThanOrEqual(0.9);
+    expect(shouldSkipChatModel(c)).toBe(true);
+  });
+
+  it("skips model for Arabic greeting variants + name intros", () => {
+    for (const p of [
+      "مرحبا",
+      "مرحباً",
+      "اهلا",
+      "أهلا",
+      "السلام عليكم",
+      "هاي",
+      "مرحبا اسمي مز هيثم",
+      "Hello my name is Maz",
+    ]) {
+      const c = classifyIntentHeuristic(p);
+      expect(c.route, p).toBe("chat");
+      expect(shouldSkipChatModel(c), p).toBe(true);
+    }
   });
 
   it("routes research questions to research", () => {
@@ -92,7 +111,7 @@ describe("runIntentRouter chat has no artifacts", () => {
     const cwd = path.join(tmp, "cwd");
     fs.mkdirSync(cwd, { recursive: true });
     const invokeModel = vi.fn(async () => ({
-      text: "أهلاً! كيف أقدر أساعدك؟",
+      text: "SHOULD_NOT_RUN",
       model: "qwen2.5:1.5b",
       cloud: false,
       costUsd: 0,
@@ -111,7 +130,12 @@ describe("runIntentRouter chat has no artifacts", () => {
     expect(out!.route).toBe("chat");
     expect(out!.ok).toBe(true);
     expect(out!.noArtifacts).toBe(true);
+    expect(out!.skippedModel).toBe(true);
     expect(out!.reply).toMatch(/أهلا|مرحبا|Sam-Harness/i);
+    expect(out!.reply).not.toMatch(/SHOULD_NOT_RUN/);
+    // Deterministic: never call a model for greetings / name intros
+    expect(invokeModel).not.toHaveBeenCalled();
+    expect(out!.durationMs).toBeLessThan(500);
 
     const reports = path.join(getOutputHome(), "reports");
     if (fs.existsSync(reports)) {
@@ -123,6 +147,14 @@ describe("runIntentRouter chat has no artifacts", () => {
     expect(fs.existsSync(path.join(cwd, "task.ts"))).toBe(false);
     expect(fs.existsSync(path.join(cwd, "final-report.md"))).toBe(false);
     expect(fs.existsSync(path.join(cwd, "execution-result.md"))).toBe(false);
+  });
+
+  it("console-facing route reason is ASCII for owner greeting", () => {
+    const c = classifyIntentHeuristic("مرحبا اسمي مز هيثم");
+    expect(c.reason).toMatch(/^[\x00-\x7F]+$/);
+    const line = `route=${c.route} | ${c.reason} | 1ms | deterministic`;
+    expect(line).toMatch(/^[\x00-\x7F]+$/);
+    expect(line).not.toMatch(/·/);
   });
 
   it("falls back without escalating when model throws", async () => {
