@@ -1,6 +1,10 @@
 /**
  * Long-form roles must not use tiny 1–1.5B models.
  * Auto-escalate to cloud (within cost cap) or a >=7B local model.
+ *
+ * Self-learning policy: local models <=3B may only be used for simple
+ * triage / classification / extraction — never planning, review,
+ * translation, or research. Prefer deterministic logic; no extra paid calls.
  */
 import { getRoleConfig, resolveRoleModels } from "./teamConfig.js";
 import { useOllamaCloudNow } from "../agent/models.js";
@@ -37,6 +41,13 @@ export function isTinyModel(model: string): boolean {
   const b = parseModelSizeB(model);
   if (b == null) return false;
   return b > 0 && b < 7;
+}
+
+/** True when model is <=3B (self-learning / simple-task gate). */
+export function isSmallModel(model: string): boolean {
+  const b = parseModelSizeB(model);
+  if (b == null) return false;
+  return b > 0 && b <= 3;
 }
 
 export type ModelPolicyDecision = {

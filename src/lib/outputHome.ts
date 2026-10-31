@@ -64,7 +64,7 @@ export function ensureOutputHome(home: string = getOutputHome()): OutputLayout {
         "documents/  — generated documents",
         "exports/    — export bundles",
         "runs/       — per-run artifacts and logs (YYYY-MM-DD/<run-id>/)",
-        "memory/     — memory exports",
+        "memory/     — self-learning lessons.json + skills.json (+ promoted rules)",
         "temp/       — scratch (safe to delete; auto-cleaned)",
         "",
         "Override location with SAM_OUTPUT_HOME.",

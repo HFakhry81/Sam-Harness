@@ -52,6 +52,10 @@ flowchart TD
 - `--implement-only` skips L1/L2 and goes to Level-3 after GO.
 - Route values `intake` / `review_only` exist in types only — **not selectable as CLI routes** (**planned / not yet implemented** as CLI routes).
 
+## Self-learning memory
+
+Before Strategist / Auditor prompts, relevant entries from `SAM_OUTPUT_HOME/memory/` are injected in a delimited learned-memory block. Rejections and gate failures become lessons (deduped); approvals become skills. Recurring lessons may promote to deterministic pre-checks before the LLM auditor. CLI: `pnpm run memory`. Details: `docs/SELF_LEARNING_MEMORY.md`.
+
 ## Review loop (LangGraph)
 
 `MAX_LOOPS = 5` in `reviewGraph.ts`.
