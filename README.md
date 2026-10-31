@@ -51,6 +51,8 @@ Filesystem tools use a **desktop-controller** sandbox: normal user environment (
 
 **Phase 7:** Arabic-first i18n (RTL UI, Arabic agent/reports, intent cues) + one-click install (Windows PowerShell + macOS/Linux shell) + `pnpm run doctor`. See `docs/PHASE7_ARABIC_INSTALL.md`.
 
+**Self-learning memory:** lessons + skills persist under `SAM_OUTPUT_HOME/memory/` (deduped, retrieved into Strategist/Auditor prompts, promotable to deterministic pre-checks). CLI: `pnpm run memory -- list|show|prune`. See `docs/SELF_LEARNING_MEMORY.md`.
+
 ## Layout
 
 | Path | Role |
@@ -103,5 +105,6 @@ Control Plane: **Help** tab · API `GET /api/help` · bilingual docs under `docs
 - `docs/PHASE5_NEAR_ZERO_COST.md`
 - `docs/PHASE6_GATES_TRUST.md`
 - `docs/PHASE7_ARABIC_INSTALL.md`
+- `docs/SELF_LEARNING_MEMORY.md`
 - `docs/AGENCY_OPS.md`
 - `docs/engagements/EXAMPLE-CLIENT.md`

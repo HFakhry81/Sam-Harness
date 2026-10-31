@@ -67,6 +67,12 @@ import {
   MAX_CONSECUTIVE_STALLS,
 } from "./stallDetect.js";
 import { learningContextBlock } from "../controlplane/projectMemory.js";
+import {
+  applyMemoryPrechecks,
+  learnFromApproval,
+  learnFromRejection,
+  memoryContextForPrompts,
+} from "../memory/index.js";
 import { getCheckpointer } from "../lib/db/checkpointer.js";
 import { getPersistence } from "../lib/db/index.js";
 import { withRetry } from "../lib/retry.js";
@@ -387,6 +393,15 @@ function buildGraph() {
     const userGoal = state.userGoal || extractUserGoal(state.brief);
     const bookingMode = goalWantsBookingBlueprint(userGoal);
     const learned = learningContextBlock(process.cwd(), 10, 5);
+    const intentKindEarly =
+      state.taskIntent ||
+      classifyRouteIntent(state.userGoal || state.brief || "").kind;
+    const selfLearn = memoryContextForPrompts({
+      runId: state.runId || currentRunId(),
+      taskType: String(intentKindEarly || "unknown"),
+      targetType: bookingMode ? "booking" : "general",
+      goalText: userGoal,
+    });
     const currency = state.groundedCurrency || "EGP";
     const targetRepo = state.targetRepo || process.cwd();
     const specRoot = state.specRoot || "";
@@ -440,6 +455,7 @@ Not intentions — deliverables that match the goal.
 Cite ONLY paths that appear in EVIDENCE under the TARGET REPO below. Currency=${currency}.
 NEVER cite the Sam-Harness harness cwd as the audited project.
 Obey PROJECT MEMORY lessons when they apply (do not repeat known failures).
+Obey LEARNED MEMORY block when present (prior-run lessons/skills).
 
 ${sections}
 
@@ -448,7 +464,7 @@ ${targetBlock}
 ORIGINAL USER GOAL (authoritative — fail if ignored):
 ${clip(userGoal, 2500)}
 
-${learned ? `${clip(learned, 2500)}\n` : ""}EVIDENCE:
+${selfLearn ? `${clip(selfLearn, 2800)}\n` : ""}${learned ? `${clip(learned, 2000)}\n` : ""}EVIDENCE:
 ${clip(stripRtmSectionsForPrompt(state.evidenceMarkdown), 5000)}
 
 BRIEF:
@@ -508,7 +524,8 @@ ${clip(state.brief, 8000)}`
         ``,
         `ORIGINAL USER GOAL:`,
         clip(userGoal, 2000),
-        learned ? `PROJECT MEMORY / LESSONS:\n${clip(learned, 2000)}` : "",
+        selfLearn ? `LEARNED MEMORY:\n${clip(selfLearn, 2200)}` : "",
+        learned ? `PROJECT MEMORY / LESSONS:\n${clip(learned, 1600)}` : "",
         ``,
         `FULL REJECTION REPORT:`,
         clip(state.auditReport, 4000),
@@ -818,6 +835,17 @@ ${clip(state.evidenceMarkdown, 3000)}`;
     const runId = state.runId || currentRunId();
     const targetRepo = state.targetRepo || process.cwd();
     const currency = state.groundedCurrency || "EGP";
+    const learnCtx = {
+      runId,
+      taskType: String(
+        state.taskIntent ||
+          classifyRouteIntent(state.userGoal || state.brief || "").kind ||
+          "unknown"
+      ),
+      targetType: bookingMode ? "booking" : "general",
+      goalText: userGoal,
+    };
+    const selfLearnAudit = memoryContextForPrompts(learnCtx);
 
     const implCoverageForConsistency =
       typeof state.implementationCoverage === "number" &&
@@ -844,6 +872,16 @@ ${clip(state.evidenceMarkdown, 3000)}`;
 
     // —— Deterministic pre-check BEFORE any LLM auditor call ——
     let strategyForAudit = state.strategy || "";
+
+    // Promoted memory rules (recurring lessons → forbidden patterns)
+    const memPre = applyMemoryPrechecks(strategyForAudit);
+    if (!memPre.ok) {
+      warn(
+        "Auditor",
+        `Promoted memory pre-check FAIL (${memPre.issues.length} rule(s))`
+      );
+    }
+
     let pre = runStrategyConsistencyChecks(strategyForAudit, consistencyGrounding);
     if (!pre.ok) {
       warn(
@@ -922,6 +960,10 @@ ${clip(state.evidenceMarkdown, 3000)}`;
     let llmApproved = false;
     const rejectReasons: string[] = [];
 
+    if (!memPre.ok) {
+      rejectReasons.push(...memPre.issues.map((i) => i.reason));
+    }
+
     if (!pre.ok) {
       // Still inconsistent after deterministic repair — reject without spending LLM
       auditReport = [
@@ -936,6 +978,15 @@ ${clip(state.evidenceMarkdown, 3000)}`;
         ...pre.issues.slice(0, 6).map((i) => `${i.kind}: ${i.detail}`)
       );
       warn("Auditor", "Skipped LLM auditor — deterministic consistency still failing");
+    } else if (!memPre.ok) {
+      auditReport = [
+        `[REJECTED]`,
+        ...memPre.issues.map(
+          (i, n) =>
+            `### Issue ${n + 1}\n- Rejection reason: ${i.reason}\n- Severity: Critical\n- How to fix: Remove the forbidden pattern before re-audit.\nFIX ${n + 1}: ${i.reason}`
+        ),
+      ].join("\n");
+      warn("Auditor", "Skipped LLM auditor — promoted memory pre-check failed");
     } else {
       const bookingRules = bookingMode
         ? `REJECT clinic-only framing, missing BookingTypes, missing token lifecycle, missing QR→invoice,
@@ -971,7 +1022,7 @@ ${auditTargetBlock}
 ORIGINAL USER GOAL:
 ${clip(userGoal, 2000)}
 
-Rubric hint (gate): ${rubricPre.reason}
+${selfLearnAudit ? `${clip(selfLearnAudit, 2200)}\n` : ""}Rubric hint (gate): ${rubricPre.reason}
 Keyword hits (informational only, not a gate): ${keywordInfo.hit}/${keywordInfo.total} (${keywordFidelity.reason})
 
 EVIDENCE PACK (RTM table may be omitted here — STRATEGY below carries the authoritative deterministic RTM + Key Findings):
@@ -1249,8 +1300,28 @@ ${REJECTION_FORMAT}`
         "utf-8"
       );
       warn("Auditor", `[REJECTED] loop v${loopNo} -> gate CLOSED`);
+      // Self-learning: persist rejection / gate reasons (deduped) for next runs
+      try {
+        const learned = learnFromRejection(asciiRejectReasons, learnCtx);
+        if (learned.lessons.length) {
+          ok(
+            "Memory",
+            `Ingested ${learned.lessons.length} lesson(s); promoted=${learned.promoted}`
+          );
+        }
+      } catch {
+        /* memory optional */
+      }
     } else {
       ok("Auditor", `[APPROVED] loop v${loopNo} - gate OPEN (grounded OK)`);
+      try {
+        const skills = learnFromApproval(strategyText, learnCtx);
+        if (skills.length) {
+          ok("Memory", `Ingested ${skills.length} skill candidate(s) from approved strategy`);
+        }
+      } catch {
+        /* memory optional */
+      }
     }
     return {
       auditReport: cleanAudit,

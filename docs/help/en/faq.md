@@ -12,6 +12,9 @@ For paid cloud, yes. Local Ollama path can run without cloud.
 **Where are reports?**  
 Under `SAM_OUTPUT_HOME` — usually `Documents/Sam-Harness`, with numbered packs under reports/docs depending on path.
 
+**Where does self-learning memory live?**  
+`SAM_OUTPUT_HOME/memory/` (`lessons.json`, `skills.json`, promoted rules). Inspect with `pnpm run memory -- list`. See [`docs/SELF_LEARNING_MEMORY.md`](../../SELF_LEARNING_MEMORY.md).
+
 **How do I change language?**  
 `SAM_LOCALE=ar|en` or the locale switch in the UI header.
 
