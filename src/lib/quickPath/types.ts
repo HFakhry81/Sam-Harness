@@ -1,13 +1,24 @@
 /** Lightweight reply path before the full agency pipeline. */
 
+import type { IntentRoute } from "../intentRouter/types.js";
+
+/** @deprecated Prefer IntentRoute — kept for session badge compatibility. */
 export type IntentClass =
   | "smalltalk"
   | "simple_question"
   | "web_research"
   | "task";
 
-/** UI / session path badge. */
-export type ReplyPath = "quick" | "web" | "agency";
+/** UI / session path badge (legacy + new routes). */
+export type ReplyPath =
+  | "quick"
+  | "web"
+  | "agency"
+  | "chat"
+  | "research"
+  | "task"
+  | "complex"
+  | "clarify";
 
 export type IntentClassification = {
   intent: IntentClass;
@@ -16,6 +27,9 @@ export type IntentClassification = {
   reason: string;
   /** Heuristic-only vs model-assisted. */
   source: "heuristic" | "model" | "forced";
+  /** New top-level route when available. */
+  route?: IntentRoute;
+  clarifyQuestion?: string;
 };
 
 export type DetectedLanguage = "ar" | "en" | "mixed" | "other";
@@ -42,4 +56,8 @@ export type QuickPathResult = {
   searchFailureReason?: string;
   /** True when web path skipped the LLM because there was no usable evidence. */
   skippedModel?: boolean;
+  /** True when chat/clarify wrote no report/task artifacts. */
+  noArtifacts?: boolean;
+  notePath?: string;
+  route?: IntentRoute;
 };

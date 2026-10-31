@@ -128,6 +128,17 @@ import {
   type ReplyPath,
 } from "../lib/quickPath/index.js";
 import {
+  classifyIntentHeuristic as classifyRouteHeuristic,
+  routeLabelEn,
+} from "../lib/intentRouter/index.js";
+import type { IntentRoute } from "../lib/intentRouter/types.js";
+import {
+  appendMessage,
+  loadConversation,
+  newConversationId,
+  resetConversation,
+} from "../lib/conversation/history.js";
+import {
   addDailyJob,
   loadDailyOps,
   recordDailyResult,
@@ -598,16 +609,27 @@ async function finalizeQuickRun(opts: {
   error?: string;
   runId: string;
   startedAt: string;
+  /** Chat/clarify: never retain task.ts or show FAILED / retry. */
+  chatStyle?: boolean;
+  noArtifacts?: boolean;
+  route?: IntentRoute;
+  notePath?: string;
 }): Promise<SessionEntry> {
   const endedAt = new Date().toISOString();
   const cfg = await readTaskConfig();
-  const title = currentDraft?.title || cfg.title || "Quick reply";
+  const title = currentDraft?.title || cfg.title || opts.reply.slice(0, 48) || "Chat";
   const body = currentDraft?.body || cfg.body || "";
-  const route = currentDraft?.route || cfg.route || "quick";
-  const arts = readExecutionArtifacts(ROOT);
-  const success = opts.success;
+  const route = opts.route || currentDraft?.route || cfg.route || "chat";
+  const arts = opts.noArtifacts || opts.chatStyle
+    ? { summary: opts.reply, artifacts: [] as string[] }
+    : readExecutionArtifacts(ROOT);
+  // Chat-style turns always succeed for lifecycle purposes — never "FAILED / task saved".
+  const success = opts.chatStyle ? true : opts.success;
   let taskLifecycle: "cleared" | "retained" | "unchanged" = "unchanged";
-  if (success) {
+  if (opts.chatStyle) {
+    // Do not write/retain task.ts for chat/clarify/research lightweight turns.
+    taskLifecycle = "unchanged";
+  } else if (success) {
     archiveAndClearOnSuccess(ROOT, {
       title,
       body,
@@ -624,7 +646,10 @@ async function finalizeQuickRun(opts: {
     taskLifecycle = "retained";
   }
 
-  const pathLabel = replyPathLabel(opts.replyPath, loadLocaleConfig().locale === "en" ? "en" : "ar");
+  const pathLabel = replyPathLabel(
+    opts.replyPath,
+    loadLocaleConfig().locale === "en" ? "en" : "ar"
+  );
   const report = buildRunReport({
     success,
     title,
@@ -637,22 +662,30 @@ async function finalizeQuickRun(opts: {
     goalPassed: success,
     goalFidelityScore: success ? 1 : 0,
   });
-  if (opts.replyPath === "web" && opts.sources?.length) {
+  if (
+    (opts.replyPath === "web" ||
+      opts.replyPath === "research" ||
+      opts.route === "research") &&
+    opts.sources?.length
+  ) {
     report.bullets = [
       ...(report.bullets || []).slice(0, 2),
       ...opts.sources.slice(0, 3).map((s) => s.url),
     ];
   }
-  report.headline = success
-    ? `${pathLabel}: ${opts.reply.slice(0, 120)}`
-    : `${pathLabel} failed: ${opts.error || "error"}`;
+  report.headline = opts.chatStyle
+    ? opts.reply.slice(0, 160)
+    : success
+      ? `${pathLabel}: ${opts.reply.slice(0, 120)}`
+      : `${pathLabel} failed: ${opts.error || "error"}`;
+  report.tone = opts.chatStyle ? "ok" : report.tone;
 
   const entry: SessionEntry = {
     id: `run-${Date.now().toString(36)}`,
     title,
     route,
     mode: opts.mode,
-    promptPreview: body
+    promptPreview: (opts.chatStyle ? opts.reply : body)
       .replace(/^[\s\S]*?## Goal\s*\n/i, "")
       .split(/\n## /)[0]
       .trim()
@@ -716,17 +749,189 @@ async function finalizeQuickRun(opts: {
     entry,
     report,
     replyPath: opts.replyPath,
+    chatStyle: Boolean(opts.chatStyle),
   });
   broadcast("session", session);
   broadcast("ready", {
-    message: success
-      ? `Quick path (${pathLabel}) done.`
-      : `Quick path failed — task retained.`,
+    message: opts.chatStyle
+      ? `Chat (${routeLabelEn((opts.route || "chat") as IntentRoute)}) done.`
+      : success
+        ? `Quick path (${pathLabel}) done.`
+        : `Quick path failed — task retained.`,
     at: endedAt,
     taskLifecycle,
     replyPath: opts.replyPath,
   });
   return entry;
+}
+
+/** Active chat conversation id for Control Plane (persisted under SAM_OUTPUT_HOME). */
+let conversationId =
+  String(process.env.SAM_CONVERSATION_ID || "").trim() || newConversationId();
+
+/**
+ * Chat-first send: intent router before any pipeline.
+ * Chat / research / clarify never write task.ts or report packs.
+ * task / complex continue via existing compose+run path (caller or inline).
+ */
+async function handleChat(req: http.IncomingMessage, res: http.ServerResponse) {
+  const raw = await readBody(req);
+  const body = JSON.parse(raw || "{}") as {
+    message?: string;
+    forceAgency?: boolean;
+    conversationId?: string;
+    networkApproved?: boolean | string;
+  };
+  const message = String(body.message || "").trim();
+  if (!message) {
+    sendJson(res, 400, { ok: false, error: "message required" });
+    return;
+  }
+  if (body.conversationId?.trim()) {
+    conversationId = body.conversationId.trim();
+  }
+
+  const forceAgency = body.forceAgency === true;
+  const decision = classifyRouteHeuristic(message);
+  appendMessage(conversationId, { role: "user", content: message }, tenantOutputHome());
+
+  // Forced or complex/task → write task.ts then let client/callers hit /api/run
+  if (
+    forceAgency ||
+    decision.route === "complex" ||
+    decision.route === "task"
+  ) {
+    const draft = buildTaskDraft({
+      prompt: message,
+      route: decision.route === "task" ? "operational" : "auto",
+      title: message.slice(0, 80),
+    });
+    try {
+      writeTaskFiles(ROOT, draft);
+      currentDraft = draft;
+    } catch (e: any) {
+      sendJson(res, 400, { ok: false, error: e?.message || String(e) });
+      return;
+    }
+    const conv = loadConversation(conversationId, tenantOutputHome());
+    broadcast("task", { draft, spec: draft.spec });
+    sendJson(res, 200, {
+      ok: true,
+      route: forceAgency ? "complex" : decision.route,
+      decision,
+      pipeline: true,
+      forceAgency,
+      conversationId,
+      draft,
+      conversation: conv,
+      message: "Pipeline ready — call /api/run",
+    });
+    return;
+  }
+
+  // Lightweight routes — no beginOutputRun report pack, no task.ts
+  const startedAt = new Date().toISOString();
+  const runId = `chat-${Date.now().toString(36)}`;
+  appendLog(
+    `[intent-router] route=${decision.route} intent=${decision.intent} (${decision.reason})\n`
+  );
+
+  try {
+    const quick = await tryRunQuickPath({
+      prompt: message,
+      cwd: ROOT,
+      runId,
+      forceAgency: false,
+      networkApproved: body.networkApproved,
+      onEvent: (ev) => {
+        appendLog(`[intent-router] ${ev.type}: ${ev.message}\n`);
+      },
+    });
+
+    const result = quick?.result;
+    const reply =
+      result?.reply ||
+      decision.clarifyQuestion ||
+      "OK";
+    const route = (result?.route || decision.route) as IntentRoute;
+
+    appendMessage(
+      conversationId,
+      {
+        role: "assistant",
+        content: reply,
+        route,
+        sources: result?.sources,
+        notePath: result?.notePath,
+        noArtifacts: result?.noArtifacts !== false,
+      },
+      tenantOutputHome()
+    );
+
+    const entry = await finalizeQuickRun({
+      mode: "agency",
+      replyPath: (result?.replyPath || route) as ReplyPath,
+      intent: result?.intent || decision.intent,
+      reply,
+      model: result?.model,
+      sources: result?.sources,
+      durationMs: result?.durationMs || 0,
+      success: true,
+      runId,
+      startedAt,
+      chatStyle: true,
+      noArtifacts: true,
+      route,
+      notePath: result?.notePath,
+    });
+
+    const conv = loadConversation(conversationId, tenantOutputHome());
+    broadcast("conversation", conv);
+    sendJson(res, 200, {
+      ok: true,
+      route,
+      decision,
+      pipeline: false,
+      conversationId,
+      reply,
+      entry,
+      conversation: conv,
+      sources: result?.sources || [],
+      notePath: result?.notePath || null,
+      noArtifacts: true,
+      skippedModel: result?.skippedModel !== false,
+      durationMs: result?.durationMs || 0,
+      model: result?.model || null,
+    });
+  } catch (e: any) {
+    // Chat failures: still reply, never FAILED / task retained
+    const reply =
+      decision.route === "clarify"
+        ? decision.clarifyQuestion || "Quick chat reply, or run this as a task?"
+        : "Hello — Sam-Harness is ready. How can I help?";
+    appendMessage(
+      conversationId,
+      {
+        role: "assistant",
+        content: reply,
+        route: decision.route,
+        noArtifacts: true,
+      },
+      tenantOutputHome()
+    );
+    const conv = loadConversation(conversationId, tenantOutputHome());
+    sendJson(res, 200, {
+      ok: true,
+      route: decision.route,
+      decision,
+      pipeline: false,
+      conversationId,
+      reply,
+      conversation: conv,
+      noArtifacts: true,
+      softError: e?.message || String(e),
+    });
+  }
 }
 
 async function handleRun(req: http.IncomingMessage, res: http.ServerResponse) {
@@ -814,12 +1019,15 @@ async function handleRun(req: http.IncomingMessage, res: http.ServerResponse) {
     return;
   }
 
-  // Repeat-success gate applies to agency/ops tasks, not chatty quick/web replies.
+  // Repeat-success gate applies to agency/ops tasks, not chatty replies.
   const promptPreviewForGate = extractPromptForQuickPath(currentDraft, meta.raw || "");
   const gateClass = forceAgency
-    ? { replyPath: "agency" as const }
-    : classifyIntentHeuristic(promptPreviewForGate);
-  if (mode !== "smoke" && gateClass.replyPath === "agency") {
+    ? { route: "complex" as const }
+    : classifyRouteHeuristic(promptPreviewForGate);
+  if (
+    mode !== "smoke" &&
+    (gateClass.route === "complex" || gateClass.route === "task")
+  ) {
     const gate = assertNotRepeatSuccess(ROOT, currentDraft?.body || meta.raw || "");
     if (!gate.ok) {
       sendJson(res, 409, { ok: false, error: gate.error, blockedRepeat: true });
@@ -867,11 +1075,15 @@ async function handleRun(req: http.IncomingMessage, res: http.ServerResponse) {
     threadId: durable.threadId,
   };
 
-  // —— Lightweight quick / web path (before agency spawn) ——
+  // —— Intent router (chat / research / clarify) before agency spawn ——
   if (mode === "agency" && !forceAgency) {
     const prompt = extractPromptForQuickPath(currentDraft, meta.raw || "");
-    const heuristic = classifyIntentHeuristic(prompt);
-    if (heuristic.replyPath !== "agency") {
+    const heuristic = classifyRouteHeuristic(prompt);
+    if (
+      heuristic.route === "chat" ||
+      heuristic.route === "research" ||
+      heuristic.route === "clarify"
+    ) {
       broadcast("run", {
         type: "start",
         ...lastRun,
@@ -881,11 +1093,12 @@ async function handleRun(req: http.IncomingMessage, res: http.ServerResponse) {
         cost: budget,
         outputDir: outputRun.runDir,
         tenantId: getActiveTenantId(),
-        replyPath: heuristic.replyPath,
+        replyPath: heuristic.route,
         intent: heuristic.intent,
+        route: heuristic.route,
       });
       appendLog(
-        `[quick-path] intent=${heuristic.intent} path=${heuristic.replyPath} (${heuristic.reason})\n`
+        `[intent-router] route=${heuristic.route} intent=${heuristic.intent} (${heuristic.reason})\n`
       );
       try {
         const quick = await tryRunQuickPath({
@@ -895,21 +1108,36 @@ async function handleRun(req: http.IncomingMessage, res: http.ServerResponse) {
           forceAgency: false,
           networkApproved: body.networkApproved,
           onEvent: (ev) => {
-            appendLog(`[quick-path] ${ev.type}: ${ev.message}\n`);
+            appendLog(`[intent-router] ${ev.type}: ${ev.message}\n`);
           },
         });
         if (quick) {
           const { result } = quick;
           if (result.searchFailureReason) {
             appendLog(
-              `[quick-path] web search empty/failed: ${result.searchFailureReason}\n`
+              `[intent-router] research empty/failed: ${result.searchFailureReason}\n`
             );
           }
           appendLog(
-            result.ok
-              ? `[quick-path] done in ${result.durationMs}ms via ${result.model || (result.skippedModel ? "skipped-model" : "?")}\n${result.reply}\n`
-              : `[quick-path] failed: ${result.error}\n`
+            `[intent-router] done in ${result.durationMs}ms via ${result.model || (result.skippedModel ? "skipped-model" : "fallback")}\n${result.reply}\n`
           );
+          try {
+            appendMessage(conversationId, { role: "user", content: prompt }, tenantOutputHome());
+            appendMessage(
+              conversationId,
+              {
+                role: "assistant",
+                content: result.reply,
+                route: result.route || heuristic.route,
+                sources: result.sources,
+                notePath: result.notePath,
+                noArtifacts: true,
+              },
+              tenantOutputHome()
+            );
+          } catch {
+            /* ignore */
+          }
           const entry = await finalizeQuickRun({
             mode,
             replyPath: result.replyPath,
@@ -918,10 +1146,14 @@ async function handleRun(req: http.IncomingMessage, res: http.ServerResponse) {
             model: result.model,
             sources: result.sources,
             durationMs: result.durationMs,
-            success: result.ok,
+            success: true,
             error: result.error,
             runId: durable.id,
             startedAt,
+            chatStyle: true,
+            noArtifacts: true,
+            route: result.route || heuristic.route,
+            notePath: result.notePath,
           });
           sendJson(res, 200, {
             ok: true,
@@ -931,14 +1163,47 @@ async function handleRun(req: http.IncomingMessage, res: http.ServerResponse) {
             threadId: durable.threadId,
             replyPath: result.replyPath,
             intent: result.intent,
+            route: result.route || heuristic.route,
             quick: true,
+            chatStyle: true,
             entry,
           });
           return;
         }
-        appendLog("[quick-path] classifier chose agency — spawning pipeline\n");
+        appendLog("[intent-router] classifier chose task/complex — spawning pipeline\n");
       } catch (e: any) {
-        appendLog(`[quick-path] error, falling back to agency: ${e?.message || e}\n`);
+        // Chat-classified prompts must NEVER fall through to agency on model errors.
+        appendLog(
+          `[intent-router] soft-fail (staying on chat): ${e?.message || e}\n`
+        );
+        const softReply =
+          heuristic.clarifyQuestion ||
+          "Hello — Sam-Harness is ready. How can I help?";
+        const entry = await finalizeQuickRun({
+          mode,
+          replyPath: "chat",
+          intent: heuristic.intent,
+          reply: softReply,
+          durationMs: Date.now() - activeRunStartedMs,
+          success: true,
+          runId: durable.id,
+          startedAt,
+          chatStyle: true,
+          noArtifacts: true,
+          route: heuristic.route,
+        });
+        sendJson(res, 200, {
+          ok: true,
+          mode,
+          startedAt,
+          runId: durable.id,
+          replyPath: "chat",
+          route: heuristic.route,
+          quick: true,
+          chatStyle: true,
+          entry,
+        });
+        return;
       }
     }
   }
@@ -1660,6 +1925,34 @@ const server = http.createServer(async (req, res) => {
       await handleCompose(req, res);
       return;
     }
+    if (method === "POST" && p === "/api/chat") {
+      await handleChat(req, res);
+      return;
+    }
+    if (method === "GET" && p === "/api/conversation") {
+      const id =
+        String(url.searchParams.get("id") || conversationId).trim() ||
+        conversationId;
+      sendJson(res, 200, {
+        ok: true,
+        conversationId: id,
+        conversation: loadConversation(id, tenantOutputHome()),
+      });
+      return;
+    }
+    if (method === "POST" && p === "/api/conversation/reset") {
+      const rawBody = await readBody(req);
+      const b = JSON.parse(rawBody || "{}") as { conversationId?: string };
+      conversationId =
+        String(b.conversationId || "").trim() || newConversationId();
+      const conversation = resetConversation(
+        conversationId,
+        tenantOutputHome()
+      );
+      broadcast("conversation", conversation);
+      sendJson(res, 200, { ok: true, conversationId, conversation });
+      return;
+    }
     if (method === "POST" && p === "/api/run") {
       await handleRun(req, res);
       return;
@@ -2316,7 +2609,9 @@ async function boot() {
           .join(" | ") +
         (listAllowlistRoots(ROOT).length > 8 ? " | …" : "")
     );
-    console.log(`[Control Plane] Session ${session.id} · ${session.entries.length} prior entries`);
+    console.log(
+      `[Control Plane] Session ${session.id} | ${session.entries.length} prior entries`
+    );
     console.log(
       `[Control Plane] Daily Ops scheduler on (tick ${process.env.DAILY_OPS_TICK_MS || 30000}ms)`
     );
