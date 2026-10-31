@@ -151,7 +151,7 @@ echo.
 if not %EXIT_CODE% EQU 0 (
   echo   [X] Exit %EXIT_CODE% — see docs\AGENCY_OPS.md
 ) else (
-  echo   [OK] Finished. Packs: docs\Sam-Harness no.X\
+  echo   [OK] Finished. Packs: %USERPROFILE%\Documents\Sam-Harness\reports\Sam-Harness no.X\
 )
 goto :footer
 

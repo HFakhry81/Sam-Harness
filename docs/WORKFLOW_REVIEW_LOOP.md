@@ -18,7 +18,7 @@ if still REJECTED after R=5 → STOP. Archive FAILED pack. Do not run Architect/
 
 ## Numbering
 - Every loop iteration has its own report numbers: `strategy-vN`, `audit-vN`, `rejection-vN`, `remediation-brief-vN`
-- Final archive still goes to project `docs/Sam-Harness no.X` (run-level archive)
+- Final archive goes to `SAM_OUTPUT_HOME/reports/Sam-Harness no.X` (never inside a git repo)
 
 ## Gate
 Downstream stages run **only** after Auditor `[APPROVED]`.

@@ -1,6 +1,6 @@
 # Sam-Harness
 
-Hybrid AI agency (Arabic-first): **Control Plane UI** + **LangGraph review** + **desktop operator tools** + numbered report packs under `docs/Sam-Harness no.X`.
+Hybrid AI agency (Arabic-first): **Control Plane UI** + **LangGraph review** + **desktop operator tools** + numbered report packs under `~/Documents/Sam-Harness/reports/Sam-Harness no.X` (`SAM_OUTPUT_HOME`).
 
 ## Quick start
 
@@ -59,7 +59,8 @@ Filesystem tools use a **desktop-controller** sandbox: normal user environment (
 | --- | --- |
 | `src/` | Agency, Control Plane, tools |
 | `scripts/` | Evals + smoke gates |
-| `docs/` | Product docs + archived packs `Sam-Harness no.X` |
+| `docs/` | Product docs only (run packs never land here) |
+| `~/Documents/Sam-Harness/` | Output home — `reports/`, `tasks/`, `state/`, `memory/`, `conversations/`, `backups/`, `logs/` |
 | `Tools/` | Windows install / update / start scripts |
 | `templates/` | Seed `task.ts` for first run |
 | `mcp.example.json` | Example MCP server config (copy to `mcp.json`) |

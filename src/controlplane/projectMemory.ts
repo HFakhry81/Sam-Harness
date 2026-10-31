@@ -5,6 +5,7 @@
 import * as fs from "fs";
 import * as path from "path";
 import { loadStoreDoc, saveStoreDoc } from "../lib/db/storeBridge.js";
+import { agentMemoryPath } from "../lib/outputHome.js";
 
 export type MemoryEntry = {
   key: string;
@@ -72,8 +73,12 @@ export function learningContextBlock(cwd: string, maxLessons = 10, maxLedger = 6
   if (mem) parts.push(mem);
 
   try {
-    const am = path.join(cwd, "agent-memory.md");
-    if (fs.existsSync(am)) {
+    const candidates = [
+      agentMemoryPath("agent-memory.md"),
+      path.join(cwd, "agent-memory.md"),
+    ];
+    for (const am of candidates) {
+      if (!fs.existsSync(am)) continue;
       const lines = fs
         .readFileSync(am, "utf-8")
         .split(/\r?\n/)
@@ -83,6 +88,7 @@ export function learningContextBlock(cwd: string, maxLessons = 10, maxLedger = 6
       if (recent.length) {
         parts.push("## Recent run lessons\n" + recent.join("\n"));
       }
+      break;
     }
   } catch {
     /* ignore */
@@ -116,7 +122,7 @@ export function seedHarnessLessons(cwd: string): void {
     ],
     [
       "lesson:self-report-pack-home",
-      "Self-intro / Sam-Harness capability reports archive under THIS repo docs (Sam-Harness no.X) — never Maw3ed unless the goal is Maw3ed.",
+      "All Sam-Harness packs archive under SAM_OUTPUT_HOME/reports (Sam-Harness no.X) — never inside the Sam-Harness repo, Maw3ed, or any target project docs/.",
     ],
   ];
   for (const [k, v] of seeds) upsertMemory(cwd, k, v);

@@ -6,6 +6,7 @@ import * as fs from "fs";
 import * as path from "path";
 import { upsertMemory } from "./projectMemory.js";
 import { recordDailyResult } from "./dailyOps.js";
+import { agentMemoryPath, ensureOutputHome } from "../lib/outputHome.js";
 
 export type RunLessonInput = {
   title: string;
@@ -38,7 +39,10 @@ export function appendRunLesson(cwd: string, input: RunLessonInput): void {
     `lesson=${input.success ? "ok" : "retry"}: ${input.summary.replace(/\s+/g, " ").slice(0, 220)}\n`;
 
   try {
-    fs.appendFileSync(path.join(cwd, "agent-memory.md"), line, "utf-8");
+    ensureOutputHome();
+    const am = agentMemoryPath("agent-memory.md");
+    fs.mkdirSync(path.dirname(am), { recursive: true });
+    fs.appendFileSync(am, line, "utf-8");
   } catch {
     /* ignore */
   }
@@ -81,11 +85,11 @@ export function appendRunLesson(cwd: string, input: RunLessonInput): void {
         "Excel inventory on a drive: after run_shell/list_dir always write_file the .txt report — scan alone is not success."
       );
     }
-    if (/Sam-Harness\\docs|nested|\.\/Sam-Harness/i.test(input.summary)) {
+    if (/Sam-Harness\\docs|nested|\.\/Sam-Harness|[\\/]docs[\\/]Sam-Harness/i.test(input.summary)) {
       upsertMemory(
         cwd,
         "lesson:target-repo-absolute",
-        "targetRepo label Sam-Harness must resolve to this workspace absolute path — never nest packs under ./Sam-Harness/docs."
+        "Packs archive under SAM_OUTPUT_HOME/reports only — never under ./Sam-Harness/docs or a target project docs/."
       );
     }
   } catch {

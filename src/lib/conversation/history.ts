@@ -28,7 +28,7 @@ export type ConversationSession = {
 };
 
 function conversationsDir(home: string = getOutputHome()): string {
-  return path.join(ensureOutputHome(home).home, "conversations");
+  return ensureOutputHome(home).conversations;
 }
 
 function sessionPath(sessionId: string, home?: string): string {

@@ -13,7 +13,8 @@ import {
   type OpsIntent,
 } from "../agent/heuristic.js";
 import { resolveUserPath } from "../lib/paths.js";
-import { isSamHarnessWorkspace } from "../lib/reviewPackDir.js";
+import { defaultProjectDocsRoot, isSamHarnessWorkspace } from "../lib/reviewPackDir.js";
+import { resolveTaskReadPath } from "../lib/taskPaths.js";
 import type { UiRoute } from "./taskWriter.js";
 
 export type TaskRisk = "low" | "medium" | "high" | "destructive";
@@ -325,16 +326,18 @@ export function buildTaskSpec(input: SpecBuildInput): TaskSpec {
   ) {
     targetRepo = process.cwd();
   }
-  let packDir =
-    (input.packDir || "").trim() ||
-    (route === "operational" ? desk : path.join(targetRepo, "docs"));
+  // Packs always land under SAM_OUTPUT_HOME/reports — never <repo>/docs or Desktop
+  let packDir = (input.packDir || "").trim() || defaultProjectDocsRoot(targetRepo);
+  // Reject legacy packDir values that point inside a target/repo docs tree
   if (
-    aboutHarnessSelf &&
-    !promptIsClientProduct &&
-    route !== "operational" &&
-    /maw3ed/i.test(packDir)
+    /[\\/]docs$/i.test(packDir) ||
+    /maw3ed|\\fanni\\|\/fanni\//i.test(packDir) ||
+    (isSamHarnessWorkspace() &&
+      path.normalize(packDir).toLowerCase().startsWith(
+        path.normalize(process.cwd()).toLowerCase() + path.sep
+      ))
   ) {
-    packDir = path.join(process.cwd(), "docs");
+    packDir = defaultProjectDocsRoot(targetRepo);
   }
 
   const allow = Boolean(input.allowClientCodeEdits) || route === "implement";
@@ -1105,7 +1108,7 @@ ${spec.goal}
 - packDir: \`${spec.packDir}\`
 
 ## Hard boundary
-- READ for evidence; WRITE pack under \`Sam-Harness no.X\` only unless GO.
+- READ for evidence; WRITE pack under SAM_OUTPUT_HOME/reports/Sam-Harness no.X only unless GO.
 - On [REJECTED]: أسباب الرفض + درجة الخطورة + طريقة الحل.
 - Forbidden: ${spec.forbidden.join(", ")}
 
@@ -1124,6 +1127,7 @@ export function writeTaskSpecFiles(
   cwd: string,
   spec: TaskSpec
 ): { specJson: string; taskMd: string } {
+  fs.mkdirSync(cwd, { recursive: true });
   const specJson = path.join(cwd, "task.spec.json");
   const taskMd = path.join(cwd, "task.md");
   fs.writeFileSync(specJson, JSON.stringify(spec, null, 2), "utf-8");
@@ -1131,8 +1135,9 @@ export function writeTaskSpecFiles(
   return { specJson, taskMd };
 }
 
-export function readTaskSpec(cwd: string): TaskSpec | null {
-  const p = path.join(cwd, "task.spec.json");
+export function readTaskSpec(cwd: string = process.cwd()): TaskSpec | null {
+  const resolved = resolveTaskReadPath("task.spec.json", cwd);
+  const p = resolved || path.join(cwd, "task.spec.json");
   try {
     if (!fs.existsSync(p)) return null;
     const raw = JSON.parse(fs.readFileSync(p, "utf-8")) as TaskSpec;

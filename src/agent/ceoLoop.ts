@@ -25,6 +25,8 @@ import {
   RepeatGuard,
   formatStructuredFailureMarkdown,
 } from "../lib/repeatGuard.js";
+import { writePackArtifact } from "../lib/packWorkspace.js";
+import { resolveTaskReadPath } from "../lib/taskPaths.js";
 
 /** Prefer ## Goal for ops; strip architecture boilerplate that confused older task files. */
 function focusTask(task: string): string {
@@ -146,16 +148,12 @@ async function runDecision(
         neededToContinue:
           "Switch to list_dir/read_file/search_code/write_report; quote paths with spaces; never write into prompt source/spec folders.",
       });
-      fs.writeFileSync(
+      writePackArtifact(
         "final-report.md",
         formatStructuredFailureMarkdown(failure),
-        "utf-8"
+        { bom: true }
       );
-      fs.writeFileSync(
-        "execution-result.md",
-        failure.summary,
-        "utf-8"
-      );
+      writePackArtifact("execution-result.md", failure.summary, { bom: true });
       err("CEO", failure.summary);
       return "structured_fail";
     }
@@ -166,11 +164,11 @@ async function runDecision(
 function writeReports(
   report: { success: boolean; summary: string; steps: number; tools: ToolResult[] }
 ) {
-  fs.writeFileSync("final-report.md", JSON.stringify(report, null, 2), "utf-8");
-  fs.writeFileSync(
+  writePackArtifact("final-report.md", JSON.stringify(report, null, 2));
+  writePackArtifact(
     "execution-result.md",
     report.tools.map((t) => `- [${t.ok ? "OK" : "FAIL"}] ${t.tool}: ${t.message}`).join("\n"),
-    "utf-8"
+    { bom: true }
   );
 }
 
@@ -185,7 +183,9 @@ function isExcelInventoryGoal(task: string): boolean {
 function inventoryReportPath(task: string): string {
   try {
     // sync require via dynamic import already in loop — read disk Spec if present
-    const specPath = `${process.cwd()}/task.spec.json`;
+    const specPath =
+      resolveTaskReadPath("task.spec.json") ||
+      `${process.cwd()}/task.spec.json`;
     if (fs.existsSync(specPath)) {
       const spec = JSON.parse(fs.readFileSync(specPath, "utf-8")) as {
         entities?: { destinations?: string[] };
@@ -270,16 +270,14 @@ export async function runOperationalCeoLoop(task: string, maxSteps = 8) {
         cwd: process.cwd(),
       });
       const summary = `Help (${answer.topicId || "index"}): ${answer.title}`;
-      fs.writeFileSync(
+      writePackArtifact(
         "final-report.md",
         `# Help\n\n${answer.title}\n\n${answer.body}\n`,
-        "utf-8"
+        { bom: true }
       );
-      fs.writeFileSync(
-        "execution-result.md",
-        `success=true\n${summary}\n`,
-        "utf-8"
-      );
+      writePackArtifact("execution-result.md", `success=true\n${summary}\n`, {
+        bom: true,
+      });
       ok("Help", summary);
       return {
         success: true,

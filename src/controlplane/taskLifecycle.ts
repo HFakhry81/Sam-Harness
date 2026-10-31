@@ -11,6 +11,7 @@ import { extractGoalFocus } from "../agent/heuristic.js";
 import { buildTaskDraft, renderTaskTs, type TaskDraft } from "./taskWriter.js";
 import { writeTaskSpecFiles } from "./taskSpec.js";
 import { loadStoreDoc, saveStoreDoc } from "../lib/db/storeBridge.js";
+import { getTaskDir } from "../lib/taskPaths.js";
 
 export type TaskFingerprintState = {
   lastSuccessHash: string | null;
@@ -116,7 +117,8 @@ export function archiveAndClearOnSuccess(
   opts: { title: string; body: string; summary: string }
 ): { archived: string; cleared: true } {
   const stamp = new Date().toISOString().replace(/[:.]/g, "-");
-  const archiveDir = path.join(cwd, "task-archive");
+  const taskDir = getTaskDir();
+  const archiveDir = path.join(taskDir, "task-archive");
   fs.mkdirSync(archiveDir, { recursive: true });
   const archived = path.join(archiveDir, `success-${stamp}.md`);
   fs.writeFileSync(
@@ -126,11 +128,11 @@ export function archiveAndClearOnSuccess(
   );
 
   const draft = pendingDraft();
-  writeTaskSpecFiles(cwd, draft.spec);
-  fs.writeFileSync(path.join(cwd, "task.ts"), renderTaskTs(draft), "utf-8");
-  fs.writeFileSync(path.join(cwd, "task.md"), draft.body + "\n", "utf-8");
+  writeTaskSpecFiles(taskDir, draft.spec);
+  fs.writeFileSync(path.join(taskDir, "task.ts"), renderTaskTs(draft), "utf-8");
+  fs.writeFileSync(path.join(taskDir, "task.md"), draft.body + "\n", "utf-8");
   for (const f of ["task.draft.json", "task.pending.md"]) {
-    const p = path.join(cwd, f);
+    const p = path.join(taskDir, f);
     if (fs.existsSync(p)) fs.unlinkSync(p);
   }
 
@@ -151,9 +153,10 @@ export function retainOnFailure(
   state.lastFailureHash = goalFingerprint(opts.body);
   state.lastFailureAt = new Date().toISOString();
   saveLifecycle(cwd, state);
-  // Keep task.ts / task.md as-is for retry
+  // Keep task.ts / task.md as-is for retry; record failure under output home
+  const taskDir = getTaskDir();
   fs.writeFileSync(
-    path.join(cwd, "task-last-failure.md"),
+    path.join(taskDir, "task-last-failure.md"),
     `# Failed task retained for retry\n\n## Title\n${opts.title}\n\n## Reason\n${opts.reason}\n\n## Body\n\n${opts.body}\n`,
     "utf-8"
   );
