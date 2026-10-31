@@ -19,6 +19,10 @@ import {
   verifyHelpIntegrity,
 } from "../src/lib/help/index.js";
 import { makeIsolatedCpEnv } from "./helpers/isolatedCpEnv.js";
+import {
+  waitForListenPort,
+  waitForLocalHealth,
+} from "./helpers/ephemeralPort.js";
 
 const ROOT = process.cwd();
 
@@ -133,14 +137,14 @@ describe("Help CLI", () => {
 });
 
 describe("Help API", () => {
-  const PORT = 18797;
+  let PORT = 0;
   const TOKEN = "help-system-test-token-0123456789abcdef";
   let child: ChildProcess | null = null;
   let cpIso: ReturnType<typeof makeIsolatedCpEnv> | null = null;
 
   beforeAll(async () => {
     cpIso = makeIsolatedCpEnv({
-      CONTROL_PLANE_PORT: String(PORT),
+      CONTROL_PLANE_PORT: "0",
       CONTROL_PLANE_TOKEN: TOKEN,
     });
     const tsxBin = path.join(ROOT, "node_modules", "tsx", "dist", "cli.mjs");
@@ -149,17 +153,8 @@ describe("Help API", () => {
       env: cpIso.env,
       stdio: ["ignore", "pipe", "pipe"],
     });
-    const start = Date.now();
-    while (Date.now() - start < 20000) {
-      try {
-        const res = await fetch(`http://127.0.0.1:${PORT}/api/help`);
-        if (res.ok) return;
-      } catch {
-        /* retry */
-      }
-      await new Promise((r) => setTimeout(r, 200));
-    }
-    throw new Error("Control Plane help API did not become ready");
+    PORT = await waitForListenPort(child!, 20000);
+    await waitForLocalHealth(PORT, "/api/help", 15000);
   }, 30000);
 
   afterAll(async () => {

@@ -1,35 +1,26 @@
 /**
  * HTTP-level auth checks against a real Control Plane server process.
+ * Binds CONTROL_PLANE_PORT=0 (ephemeral) on 127.0.0.1 to avoid Windows port conflicts.
  */
 import { spawn, type ChildProcess } from "child_process";
 import * as path from "path";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { makeIsolatedCpEnv } from "./helpers/isolatedCpEnv.js";
+import {
+  waitForListenPort,
+  waitForLocalHealth,
+} from "./helpers/ephemeralPort.js";
 
-const PORT = 18787;
 const TOKEN = "phase1-test-owner-token-0123456789abcdef";
 const ROOT = process.cwd();
 
 let child: ChildProcess | null = null;
 let cpIso: ReturnType<typeof makeIsolatedCpEnv> | null = null;
-
-async function waitForHealth(ms = 15000): Promise<void> {
-  const start = Date.now();
-  while (Date.now() - start < ms) {
-    try {
-      const res = await fetch(`http://127.0.0.1:${PORT}/api/auth/status`);
-      if (res.ok) return;
-    } catch {
-      /* retry */
-    }
-    await new Promise((r) => setTimeout(r, 200));
-  }
-  throw new Error("Control Plane did not become ready");
-}
+let PORT = 0;
 
 beforeAll(async () => {
   cpIso = makeIsolatedCpEnv({
-    CONTROL_PLANE_PORT: String(PORT),
+    CONTROL_PLANE_PORT: "0",
     CONTROL_PLANE_TOKEN: TOKEN,
   });
   const tsxBin = path.join(ROOT, "node_modules", "tsx", "dist", "cli.mjs");
@@ -38,7 +29,8 @@ beforeAll(async () => {
     env: cpIso.env,
     stdio: ["ignore", "pipe", "pipe"],
   });
-  await waitForHealth();
+  PORT = await waitForListenPort(child!, 20000);
+  await waitForLocalHealth(PORT, "/api/auth/status", 15000);
 }, 30000);
 
 afterAll(async () => {
