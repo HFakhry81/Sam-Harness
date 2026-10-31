@@ -1,32 +1,35 @@
 /**
  * Rebuild task.ts / task.spec.json / draft from the prompt already on disk
- * (task.spec.json rawPrompt or task.draft.json). Does not execute tools.
+ * under SAM_OUTPUT_HOME/tasks/ (falls back to legacy repo-root copies).
+ * Does not execute tools.
  */
 import * as fs from "fs";
-import * as path from "path";
 import {
   buildTaskDraft,
   persistComposeDraft,
   writeTaskFiles,
 } from "../src/controlplane/taskWriter.js";
+import { getTaskDir, resolveTaskReadPath } from "../src/lib/taskPaths.js";
 
 const root = process.cwd();
-const specPath = path.join(root, "task.spec.json");
-const draftPath = path.join(root, "task.draft.json");
+const specPath = resolveTaskReadPath("task.spec.json", root);
+const draftPath = resolveTaskReadPath("task.draft.json", root);
 
 let prompt = "";
 let answers: Record<string, string> = {};
 
-if (fs.existsSync(draftPath)) {
+if (draftPath && fs.existsSync(draftPath)) {
   const d = JSON.parse(fs.readFileSync(draftPath, "utf-8"));
   prompt = d.prompt || d.spec?.rawPrompt || "";
 }
-if (!prompt && fs.existsSync(specPath)) {
+if (!prompt && specPath && fs.existsSync(specPath)) {
   const s = JSON.parse(fs.readFileSync(specPath, "utf-8"));
   prompt = s.rawPrompt || s.goal || "";
 }
 if (!prompt.trim()) {
-  console.error("No prompt found in task.draft.json / task.spec.json");
+  console.error(
+    `No prompt found in task.draft.json / task.spec.json (checked ${getTaskDir()} and repo root)`
+  );
   process.exit(1);
 }
 
@@ -50,6 +53,7 @@ console.log(
       planSteps: draft.spec.planSteps,
       destinations: draft.spec.entities.destinations,
       clarify: draft.needsClarification,
+      taskDir: getTaskDir(),
     },
     null,
     2
@@ -57,7 +61,7 @@ console.log(
 );
 if (draft.ready) {
   writeTaskFiles(root, draft);
-  console.log("restored ready task files");
+  console.log("restored ready task files under SAM_OUTPUT_HOME/tasks");
 } else {
   console.log("draft persisted — needs clarification in UI");
 }

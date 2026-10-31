@@ -18,6 +18,13 @@ dist/
 .tmp-*.json
 *.bak
 
+# --- Safety net: run artifacts must never be committed ---
+# Packs / reports (legacy locations)
+/sam_harness_reports/
+/docs/Sam-Harness no.*/
+/rollback-backups/
+/config/team.backup-*.json
+
 # Root runtime only — archived packs live under SAM_OUTPUT_HOME (~/Documents/Sam-Harness)
 /controlplane-session.json
 /controlplane-session.md
@@ -38,6 +45,7 @@ dist/
 /task.spec.json
 /task-last-failure.md
 /task-architecture.md
+/task.ts.bak
 /ceo-draft.md
 /ceo-draft-attempt-*.md
 /audit-report.md
@@ -50,7 +58,6 @@ dist/
 /AUDIT_CHECKLIST.md
 /agency-verdict.md
 /gates.json
-/go-nogo.example.json
 /execution-plan.md
 /execution-result.md
 /final-report.md
@@ -64,6 +71,8 @@ dist/
 /DELIVERY_BOARD.md
 /go-nogo.json
 /capabilities.smoke.md
+/PACK_HANDOFF.md
+/PACK_CLAIM_ASSERTION.md
 /review-loop/
 /task-archive/
 /writing surface page level

@@ -12,6 +12,13 @@ import {
   specialistLabel,
   useOllamaCloudNow,
 } from "./models.js";
+import { beginOutputRun, agentMemoryPath, ensureOutputHome } from "../lib/outputHome.js";
+import {
+  copyPackArtifactsTo,
+  getPackWriteRoot,
+  PACK_ARTIFACT_NAMES,
+  writePackArtifact,
+} from "../lib/packWorkspace.js";
 
 const REJECTION_FORMAT = `
 If [REJECTED], then for EACH issue write a block in this exact shape:
@@ -170,8 +177,23 @@ export async function runArchitectureSwarm(task: string): Promise<Level2Result> 
   );
   sys("Review loop: strategy↔audit up to 5; Architect gate requires [APPROVED]");
 
-  const loopDir = path.join(process.cwd(), "review-loop");
+  const packRunId =
+    process.env.SAM_HARNESS_RUN_ID ||
+    process.env.SAM_RUN_ID ||
+    `run-${Date.now().toString(36)}`;
+  beginOutputRun(packRunId);
+  const packWriteRoot = getPackWriteRoot(packRunId);
+  const loopDir = path.join(packWriteRoot, "review-loop");
+  try {
+    fs.rmSync(loopDir, { recursive: true, force: true });
+  } catch {
+    /* ignore */
+  }
   fs.mkdirSync(loopDir, { recursive: true });
+
+  const writeLocal = (name: string, content: string) => {
+    writePackArtifact(name, content, { bom: /\.md$/i.test(name) });
+  };
 
   let strategyPlan = "";
   let auditReport = "";
@@ -266,8 +288,8 @@ ${clip(fullBrief, 6000)}`
     }
 
     fs.writeFileSync(path.join(loopDir, `strategy-v${loopNo}.md`), strategyPlan, "utf-8");
-    fs.writeFileSync("ceo-draft.md", strategyPlan, "utf-8");
-    fs.writeFileSync(`ceo-draft-attempt-${loopNo}.md`, strategyPlan, "utf-8");
+    writeLocal("ceo-draft.md", strategyPlan);
+    writeLocal(`ceo-draft-attempt-${loopNo}.md`, strategyPlan);
     ok("Strategist", `strategy-v${loopNo}.md saved (loop ${loopNo}/${maxRevisions})`);
 
     live(
@@ -323,8 +345,8 @@ If [APPROVED], write a short checklist of what passed.`
     ].join("\n");
 
     fs.writeFileSync(path.join(loopDir, `audit-v${loopNo}.md`), auditDoc, "utf-8");
-    fs.writeFileSync(`audit-attempt-${loopNo}.md`, auditDoc, "utf-8");
-    fs.writeFileSync("audit-report.md", auditDoc, "utf-8");
+    writeLocal(`audit-attempt-${loopNo}.md`, auditDoc);
+    writeLocal("audit-report.md", auditDoc);
     auditHistory.push(auditDoc);
 
     if (auditPassed) {
@@ -354,7 +376,7 @@ If [APPROVED], write a short checklist of what passed.`
     }
   }
 
-  fs.writeFileSync(
+  writeLocal(
     "audit-history.md",
     [
       `# Audit History (${auditHistory.length} loops, max ${maxRevisions})`,
@@ -363,8 +385,7 @@ If [APPROVED], write a short checklist of what passed.`
       `See also: review-loop/strategy-v*, audit-v*, rejection-v*, remediation-brief-v*`,
       ``,
       ...auditHistory.map((h, i) => `---\n## Loop ${i + 1}\n\n${h}`),
-    ].join("\n"),
-    "utf-8"
+    ].join("\n")
   );
   fs.writeFileSync(
     path.join(loopDir, "LOOP_SUMMARY.md"),
@@ -401,8 +422,8 @@ If [APPROVED], write a short checklist of what passed.`
       `Last audit excerpt:`,
       clip(auditReport, 2000),
     ].join("\n");
-    fs.writeFileSync("final-report.md", finalReport, "utf-8");
-    fs.writeFileSync(
+    writeLocal("final-report.md", finalReport);
+    writeLocal(
       "execution-result.md",
       [
         `# Level-2 Swarm Result`,
@@ -410,8 +431,7 @@ If [APPROVED], write a short checklist of what passed.`
         `- auditPassed: false`,
         `- gate: CLOSED`,
         `- downstream: SKIPPED`,
-      ].join("\n"),
-      "utf-8"
+      ].join("\n")
     );
     layeredBlueprint = "(skipped — audit gate closed)";
     helpSystemSpec = "(skipped — audit gate closed)";
@@ -433,7 +453,7 @@ ${clip(strategyPlan, 8000)}
 Original brief:
 ${clip(fullBrief, 5000)}`
     );
-    fs.writeFileSync("execution-plan.md", layeredBlueprint, "utf-8");
+    writeLocal("execution-plan.md", layeredBlueprint);
     ok("Architect", "Blueprint saved -> execution-plan.md");
 
     live(
@@ -447,7 +467,7 @@ Multi-purpose (not patient-only). FAQ, screen help, empty/error states, escalati
 Architecture:
 ${clip(layeredBlueprint, 7000)}`
     );
-    fs.writeFileSync("help-system-spec.md", helpSystemSpec, "utf-8");
+    writeLocal("help-system-spec.md", helpSystemSpec);
     ok("Help Agent", "Help spec saved -> help-system-spec.md");
 
     live(
@@ -463,7 +483,7 @@ ${clip(layeredBlueprint, 5000)}
 Brief:
 ${clip(task, 2000)}`
     );
-    fs.writeFileSync("marketing-campaign.md", marketingCampaign, "utf-8");
+    writeLocal("marketing-campaign.md", marketingCampaign);
     ok("Marketer", "Campaign saved -> marketing-campaign.md");
 
     live("CEO Verifier", "Checking Level-2 deliverables against original intent...");
@@ -487,8 +507,8 @@ Reply with:
 3) Missing items vs task`
     );
     verified = finalReport.includes("[VERIFIED]");
-    fs.writeFileSync("final-report.md", finalReport, "utf-8");
-    fs.writeFileSync(
+    writeLocal("final-report.md", finalReport);
+    writeLocal(
       "execution-result.md",
       [
         `# Level-2 Swarm Result`,
@@ -496,8 +516,7 @@ Reply with:
         `- auditPassed: true`,
         `- gate: OPEN`,
         `- ceoVerified: ${verified}`,
-      ].join("\n"),
-      "utf-8"
+      ].join("\n")
     );
     if (verified) ok("CEO Verifier", "Level-2 pack VERIFIED against intent.");
     else warn("CEO Verifier", "Gaps noted — see final-report.md");
@@ -519,7 +538,7 @@ ${clip(strategyPlan, 3000)}
 Blueprint:
 ${clip(layeredBlueprint, 3000)}`
     );
-    fs.writeFileSync("CODE_VS_PLAN_GAP_MATRIX.md", gapMatrix, "utf-8");
+    writeLocal("CODE_VS_PLAN_GAP_MATRIX.md", gapMatrix);
 
     const backlog = await invokeText(
       architect,
@@ -527,21 +546,21 @@ ${clip(layeredBlueprint, 3000)}`
 ${clip(gapMatrix, 6000)}
 Real Maw3ed paths. Multi-purpose only.`
     );
-    fs.writeFileSync("IMPLEMENTATION_BACKLOG.md", backlog, "utf-8");
+    writeLocal("IMPLEMENTATION_BACKLOG.md", backlog);
 
     const nextSprint = await invokeText(
       strategist,
       `Write NEXT_SPRINT.md (short) from backlog/gaps:
 ${clip(gapMatrix, 2500)}`
     );
-    fs.writeFileSync("NEXT_SPRINT.md", nextSprint, "utf-8");
+    writeLocal("NEXT_SPRINT.md", nextSprint);
 
     const ticket = await invokeText(
       architect,
       `Write TICKET_P0_STARTER.md for the FIRST P0 in:
 ${clip(backlog, 5000)}`
     );
-    fs.writeFileSync("TICKET_P0_STARTER.md", ticket, "utf-8");
+    writeLocal("TICKET_P0_STARTER.md", ticket);
     ok("Architect", "Gap matrix + backlog + sprint + P0 ticket saved");
   }
 
@@ -552,33 +571,19 @@ ${clip(backlog, 5000)}`
     const { dir: packDir, reviewNo } = resolveNextSamHarnessReviewDir(docsRoot);
     archivedPackDir = packDir;
     archivedReviewNo = reviewNo;
-    const packFiles = [
-      "ceo-draft.md",
-      "audit-report.md",
-      "audit-history.md",
-      "execution-plan.md",
-      "help-system-spec.md",
-      "marketing-campaign.md",
-      "final-report.md",
-      "execution-result.md",
-      "CODE_VS_PLAN_GAP_MATRIX.md",
-      "IMPLEMENTATION_BACKLOG.md",
-      "NEXT_SPRINT.md",
-      "TICKET_P0_STARTER.md",
-    ];
-    for (const name of packFiles) {
-      if (!fs.existsSync(name)) continue;
-      fs.copyFileSync(name, path.join(packDir, name));
-    }
-    for (const name of fs.readdirSync(process.cwd())) {
+    copyPackArtifactsTo(packDir, PACK_ARTIFACT_NAMES, packRunId);
+    // Copy attempt files staged in pack workspace
+    for (const name of fs.readdirSync(packWriteRoot)) {
       if (/^(ceo-draft-attempt-|audit-attempt-)/i.test(name) && name.endsWith(".md")) {
-        fs.copyFileSync(name, path.join(packDir, name));
+        fs.copyFileSync(path.join(packWriteRoot, name), path.join(packDir, name));
       }
     }
     const loopArchive = path.join(packDir, "review-loop");
     fs.mkdirSync(loopArchive, { recursive: true });
-    for (const name of fs.readdirSync(loopDir)) {
-      fs.copyFileSync(path.join(loopDir, name), path.join(loopArchive, name));
+    if (fs.existsSync(loopDir)) {
+      for (const name of fs.readdirSync(loopDir)) {
+        fs.copyFileSync(path.join(loopDir, name), path.join(loopArchive, name));
+      }
     }
     const handoff = `# Pack handoff — Sam-Harness no.${reviewNo}
 
@@ -590,22 +595,24 @@ Review folder: \`${packDir}\`
 Target repo: \`${taskConfig.targetRepo}\`
 `;
     fs.writeFileSync(path.join(packDir, "PACK_HANDOFF.md"), handoff, "utf-8");
-    fs.writeFileSync(
+    writeLocal(
       "pack-location.md",
-      `# Latest pack location\n\nSam-Harness no.${reviewNo}\n\n\`${packDir}\`\n\ngate=${auditPassed ? "OPEN" : "CLOSED"}\n`,
-      "utf-8"
+      `# Latest pack location\n\nSam-Harness no.${reviewNo}\n\n\`${packDir}\`\n\ngate=${auditPassed ? "OPEN" : "CLOSED"}\n`
     );
     ok(
       "Pack",
       `Archived -> Sam-Harness no.${reviewNo} (${auditPassed ? "SUCCESS pack" : "FAILED_AUDIT pack"})`
     );
   } catch (e) {
-    warn("Pack", `Could not archive pack under project docs: ${String(e)}`);
+    warn("Pack", `Could not archive pack under SAM_OUTPUT_HOME/reports: ${String(e)}`);
   }
 
   try {
+    ensureOutputHome();
+    const am = agentMemoryPath("agent-memory.md");
+    fs.mkdirSync(path.dirname(am), { recursive: true });
     fs.appendFileSync(
-      "agent-memory.md",
+      am,
       `\n- [Level2 ${new Date().toISOString()}] Task: "${task.slice(0, 80)}..." revisions=${revisionCount} audit=${auditPassed} verified=${verified}\n`,
       "utf-8"
     );

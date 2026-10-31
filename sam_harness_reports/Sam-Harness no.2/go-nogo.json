@@ -1,6 +1,0 @@
-﻿{
-  "decision": "PENDING",
-  "by": "system",
-  "at": "2026-10-29T13:40:00.000Z",
-  "reason": "Implementation blocked until owner sets GO (--go | IMPLEMENT_GO=1 | go-nogo.json)"
-}

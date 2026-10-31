@@ -202,8 +202,13 @@ export async function runImplementationCrew(
   opts?: { targetRepo?: string; packDir?: string; plan?: Level3Plan }
 ): Promise<Level3Result> {
   try {
-    const goPath = path.join(process.cwd(), "go-nogo.json");
-    if (fs.existsSync(goPath)) {
+    const { packArtifactPath } = await import("../lib/packWorkspace.js");
+    const candidates = [
+      packArtifactPath("go-nogo.json"),
+      path.join(process.cwd(), "go-nogo.json"),
+    ];
+    for (const goPath of candidates) {
+      if (!fs.existsSync(goPath)) continue;
       const rec = JSON.parse(fs.readFileSync(goPath, "utf-8")) as {
         decision?: string;
       };
@@ -212,6 +217,7 @@ export async function runImplementationCrew(
           `Level-3 refused: go-nogo.json decision=${rec.decision} (need GO)`
         );
       }
+      break;
     }
   } catch (e) {
     if (e instanceof Error && e.message.startsWith("Level-3 refused")) throw e;
@@ -221,9 +227,16 @@ export async function runImplementationCrew(
   if (!fs.existsSync(targetRepo)) {
     throw new Error(`Target repo not found: ${targetRepo}`);
   }
-  const outDir = opts?.packDir
-    ? path.normalize(opts.packDir)
-    : path.join(targetRepo, "docs", "sam-harness");
+  // Pack journals live under SAM_OUTPUT_HOME/reports — never targetRepo/docs
+  let outDir: string;
+  if (opts?.packDir) {
+    outDir = path.normalize(opts.packDir);
+  } else {
+    const { defaultProjectDocsRoot, resolveNextSamHarnessReviewDir } = await import(
+      "../lib/reviewPackDir.js"
+    );
+    outDir = resolveNextSamHarnessReviewDir(defaultProjectDocsRoot(targetRepo)).dir;
+  }
   ensureDir(outDir);
 
   live("Implementer", `Coding against pack in ${outDir}`);
@@ -525,7 +538,12 @@ See CODE_REVIEW.md
 See EXECUTION_JOURNAL.md and EXECUTION_LOG.jsonl.
 `;
   fs.writeFileSync(resultPath, resultBody, "utf-8");
-  fs.writeFileSync("implementation-result.md", resultBody, "utf-8");
+  try {
+    const { writePackArtifact } = await import("../lib/packWorkspace.js");
+    writePackArtifact("implementation-result.md", resultBody, { bom: true });
+  } catch {
+    /* best-effort mirror under output home */
+  }
 
   try {
     const rb = await getRollback();

@@ -7,6 +7,12 @@ import * as path from "path";
 import type { UiRoute } from "./taskWriter.js";
 import { artifactNamesForSession } from "./artifacts.js";
 import { loadStoreDoc, saveStoreDoc } from "../lib/db/storeBridge.js";
+import {
+  agentLogPath,
+  agentReportPath,
+  ensureOutputHome,
+  getActiveRunDir,
+} from "../lib/outputHome.js";
 
 export type SessionEntry = {
   id: string;
@@ -79,7 +85,10 @@ export function saveSession(cwd: string, session: AgencySession): void {
   saveStoreDoc(cwd, "controlplane-session", session);
   const md = renderSessionMarkdown(session);
   try {
-    fs.writeFileSync(path.join(cwd, "controlplane-session.md"), md, "utf-8");
+    ensureOutputHome();
+    const dest = agentLogPath("controlplane-session.md");
+    fs.mkdirSync(path.dirname(dest), { recursive: true });
+    fs.writeFileSync(dest, md, "utf-8");
   } catch {
     /* markdown mirror is best-effort */
   }
@@ -98,14 +107,29 @@ export function readExecutionArtifacts(cwd: string): {
   const artifacts: string[] = [];
   const bits: string[] = [];
 
-  const execResult = path.join(cwd, "execution-result.md");
-  if (fs.existsSync(execResult)) {
+  const runDir = getActiveRunDir();
+  const searchRoots = [
+    runDir ? path.join(runDir, "artifacts") : "",
+    agentReportPath(),
+    cwd,
+  ].filter(Boolean);
+
+  function findArtifact(name: string): string | null {
+    for (const root of searchRoots) {
+      const p = path.join(root, name);
+      if (fs.existsSync(p) && fs.statSync(p).isFile()) return p;
+    }
+    return null;
+  }
+
+  const execResult = findArtifact("execution-result.md");
+  if (execResult) {
     artifacts.push("execution-result.md");
     bits.push(fs.readFileSync(execResult, "utf-8").trim().slice(0, 1200));
   }
 
-  const finalReport = path.join(cwd, "final-report.md");
-  if (fs.existsSync(finalReport)) {
+  const finalReport = findArtifact("final-report.md");
+  if (finalReport) {
     artifacts.push("final-report.md");
     const raw = fs.readFileSync(finalReport, "utf-8");
     try {
@@ -117,11 +141,8 @@ export function readExecutionArtifacts(cwd: string): {
     }
   }
 
-  const delivery = path.join(cwd, "DELIVERY_BOARD.md");
-  if (fs.existsSync(delivery)) artifacts.push("DELIVERY_BOARD.md");
-
-  const evidence = path.join(cwd, "evidence-pack.md");
-  if (fs.existsSync(evidence)) artifacts.push("evidence-pack.md");
+  if (findArtifact("DELIVERY_BOARD.md")) artifacts.push("DELIVERY_BOARD.md");
+  if (findArtifact("evidence-pack.md")) artifacts.push("evidence-pack.md");
 
   // Prefer richer list (pack + reports) when available
   try {

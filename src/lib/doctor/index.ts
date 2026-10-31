@@ -164,7 +164,7 @@ function checkOutputHome(env: NodeJS.ProcessEnv): DoctorCheck {
       id: "output_home",
       title: "SAM_OUTPUT_HOME",
       severity: "ok",
-      detail: `${home} -> reports/documents/runs/...`,
+      detail: `${home} -> reports/tasks/state/memory/conversations/backups/logs/...`,
     };
   } catch (e: any) {
     return {

@@ -20,6 +20,7 @@ import {
   getOutputHome,
   mirrorRunArtifacts,
 } from "./src/lib/outputHome.js";
+import { warnLegacyRepoArtifacts } from "./src/lib/legacyArtifacts.js";
 import { beginCostRun, endCostRun } from "./src/lib/costLedger.js";
 import {
   answerHelpQuery,
@@ -271,6 +272,7 @@ async function main() {
 
   const layout = ensureOutputHome();
   cleanOutputTemp();
+  warnLegacyRepoArtifacts(process.cwd(), (line) => warn("Legacy", line.replace(/^\[Sam-Harness\]\s*/i, "")));
   const runId = beginCostRun(process.env.SAM_HARNESS_RUN_ID);
   const outputRun = beginOutputRun(runId);
   process.env.SAM_OUTPUT_HOME = getOutputHome();

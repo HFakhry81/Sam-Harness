@@ -7,6 +7,7 @@ import * as path from "path";
 import { AGENCY_ROLES, type RoleContract } from "./roles.js";
 import type { RoleId } from "./types.js";
 import { appendAudit } from "../lib/trust/auditLog.js";
+import { agentBackupPath, ensureOutputHome } from "../lib/outputHome.js";
 
 export type TeamRoleModels = {
   local: string;
@@ -433,6 +434,18 @@ export function saveTeamConfig(
     },
   };
   const file = teamConfigPath(cwd);
+  // Backup previous config under SAM_OUTPUT_HOME/backups — never config/team.backup-*
+  try {
+    if (fs.existsSync(file)) {
+      ensureOutputHome();
+      const stamp = new Date().toISOString().replace(/[:.]/g, "-");
+      const bak = agentBackupPath(`team.backup-${stamp}.json`);
+      fs.mkdirSync(path.dirname(bak), { recursive: true });
+      fs.copyFileSync(file, bak);
+    }
+  } catch {
+    /* backup best-effort */
+  }
   const tmp = `${file}.${process.pid}.tmp`;
   fs.writeFileSync(tmp, JSON.stringify(toWrite, null, 2) + "\n", "utf-8");
   fs.renameSync(tmp, file);

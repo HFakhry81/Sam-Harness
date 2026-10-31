@@ -6,6 +6,7 @@ import * as fs from "fs";
 import * as path from "path";
 import * as crypto from "crypto";
 import { loadStoreDoc, saveStoreDoc } from "../../lib/db/storeBridge.js";
+import { ensureOutputHome } from "../../lib/outputHome.js";
 
 export type RollbackEntry = {
   id: string;
@@ -27,8 +28,10 @@ function journalPath(harnessRoot: string): string {
   return path.join(harnessRoot, "rollback-journal.json");
 }
 
-function backupDir(harnessRoot: string): string {
-  return path.join(harnessRoot, "rollback-backups");
+function backupDir(_harnessRoot: string): string {
+  // File backups for Level-3 rollback live under SAM_OUTPUT_HOME/backups
+  const layout = ensureOutputHome();
+  return path.join(layout.backups, "rollback");
 }
 
 function load(harnessRoot: string): RollbackStore {
