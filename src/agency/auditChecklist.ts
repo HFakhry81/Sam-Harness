@@ -148,12 +148,13 @@ export function scanMissingHandlers(root: string): ChecklistFinding[] {
       if (!/\bonPress\s*=/.test(attrs) && !/\bonClick\s*=/.test(attrs)) {
         // allow self-closing with spread props that might include handlers
         if (/\{\.\.\./.test(attrs)) continue;
+        const line = text.slice(0, m.index || 0).split(/\r?\n/).length;
         findings.push({
           id: `UI-HANDLER-${findings.length + 1}`,
           category: "ui_handler",
           severity: "P0",
-          summary: `<${m[1]}> without onPress/onClick in ${rel}`,
-          paths: [rel],
+          summary: `<${m[1]}> without onPress/onClick in ${rel}:${line}`,
+          paths: [`${rel}:${line}`],
           detail: `Opening tag lacks onPress/onClick: <${m[1]}${attrs.slice(0, 80)}>`,
         });
       }
@@ -161,12 +162,17 @@ export function scanMissingHandlers(root: string): ChecklistFinding[] {
     // Also catch logout buttons as object literals: { title: 'Logout' } without onPress nearby
     if (/logout/i.test(text) && !/logout[\s\S]{0,120}onPress/i.test(text)) {
       if (/logout/i.test(text) && /button|pressable|touchable/i.test(text)) {
+        const logoutIdx = text.search(/logout/i);
+        const line =
+          logoutIdx >= 0
+            ? text.slice(0, logoutIdx).split(/\r?\n/).length
+            : 1;
         findings.push({
           id: `UI-HANDLER-LOGOUT-${findings.length + 1}`,
           category: "ui_handler",
           severity: "P0",
-          summary: `Logout control appears without nearby onPress in ${rel}`,
-          paths: [rel],
+          summary: `Logout control appears without nearby onPress in ${rel}:${line}`,
+          paths: [`${rel}:${line}`],
           detail: "Logout mention found without onPress within 120 chars",
         });
       }

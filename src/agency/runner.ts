@@ -38,6 +38,8 @@ import {
 } from "./goalFidelity.js";
 import {
   assertCleanPackClaims,
+  enforcePackResiduesAfterWrite,
+  scoreGroundedAuditRubric,
   scrubPackFiles,
   scrubPackMarkdown,
 } from "./fidelityRubric.js";
@@ -49,7 +51,9 @@ import {
   buildAgencyVerdict,
   verdictConsoleLine,
   verdictMarkdown,
+  type AgencyVerdict,
 } from "./agencyVerdict.js";
+import { composeFinalReport } from "./finalReport.js";
 import {
   extractGoalPaths,
   primarySpecRoot,
@@ -330,9 +334,12 @@ export async function runAgencyArchitecture(task: string): Promise<AgencyRunResu
     runId: packRunId,
   });
 
+  const groundedCurrency = evidence.localeCurrency?.currency || "EGP";
+
   // Residue check on THIS run's strategy (sanitizer already ran before audit).
-  // Do NOT inspect stale final-report.md from a prior pack here.
-  const strategyScrub = scrubPackMarkdown(review.strategy || "");
+  // Do NOT inspect stale final-report.md from a prior pack here — final-report
+  // is re-checked AFTER the last write via enforcePackResiduesAfterWrite.
+  const strategyScrub = scrubPackMarkdown(review.strategy || "", [], groundedCurrency);
   if (strategyScrub.text !== review.strategy) {
     try {
       fs.writeFileSync("ceo-draft.md", strategyScrub.text, "utf-8");
@@ -340,7 +347,7 @@ export async function runAgencyArchitecture(task: string): Promise<AgencyRunResu
       /* ignore */
     }
   }
-  const draftCheck = assertCleanPackClaims(strategyScrub.text);
+  const draftCheck = assertCleanPackClaims(strategyScrub.text, groundedCurrency);
   const packRejectReasons: string[] = [];
   let packClaimsOk = draftCheck.ok;
   if (!draftCheck.ok) {
@@ -351,8 +358,9 @@ export async function runAgencyArchitecture(task: string): Promise<AgencyRunResu
     warn("Pack", packRejectReasons[0]);
   }
 
-  // Single-sourced verdict — console / final-report / gates.json must agree
-  const verdict = buildAgencyVerdict({
+  // Single-sourced verdict — console / final-report / gates.json must agree.
+  // May be revised after final-report residue enforcement below.
+  let verdict = buildAgencyVerdict({
     auditPassed: review.auditPassed,
     goalPassed: review.goalPassed,
     goalFidelityScore: review.goalFidelityScore,
@@ -361,27 +369,55 @@ export async function runAgencyArchitecture(task: string): Promise<AgencyRunResu
     packClaimsOk,
     rejectReasons: packRejectReasons,
   });
-  const auditPassed = verdict.auditPassed;
-  const goalPassed = verdict.goalPassed;
-  fs.writeFileSync("agency-verdict.md", verdictMarkdown(verdict), "utf-8");
-  try {
-    appendGateEntry(
-      {
-        at: new Date().toISOString(),
-        loop: review.loop,
-        gate: verdict.gate,
-        auditPassed: verdict.auditPassed,
-        goalPassed: verdict.goalPassed,
-        goalFidelityScore: verdict.goalFidelityScore,
-        rejectReasons: verdict.rejectReasons,
-        packClaimsOk: verdict.packClaimsOk,
-        reason: verdict.reason,
-      },
-      packRunId
-    );
-  } catch {
-    /* ignore */
+  let auditPassed = verdict.auditPassed;
+  let goalPassed = verdict.goalPassed;
+
+  function persistVerdict(v: AgencyVerdict): void {
+    fs.writeFileSync("agency-verdict.md", verdictMarkdown(v), "utf-8");
+    try {
+      appendGateEntry(
+        {
+          at: new Date().toISOString(),
+          loop: review.loop,
+          gate: v.gate,
+          auditPassed: v.auditPassed,
+          goalPassed: v.goalPassed,
+          goalFidelityScore: v.goalFidelityScore,
+          rejectReasons: v.rejectReasons,
+          packClaimsOk: v.packClaimsOk,
+          reason: v.reason,
+        },
+        packRunId
+      );
+    } catch {
+      /* ignore */
+    }
   }
+
+  const finalReportEvidence = {
+    verdict,
+    checklistFindings: evidence.checklist?.findings || [],
+    reqRows: (evidence.reqMatrix?.rows || []).map((r) => ({
+      id: r.id,
+      text: r.text,
+      status: r.status,
+      codePaths: r.codePaths,
+      evidenceNotes: r.evidenceNotes,
+    })),
+    groundedCurrency,
+    targetRepo: engagement.targetRepo,
+  };
+
+  function writeComposedFinalReport(modelProse?: string): string {
+    // Refresh verdict snapshot inside deterministic sections
+    const body = composeFinalReport({
+      evidence: { ...finalReportEvidence, verdict },
+      modelProse,
+    });
+    fs.writeFileSync("final-report.md", body, "utf-8");
+    return body;
+  }
+  persistVerdict(verdict);
   if (verdict.gate === "OPEN") {
     ok("Gate", verdictConsoleLine(verdict));
   } else {
@@ -396,7 +432,9 @@ export async function runAgencyArchitecture(task: string): Promise<AgencyRunResu
         verdictMarkdown(verdict),
         ``,
         ...review.history.map((h, i) => `---\n## Loop ${i + 1}\n\n${h}`),
-      ].join("\n")
+      ].join("\n"),
+      [],
+      groundedCurrency
     ).text,
     "utf-8"
   );
@@ -503,14 +541,16 @@ Blueprint: ${clip(ctx.layeredBlueprint, 1000)}
 Reply [VERIFIED] or [GAPS] + checklist. Be concise — no repeated lines.`
       );
       const picked = chooseNonDegenerateDraft(draft, review.strategy);
-      ctx.finalReport = picked.usedFallback
+      const modelProse = picked.usedFallback
         ? `${draft}\n\n---\n[DEGENERATION_GUARD] Regenerated text was repetitive; kept prior strategy excerpt + flag.\n\n${picked.text.slice(0, 2000)}`
         : picked.text;
+      let prose = modelProse;
       if (!picked.report.ok) {
         warn("Verifier", `final-report degeneration: ${picked.report.reason}`);
-        ctx.finalReport += `\n\n[DEGENERATION_FLAG] ${picked.report.reason}\n`;
+        prose += `\n\n[DEGENERATION_FLAG] ${picked.report.reason}\n`;
       }
-      fs.writeFileSync("final-report.md", ctx.finalReport, "utf-8");
+      // Deterministic Executive summary / Key Findings / Recommendations cannot be dropped
+      ctx.finalReport = writeComposedFinalReport(prose);
       return ctx;
     }
 
@@ -538,20 +578,16 @@ ${clip(brief, 3000)}`,
 
   if (!auditPassed) {
     warn("Gate", `Downstream specialists SKIPPED — ${verdict.reason}`);
-    finalReport = scrubPackMarkdown(
-      [
-        `# Final report — AUDIT GATE FAILED`,
-        `[FAILED_AUDIT_GATE]`,
-        verdictMarkdown(verdict),
-        ``,
-        clip(review.auditReport, 2500),
-      ].join("\n")
-    ).text;
-    fs.writeFileSync("final-report.md", finalReport, "utf-8");
+    // Still emit deterministic Key Findings so rejected packs are not brief
+    finalReport = writeComposedFinalReport(
+      [`[FAILED_AUDIT_GATE]`, clip(review.auditReport, 2500)].join("\n")
+    );
     fs.writeFileSync(
       "execution-result.md",
       scrubPackMarkdown(
-        `# Agency Result\n- engine: LangGraph\n${verdictMarkdown(verdict)}\n- loops: ${review.loop}\n`
+        `# Agency Result\n- engine: LangGraph\n${verdictMarkdown(verdict)}\n- loops: ${review.loop}\n`,
+        [],
+        groundedCurrency
       ).text,
       "utf-8"
     );
@@ -613,39 +649,140 @@ ${clip(layeredBlueprint, 3000)}`
     }
 
     if (!finalReport) {
-      finalReport = [
-        `# Final report`,
-        verdictMarkdown(verdict),
-        `Downstream steps: ${downstream.map((r) => r.id).join(", ")}`,
-        ``,
-        clip(layeredBlueprint, 2000),
-      ].join("\n");
+      finalReport = writeComposedFinalReport(
+        [
+          `Downstream steps: ${downstream.map((r) => r.id).join(", ")}`,
+          ``,
+          clip(layeredBlueprint, 2000),
+        ].join("\n")
+      );
+    } else {
+      // Re-compose so deterministic Key Findings survive verifier/model prose
+      finalReport = writeComposedFinalReport(finalReport);
     }
-    finalReport = scrubPackMarkdown(finalReport).text;
-    fs.writeFileSync("final-report.md", finalReport, "utf-8");
 
     fs.writeFileSync(
       "execution-result.md",
       scrubPackMarkdown(
-        `# Agency Result\n- engine: LangGraph\n${verdictMarkdown(verdict)}\n- loops: ${review.loop}\n- downstream: ${downstream.map((r) => r.id).join(",")}\n`
+        `# Agency Result\n- engine: LangGraph\n${verdictMarkdown(verdict)}\n- loops: ${review.loop}\n- downstream: ${downstream.map((r) => r.id).join(",")}\n`,
+        [],
+        groundedCurrency
       ).text,
       "utf-8"
     );
   }
 
-  // Scrub all pack markdown BEFORE archive — residues only allowed in model-errors fences
+  // AFTER the last final-report rewrite: remediate residues across every pack file
+  // (rewrite max 2 → clean sentence delete). Gate MUST close if anything remains.
   {
-    const { scrubbed, stillDirty } = scrubPackFiles(process.cwd());
+    const enforcement = await enforcePackResiduesAfterWrite({
+      cwd: process.cwd(),
+      targetRepo: engagement.targetRepo,
+      groundedCurrency,
+      rewriteFn: async (prompt) => invoke(strategist, prompt, task),
+    });
+    if (enforcement.remediations.length) {
+      sys(
+        `Pack residue remediation: ${enforcement.remediations
+          .map((r) => r.file)
+          .join(", ")}`
+      );
+    }
+    if (!enforcement.ok) {
+      const residueMsg = `Pack claim assertion FAIL: forbidden residues ${enforcement.stillDirty
+        .map((d) => `${d.file}[${d.violations.join(",")}]`)
+        .join("; ")} after final rewrite/delete`;
+      packClaimsOk = false;
+      packRejectReasons.push(residueMsg);
+      warn("Pack", residueMsg);
+      verdict = buildAgencyVerdict({
+        auditPassed: review.auditPassed,
+        goalPassed: review.goalPassed,
+        goalFidelityScore: review.goalFidelityScore,
+        loop: review.loop,
+        maxLoops: MAX_LOOPS,
+        packClaimsOk: false,
+        rejectReasons: packRejectReasons,
+      });
+      auditPassed = verdict.auditPassed;
+      goalPassed = verdict.goalPassed;
+      persistVerdict(verdict);
+      // Refresh final-report with CLOSED verdict + deterministic findings
+      finalReport = writeComposedFinalReport(
+        fs.existsSync("final-report.md")
+          ? fs.readFileSync("final-report.md", "utf-8")
+          : undefined
+      );
+      warn("Gate", verdictConsoleLine(verdict));
+    } else if (fs.existsSync("final-report.md")) {
+      finalReport = fs.readFileSync("final-report.md", "utf-8");
+    }
+  }
+
+  // Fidelity: final-report must cover structured findings
+  if (fs.existsSync("final-report.md")) {
+    const fr = fs.readFileSync("final-report.md", "utf-8");
+    const coverageRubric = scoreGroundedAuditRubric({
+      strategy: review.strategy || "",
+      evidenceMarkdown: evidence.summaryMarkdown,
+      specsReadCount: evidence.spec?.filesRead?.length || 0,
+      reqRows: finalReportEvidence.reqRows,
+      findings: (evidence.checklist?.findings || []).map((f) => ({
+        id: f.id,
+        severity: f.severity,
+        summary: f.summary,
+        category: f.category,
+      })),
+      cwd: process.cwd(),
+      finalReport: fr,
+      groundedCurrency,
+    });
+    const cov = coverageRubric.items.find((i) => i.id === "findings_coverage");
+    if (cov?.applicable && !cov.passed) {
+      // Re-inject deterministic sections — model must not be able to drop them
+      finalReport = writeComposedFinalReport(fr);
+      sys("Final report: reinjected deterministic Key Findings for fidelity coverage");
+    }
+  }
+
+  // Placeholder scrub only — currency/path residues already remediated above.
+  // Scrub must NOT be the sole gate for wrong-currency tokens.
+  {
+    const { scrubbed, stillDirty } = scrubPackFiles(
+      process.cwd(),
+      undefined,
+      groundedCurrency
+    );
     if (scrubbed.length) {
       sys(`Pack scrub: cleaned ${scrubbed.join(", ")}`);
     }
     if (stillDirty.length) {
-      warn(
-        "Pack",
-        `Residues remain after scrub: ${stillDirty
-          .map((d) => `${d.file}[${d.violations.join(",")}]`)
-          .join("; ")}`
+      const residueMsg = `Pack claim assertion FAIL: forbidden residues ${stillDirty
+        .map((d) => `${d.file}[${d.violations.join(",")}]`)
+        .join("; ")} remain after scrub`;
+      packClaimsOk = false;
+      packRejectReasons.push(residueMsg);
+      warn("Pack", residueMsg);
+      verdict = buildAgencyVerdict({
+        auditPassed: review.auditPassed,
+        goalPassed: review.goalPassed,
+        goalFidelityScore: review.goalFidelityScore,
+        loop: review.loop,
+        maxLoops: MAX_LOOPS,
+        packClaimsOk: false,
+        rejectReasons: packRejectReasons,
+      });
+      auditPassed = verdict.auditPassed;
+      goalPassed = verdict.goalPassed;
+      persistVerdict(verdict);
+      finalReport = writeComposedFinalReport(
+        fs.existsSync("final-report.md")
+          ? fs.readFileSync("final-report.md", "utf-8")
+          : undefined
       );
+      warn("Gate", verdictConsoleLine(verdict));
+    } else if (fs.existsSync("final-report.md")) {
+      finalReport = fs.readFileSync("final-report.md", "utf-8");
     }
   }
 

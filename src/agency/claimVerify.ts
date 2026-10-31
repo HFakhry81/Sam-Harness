@@ -49,7 +49,23 @@ const PATH_IN_BACKTICKS = /`([^`]+)`/g;
 const PATHISH =
   /(?:^|[\s(])((?:packages|apps|src|docs|lib|scripts|config)\/[A-Za-z0-9_./\-]+)/g;
 const BARE_ROOTS = /\b(packages\/[^\s`'",.]+|apps\/web(?:\/[^\s`'",.]*)?|apps\/mobile(?:\/[^\s`'",.]*)?)\b/gi;
-const BAD_CURRENCY = /\b(SAR|USD|AED|QAR|KWD|BHD|OMR)\b/g;
+/** Non-grounded ISO codes commonly hallucinated; matched case-insensitively. */
+export const FORBIDDEN_CURRENCY_ALTERNATES =
+  "SAR|USD|AED|QAR|KWD|BHD|OMR|EUR|GBP";
+const BAD_CURRENCY = new RegExp(`\\b(${FORBIDDEN_CURRENCY_ALTERNATES})\\b`, "gi");
+
+export const MAX_CLAIM_REWRITES = 2;
+
+/** True when token is a forbidden currency relative to the grounded code. */
+export function isForbiddenCurrencyToken(
+  token: string,
+  groundedCurrency = "EGP"
+): boolean {
+  const code = String(token || "").toUpperCase();
+  const grounded = String(groundedCurrency || "EGP").toUpperCase();
+  if (!code || code === grounded) return false;
+  return new RegExp(`^(?:${FORBIDDEN_CURRENCY_ALTERNATES})$`, "i").test(code);
+}
 
 export function extractCitedPaths(text: string): string[] {
   const out = new Set<string>();
@@ -145,19 +161,24 @@ export function detectInvalidClaims(
     });
   }
 
-  const currencyRe = new RegExp(BAD_CURRENCY.source, "g");
+  const currencyRe = new RegExp(BAD_CURRENCY.source, BAD_CURRENCY.flags);
   let m: RegExpExecArray | null;
   const seenCur = new Set<string>();
   while ((m = currencyRe.exec(text))) {
     const code = m[1].toUpperCase();
-    if (code === groundedCurrency.toUpperCase()) continue;
+    if (!isForbiddenCurrencyToken(code, groundedCurrency)) continue;
     if (seenCur.has(code)) continue;
     seenCur.add(code);
+    // Prefer the exact matched casing for sentence lookup (tables/code spans included)
+    const matched = m[0];
     invalid.push({
       kind: "invalid_currency",
       claim: code,
       detail: `currency ${code} conflicts with grounded ${groundedCurrency} — do not invent; rewrite using ${groundedCurrency}`,
-      sentence: sentenceContaining(text, code),
+      sentence:
+        sentenceContaining(text, matched) ||
+        sentenceContaining(text, code) ||
+        sentenceContaining(text, code.toLowerCase()),
     });
   }
   if (/saudi\s*riyal|ريال\s*سعودي/i.test(text) && groundedCurrency === "EGP") {
@@ -182,6 +203,24 @@ export function deleteClaimSentences(
   let out = String(text || "");
   const deleted: string[] = [];
   for (const inv of invalid) {
+    if (inv.kind === "invalid_currency") {
+      // Wipe EVERY line / table row / list item / code-span line that carries
+      // the token (case-insensitive). Do not stop after one sentence — SAR can
+      // reappear in tables and `sar` spans in the same document.
+      const token = inv.claim.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+      const lineRe = new RegExp(`^.*\\b${token}\\b.*$\\n?`, "gmi");
+      const before = out;
+      out = out.replace(lineRe, "");
+      if (out !== before) deleted.push(`lines containing ${inv.claim}`);
+      for (const chunk of splitSentences(out)) {
+        if (new RegExp(`\\b${token}\\b`, "i").test(chunk) && chunk.length >= 3) {
+          out = out.split(chunk).join("");
+          deleted.push(chunk.slice(0, 160));
+        }
+      }
+      continue;
+    }
+
     const sent = inv.sentence;
     if (sent && sent.length >= 8 && out.includes(sent)) {
       out = out.replace(sent, "");
@@ -194,14 +233,6 @@ export function deleteClaimSentences(
         `^.*(?:\`${inv.claim.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}\`|\\b${inv.claim
           .replace(/[.*+?^${}()|[\]\\]/g, "\\$&")
           .replace(/\//g, "\\/")}\\b).*$\n?`,
-        "gmi"
-      );
-      const before = out;
-      out = out.replace(lineRe, "");
-      if (out !== before) deleted.push(`line containing ${inv.claim}`);
-    } else if (inv.kind === "invalid_currency") {
-      const lineRe = new RegExp(
-        `^.*\\b${inv.claim.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}\\b.*$\n?`,
         "gmi"
       );
       const before = out;
@@ -316,27 +347,31 @@ export function finalizeClaimsClean(
       needsRewrite: false,
     };
   }
-  const cleaned = deleteClaimSentences(text, detected.invalid);
-  const again = detectInvalidClaims(cleaned.text, targetRepo, groundedCurrency);
-  // Second pass on leftovers
-  const cleaned2 = again.ok
-    ? cleaned
-    : deleteClaimSentences(cleaned.text, again.invalid);
-  const finalCheck = detectInvalidClaims(cleaned2.text, targetRepo, groundedCurrency);
+  let current = text;
+  let passes = 0;
+  let lastInvalid = detected.invalid;
+  while (passes < 4) {
+    passes += 1;
+    const round = detectInvalidClaims(current, targetRepo, groundedCurrency);
+    if (round.ok) break;
+    lastInvalid = round.invalid;
+    current = deleteClaimSentences(current, round.invalid).text;
+  }
+  const finalCheck = detectInvalidClaims(current, targetRepo, groundedCurrency);
   // Absolute ban: strip any leftover [REMOVED] if a prior version left them
-  let finalText = cleaned2.text.replace(/\s*\[REMOVED[^\]]*\]\s*/gi, " ");
+  let finalText = current.replace(/\s*\[REMOVED[^\]]*\]\s*/gi, " ");
   finalText = finalText.replace(/\n{3,}/g, "\n\n").trim() + "\n";
 
   return {
     text: finalText,
-    removedPaths: detected.invalid
+    removedPaths: lastInvalid
       .filter((i) => i.kind === "invalid_path")
       .map((i) => i.claim),
-    removedCurrencies: detected.invalid
+    removedCurrencies: lastInvalid
       .filter((i) => i.kind === "invalid_currency")
       .map((i) => i.claim),
     flags: [
-      `clean-deleted ${detected.invalid.length} invalid claim sentence(s)`,
+      `clean-deleted invalid claim sentence(s) in ${passes} pass(es)`,
       finalCheck.ok ? "clean" : "residual claims remain after delete",
     ],
     invalid: finalCheck.invalid,
@@ -348,4 +383,50 @@ export function finalizeClaimsClean(
     })),
     needsRewrite: !finalCheck.ok,
   };
+}
+
+/**
+ * Detect → rewrite (max 2) → clean-delete. Never placeholders / never auto-sub currency.
+ * `rewriteFn` is optional (tests / offline packs skip straight to clean-delete).
+ */
+export async function remediateInvalidClaims(
+  text: string,
+  targetRepo: string,
+  groundedCurrency = "EGP",
+  rewriteFn?: (prompt: string) => Promise<string>,
+  maxRewrites = MAX_CLAIM_REWRITES
+): Promise<SanitizeDraftResult> {
+  let current = String(text || "");
+  let detected = sanitizeDraftClaims(current, targetRepo, groundedCurrency);
+  if (!detected.needsRewrite) {
+    return { ...detected, text: current };
+  }
+
+  if (rewriteFn) {
+    for (let attempt = 0; attempt < maxRewrites && detected.needsRewrite; attempt++) {
+      const prompt =
+        detected.rewritePrompt ||
+        buildClaimRewritePrompt({
+          draft: current,
+          invalid: detected.invalid,
+          groundedCurrency,
+          evidenceClip: `(targetRepo=${targetRepo}; currency=${groundedCurrency})`,
+        });
+      try {
+        current = await rewriteFn(prompt);
+        // Never accept an auto-substituted token swap as success without re-detect
+        detected = sanitizeDraftClaims(current, targetRepo, groundedCurrency);
+      } catch {
+        break;
+      }
+    }
+  }
+
+  if (detected.needsRewrite) {
+    return finalizeClaimsClean(current, targetRepo, groundedCurrency);
+  }
+  // Strip placeholders even when rewrite succeeded
+  current = current.replace(/\s*\[REMOVED[^\]]*\]\s*/gi, " ");
+  current = current.replace(/\n{3,}/g, "\n\n").trim() + "\n";
+  return { ...detected, text: current, needsRewrite: false };
 }

@@ -472,7 +472,7 @@ ${clip(state.evidenceMarkdown, 3000)}`;
       if (claimErrors.length) {
         logModelClaimErrors(claimErrors, runId);
       }
-      const packCheck = assertCleanPackClaims(strategy);
+      const packCheck = assertCleanPackClaims(strategy, currency);
       if (!packCheck.ok) {
         warn(
           "Strategist",
@@ -632,8 +632,8 @@ ${REJECTION_FORMAT}`
       goalPassed = false;
     }
 
-    // Pack-level assertion: 0 SAR / packages/ / apps/web / [REMOVED]
-    const packAssert = assertCleanPackClaims(strategyText);
+    // Pack-level assertion: 0 wrong-currency / packages/ / apps/web / [REMOVED]
+    const packAssert = assertCleanPackClaims(strategyText, currency);
     if (!packAssert.ok) {
       rejectReasons.push(
         `Pack claim assertion FAIL: forbidden residues ${packAssert.violations.join(", ")}`
