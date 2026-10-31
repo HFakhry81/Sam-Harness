@@ -4,7 +4,8 @@
  */
 import * as fs from "fs";
 import * as path from "path";
-import type { SpecRequirement } from "./specIngest.js";
+import type { SpecRequirement, SpecReqKind } from "./specIngest.js";
+import { classifyReqKind, isDocumentOnlyRequirement } from "./specIngest.js";
 import type { RepoIndexResult } from "./repoIndex.js";
 import type { ChecklistFinding } from "./auditChecklist.js";
 import {
@@ -33,6 +34,10 @@ export type ReqTraceRow = {
   evidenceNotes: string[];
   sourceFile: string;
   section: string;
+  /** feature | non_functional | document_only */
+  kind?: SpecReqKind;
+  /** Merged source citations from near-duplicate REQs. */
+  sources?: Array<{ sourceFile: string; section: string }>;
   /**
    * True when per-REQ code search ran and a status was assigned
    * (including missing). n/a headings are not assessed.
@@ -492,25 +497,89 @@ export function buildReqTraceMatrix(
 ): ReqTraceMatrix {
   const bodies = loadSampleBodies(index.targetRepo);
   let rows: ReqTraceRow[] = requirements.map((req) => {
-    if (isSpecHeadingNotRequirement(req.text)) {
+    const kind: SpecReqKind =
+      req.kind ||
+      classifyReqKind(req.text) ||
+      (isSpecHeadingNotRequirement(req.text) || isDocumentOnlyRequirement(req.text)
+        ? "document_only"
+        : "feature");
+    const sources =
+      req.sources && req.sources.length
+        ? req.sources
+        : [{ sourceFile: req.sourceFile, section: req.section }];
+
+    // Document-only (roadmap, costs, guidelines, overview, bare section titles) → n/a
+    if (
+      kind === "document_only" ||
+      isSpecHeadingNotRequirement(req.text) ||
+      isDocumentOnlyRequirement(req.text)
+    ) {
       return {
         id: req.id,
         text: req.text,
         sourceFile: req.sourceFile,
         section: req.section,
+        kind: "document_only" as const,
+        sources,
         status: "n/a" as const,
         codePaths: [],
-        evidenceNotes: ["spec heading / section title - excluded from coverage"],
+        evidenceNotes: [
+          "document-only / section title - excluded from coverage",
+        ],
         assessed: false,
         searchHitCount: 0,
       };
     }
+
     const scored = scoreAgainstRepo(req, index, bodies);
+
+    // Non-functional: keep best evidence, else unverified (never inflate missing as code gap)
+    if (kind === "non_functional") {
+      if (
+        scored.status === "implemented" ||
+        scored.status === "partial" ||
+        scored.status === "contradicts"
+      ) {
+        return {
+          id: req.id,
+          text: req.text,
+          sourceFile: req.sourceFile,
+          section: req.section,
+          kind,
+          sources,
+          ...scored,
+          assessed: scored.assessed !== false,
+          evidenceNotes: [
+            ...scored.evidenceNotes.slice(0, 5),
+            "non-functional REQ assessed with best available evidence",
+          ],
+        };
+      }
+      return {
+        id: req.id,
+        text: req.text,
+        sourceFile: req.sourceFile,
+        section: req.section,
+        kind,
+        sources,
+        status: "unverified" as const,
+        codePaths: scored.codePaths || [],
+        evidenceNotes: [
+          ...(scored.evidenceNotes || []).slice(0, 4),
+          "non-functional REQ - unverified without strong code evidence",
+        ],
+        assessed: true,
+        searchHitCount: scored.searchHitCount ?? 0,
+      };
+    }
+
     return {
       id: req.id,
       text: req.text,
       sourceFile: req.sourceFile,
       section: req.section,
+      kind,
+      sources,
       ...scored,
       assessed: scored.assessed !== false,
     };
@@ -540,7 +609,7 @@ export function buildReqTraceMatrix(
     `| --- | --- | --- | --- |`,
     ...rows.map(
       (r) =>
-        `| ${r.id} | ${r.status} | ${r.codePaths.map((p) => `\`${p}\``).join("<br>") || "-"} | ${r.text.replace(/\|/g, "/").slice(0, 120)} |`
+        `| ${r.id} | ${r.status}${r.kind ? ` (${r.kind})` : ""} | ${r.codePaths.map((p) => `\`${p}\``).join("<br>") || "-"} | ${r.text.replace(/\|/g, "/").slice(0, 120)} |`
     ),
     ``,
   ].join("\n");
