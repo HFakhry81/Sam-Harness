@@ -50,7 +50,7 @@ task.ts / task.md
                     │                                  ▼
                     │                         Delivery Board + PENDING Go/No-Go
                     │                                  │
-                    └──────────► archive docs/Sam-Harness no.X
+                    └──────────► archive SAM_OUTPUT_HOME/reports/Sam-Harness no.X
                                                    │
                                       owner GO? ───┼─── NO → توقف (لا كود عميل)
                                                    └── YES → Implementer (L3)

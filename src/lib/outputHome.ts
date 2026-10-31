@@ -1,6 +1,10 @@
 /**
- * Default agent output home — reports/documents/runs under Documents/Sam-Harness.
+ * Default agent output home — all run artifacts under Documents/Sam-Harness.
  * Override with SAM_OUTPUT_HOME.
+ *
+ * Layout (required):
+ *   reports/  tasks/  state/  memory/  conversations/  backups/  logs/
+ * Compat also kept: documents/  exports/  runs/  temp/
  */
 import * as fs from "fs";
 import * as os from "os";
@@ -9,10 +13,15 @@ import * as path from "path";
 export type OutputLayout = {
   home: string;
   reports: string;
+  tasks: string;
+  state: string;
+  memory: string;
+  conversations: string;
+  backups: string;
+  logs: string;
   documents: string;
   exports: string;
   runs: string;
-  memory: string;
   temp: string;
 };
 
@@ -39,10 +48,15 @@ export function getOutputLayout(home: string = getOutputHome()): OutputLayout {
   return {
     home,
     reports: path.join(home, "reports"),
+    tasks: path.join(home, "tasks"),
+    state: path.join(home, "state"),
+    memory: path.join(home, "memory"),
+    conversations: path.join(home, "conversations"),
+    backups: path.join(home, "backups"),
+    logs: path.join(home, "logs"),
     documents: path.join(home, "documents"),
     exports: path.join(home, "exports"),
     runs: path.join(home, "runs"),
-    memory: path.join(home, "memory"),
     temp: path.join(home, "temp"),
   };
 }
@@ -60,12 +74,20 @@ export function ensureOutputHome(home: string = getOutputHome()): OutputLayout {
       [
         "Sam-Harness agent output home",
         "",
-        "reports/    — numbered review packs and reports",
-        "documents/  — generated documents",
-        "exports/    — export bundles",
-        "runs/       — per-run artifacts and logs (YYYY-MM-DD/<run-id>/)",
-        "memory/     — self-learning lessons.json + skills.json (+ promoted rules)",
-        "temp/       — scratch (safe to delete; auto-cleaned)",
+        "reports/        — numbered review packs (Sam-Harness no.X)",
+        "tasks/          — runtime task.ts / task.md / task.spec.json",
+        "state/          — SQLite DB and session state",
+        "memory/         — self-learning lessons + skills (+ agent-memory.md)",
+        "conversations/  — chat session history",
+        "backups/        — DB and config backups (never inside the repo)",
+        "logs/           — run / control-plane logs",
+        "documents/      — generated documents / help exports",
+        "exports/        — export bundles",
+        "runs/           — per-run staging (YYYY-MM-DD/<run-id>/)",
+        "temp/           — scratch (safe to delete; auto-cleaned)",
+        "",
+        "Nothing is written into the Sam-Harness git repo or a target project",
+        "repo except explicit GO Level-3 source edits.",
         "",
         "Override location with SAM_OUTPUT_HOME.",
         "",
@@ -127,6 +149,40 @@ export function agentReportPath(...segments: string[]): string {
 /** Path under documents/. */
 export function agentDocumentPath(...segments: string[]): string {
   return path.normalize(path.join(ensureOutputHome().documents, ...segments));
+}
+
+/** Path under tasks/. */
+export function agentTaskPath(...segments: string[]): string {
+  return path.normalize(path.join(ensureOutputHome().tasks, ...segments));
+}
+
+/** Path under memory/. */
+export function agentMemoryPath(...segments: string[]): string {
+  return path.normalize(path.join(ensureOutputHome().memory, ...segments));
+}
+
+/** Path under backups/. */
+export function agentBackupPath(...segments: string[]): string {
+  return path.normalize(path.join(ensureOutputHome().backups, ...segments));
+}
+
+/** Path under logs/ (top-level output home logs, not per-run). */
+export function agentLogPath(...segments: string[]): string {
+  return path.normalize(path.join(ensureOutputHome().logs, ...segments));
+}
+
+/** Path under state/. */
+export function agentStatePath(...segments: string[]): string {
+  return path.normalize(path.join(ensureOutputHome().state, ...segments));
+}
+
+/**
+ * True when absPath resolves under SAM_OUTPUT_HOME (never the git repo).
+ */
+export function isUnderOutputHome(absPath: string, home: string = getOutputHome()): boolean {
+  const h = path.normalize(home).toLowerCase();
+  const t = path.normalize(absPath).toLowerCase();
+  return t === h || t.startsWith(h + path.sep);
 }
 
 /** Copy known cwd run products into the active run's artifacts/ folder. */

@@ -102,11 +102,9 @@ function newestPackUnder(parent: string): string | null {
   return dirs[0]?.full || null;
 }
 
-/** Newest Sam-Harness no.X under output reports/ or project docs/. */
-export function findLatestPackDir(root: string): string | null {
-  const fromOutput = newestPackUnder(getOutputLayout().reports);
-  if (fromOutput) return fromOutput;
-  return newestPackUnder(path.join(root, "docs"));
+/** Newest Sam-Harness no.X under SAM_OUTPUT_HOME/reports only (never project docs/). */
+export function findLatestPackDir(_root?: string): string | null {
+  return newestPackUnder(getOutputLayout().reports);
 }
 
 function listFilesRecursive(dir: string, max = 40): string[] {
@@ -160,22 +158,33 @@ export function listRunArtifacts(root: string): {
     }
   }
 
+  // Prefer active run artifacts / reports over any legacy cwd copies
+  const layout = getOutputLayout();
   for (const f of ROOT_FILES) {
-    push(path.join(root, f.name), true);
+    const fromReports = path.join(layout.reports, f.name);
+    if (fs.existsSync(fromReports)) push(fromReports, true);
+    else push(path.join(layout.home, f.name), true);
   }
 
-  // review-loop top files (skip if already covered via pack)
-  const loop = path.join(root, "review-loop");
-  if (fs.existsSync(loop)) {
-    try {
-      const versions = fs
-        .readdirSync(loop)
-        .filter((n) => /^strategy-v\d+\.md$/i.test(n) || /^audit-v\d+\.md$/i.test(n) || /^LOOP_SUMMARY\.md$/i.test(n))
-        .map((n) => path.join(loop, n));
-      versions.sort((a, b) => fs.statSync(b).mtimeMs - fs.statSync(a).mtimeMs);
-      versions.slice(0, 6).forEach((f) => push(f, true));
-    } catch {
-      /* ignore */
+  // review-loop under newest pack only (never repo cwd/review-loop)
+  if (packDir) {
+    const loop = path.join(packDir, "review-loop");
+    if (fs.existsSync(loop)) {
+      try {
+        const versions = fs
+          .readdirSync(loop)
+          .filter(
+            (n) =>
+              /^strategy-v\d+\.md$/i.test(n) ||
+              /^audit-v\d+\.md$/i.test(n) ||
+              /^LOOP_SUMMARY\.md$/i.test(n)
+          )
+          .map((n) => path.join(loop, n));
+        versions.sort((a, b) => fs.statSync(b).mtimeMs - fs.statSync(a).mtimeMs);
+        versions.slice(0, 6).forEach((f) => push(f, true));
+      } catch {
+        /* ignore */
+      }
     }
   }
 

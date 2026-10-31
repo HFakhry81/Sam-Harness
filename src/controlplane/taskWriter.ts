@@ -1,5 +1,6 @@
 /**
  * Task file writer — renders Task Spec (source of truth) into task.ts / task.md.
+ * Runtime files go under SAM_OUTPUT_HOME/tasks/ (never the git repo cwd).
  */
 import * as fs from "fs";
 import * as path from "path";
@@ -12,6 +13,7 @@ import {
   type SpecBuildInput,
   type TaskSpec,
 } from "./taskSpec.js";
+import { getTaskDir, resolveTaskReadPath } from "../lib/taskPaths.js";
 
 export type UiRoute = "architecture" | "operational" | "implement";
 
@@ -96,7 +98,7 @@ export default taskConfig;
 }
 
 export function writeTaskFiles(
-  cwd: string,
+  _cwd: string,
   draft: TaskDraft
 ): { taskTs: string; taskMd: string; specJson: string } {
   if (!draft.ready) {
@@ -105,13 +107,14 @@ export function writeTaskFiles(
         draft.needsClarification.join(" | ")
     );
   }
-  const taskTs = path.join(cwd, "task.ts");
-  const bak = path.join(cwd, "task.ts.bak");
+  const dir = getTaskDir();
+  const taskTs = path.join(dir, "task.ts");
+  const bak = path.join(dir, "task.ts.bak");
   if (fs.existsSync(taskTs)) fs.copyFileSync(taskTs, bak);
-  const { specJson, taskMd } = writeTaskSpecFiles(cwd, draft.spec);
+  const { specJson, taskMd } = writeTaskSpecFiles(dir, draft.spec);
   fs.writeFileSync(taskTs, renderTaskTs(draft), "utf-8");
   // Keep recoverable draft so UI can restore after refresh (cleared only on success idle)
-  persistComposeDraft(cwd, draft, draft.spec.rawPrompt || draft.spec.goal || "");
+  persistComposeDraft(dir, draft, draft.spec.rawPrompt || draft.spec.goal || "");
   return { taskTs, taskMd, specJson };
 }
 
@@ -119,8 +122,9 @@ export function writeTaskFiles(
  * Always persist in-progress compose so the UI can restore after refresh / accidental clear.
  * Does NOT overwrite a ready task.ts until ready=true save.
  */
-export function persistComposeDraft(cwd: string, draft: TaskDraft, prompt: string): string {
-  const p = path.join(cwd, "task.draft.json");
+export function persistComposeDraft(_cwd: string, draft: TaskDraft, prompt: string): string {
+  const dir = getTaskDir();
+  const p = path.join(dir, "task.draft.json");
   fs.writeFileSync(
     p,
     JSON.stringify(
@@ -141,7 +145,7 @@ export function persistComposeDraft(cwd: string, draft: TaskDraft, prompt: strin
   );
   // Keep a human-visible preview of the pending goal
   fs.writeFileSync(
-    path.join(cwd, "task.pending.md"),
+    path.join(dir, "task.pending.md"),
     `# Pending Task (not executed yet)\n\n## Prompt\n${prompt}\n\n## Ready\n${draft.ready}\n\n## Clarifications\n${
       draft.needsClarification.map((q) => `- ${q}`).join("\n") || "- none"
     }\n\n---\n\n${draft.body}\n`,
@@ -150,7 +154,7 @@ export function persistComposeDraft(cwd: string, draft: TaskDraft, prompt: strin
   return p;
 }
 
-export function readComposeDraft(cwd: string): {
+export function readComposeDraft(cwd: string = process.cwd()): {
   prompt: string;
   title?: string;
   ready: boolean;
@@ -159,27 +163,27 @@ export function readComposeDraft(cwd: string): {
   spec?: TaskDraft["spec"];
   body?: string;
 } | null {
-  const p = path.join(cwd, "task.draft.json");
+  const p = resolveTaskReadPath("task.draft.json", cwd);
   try {
-    if (!fs.existsSync(p)) return null;
+    if (!p || !fs.existsSync(p)) return null;
     return JSON.parse(fs.readFileSync(p, "utf-8"));
   } catch {
     return null;
   }
 }
 
-export function readCurrentTaskMeta(cwd: string): {
+export function readCurrentTaskMeta(cwd: string = process.cwd()): {
   exists: boolean;
   preview?: string;
   raw?: string;
 } {
-  const taskMd = path.join(cwd, "task.md");
-  const taskTs = path.join(cwd, "task.ts");
-  if (fs.existsSync(taskMd)) {
+  const taskMd = resolveTaskReadPath("task.md", cwd);
+  if (taskMd) {
     const raw = fs.readFileSync(taskMd, "utf-8");
     return { exists: true, preview: raw.slice(0, 2000), raw };
   }
-  if (fs.existsSync(taskTs)) {
+  const taskTs = resolveTaskReadPath("task.ts", cwd);
+  if (taskTs) {
     const raw = fs.readFileSync(taskTs, "utf-8");
     return { exists: true, preview: raw.slice(0, 2000), raw };
   }

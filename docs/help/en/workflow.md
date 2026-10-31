@@ -42,7 +42,7 @@ flowchart TD
   RG -->|rejected after 5| FAIL[FAILED_AUDIT_GATE]
   RG -->|APPROVED + goalPassed| DOWN[Downstream from team.json]
   DOWN --> DEL[Delivery board + go-nogo PENDING]
-  DEL --> PACK[Archive Sam-Harness no.N]
+  DEL --> PACK[Archive under SAM_OUTPUT_HOME/reports]
   PACK --> L3Q{shouldRunLevel3 + GO?}
   L3Q -->|yes| L3[runImplementationCrew]
   L3Q -->|no| STOP[Report pack only]

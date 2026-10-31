@@ -11,7 +11,7 @@ import {
   getOutputHome,
   mirrorRunArtifacts,
 } from "../src/lib/outputHome.js";
-import { defaultProjectDocsRoot, isSamHarnessWorkspace } from "../src/lib/reviewPackDir.js";
+import { defaultProjectDocsRoot } from "../src/lib/reviewPackDir.js";
 
 const prevOut = process.env.SAM_OUTPUT_HOME;
 let tmp: string;
@@ -38,10 +38,22 @@ describe("SAM_OUTPUT_HOME layout", () => {
     expect(home.toLowerCase()).toMatch(/sam-harness/i);
   });
 
-  it("creates reports/documents/exports/runs/memory/temp", () => {
+  it("creates reports/tasks/state/memory/conversations/backups/logs (+compat)", () => {
     const layout = ensureOutputHome();
     expect(layout.home).toBe(path.normalize(tmp));
-    for (const key of ["reports", "documents", "exports", "runs", "memory", "temp"] as const) {
+    for (const key of [
+      "reports",
+      "tasks",
+      "state",
+      "memory",
+      "conversations",
+      "backups",
+      "logs",
+      "documents",
+      "exports",
+      "runs",
+      "temp",
+    ] as const) {
       expect(fs.existsSync(layout[key])).toBe(true);
     }
   });
@@ -63,9 +75,12 @@ describe("SAM_OUTPUT_HOME layout", () => {
     fs.rmSync(cwd, { recursive: true, force: true });
   });
 
-  it("routes Sam-Harness self packs to output reports/", () => {
-    if (!isSamHarnessWorkspace()) return;
-    const docs = defaultProjectDocsRoot(process.cwd());
-    expect(path.normalize(docs)).toBe(path.normalize(agentReportPath()));
+  it("routes every pack root to output reports/ (never <repo>/docs)", () => {
+    expect(path.normalize(defaultProjectDocsRoot(process.cwd()))).toBe(
+      path.normalize(agentReportPath())
+    );
+    expect(path.normalize(defaultProjectDocsRoot("/tmp/some-client-repo"))).toBe(
+      path.normalize(agentReportPath())
+    );
   });
 });

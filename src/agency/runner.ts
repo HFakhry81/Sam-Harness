@@ -251,7 +251,8 @@ export async function runAgencyArchitecture(task: string): Promise<AgencyRunResu
     clientName: "UpNexa",
     projectName: path.basename(targetRepoAbs) || "client-project",
     targetRepo: targetRepoAbs,
-    docsRoot: specRoot || defaultProjectDocsRoot(targetRepoAbs),
+    // Packs always archive under SAM_OUTPUT_HOME/reports — never specRoot or <repo>/docs
+    docsRoot: defaultProjectDocsRoot(targetRepoAbs),
     goal: userGoal.slice(0, 2000),
     route: "architecture",
     createdAt: new Date().toISOString(),
@@ -840,7 +841,9 @@ ${clip(layeredBlueprint, 3000)}`
   let packDir: string | undefined;
   let reviewNo: number | undefined;
   try {
-    const { dir, reviewNo: n } = resolveNextSamHarnessReviewDir(engagement.docsRoot);
+    const { dir, reviewNo: n } = resolveNextSamHarnessReviewDir(
+      engagement.docsRoot || defaultProjectDocsRoot(engagement.targetRepo)
+    );
     packDir = dir;
     reviewNo = n;
     // Refresh board with packDir once known

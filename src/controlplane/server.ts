@@ -67,6 +67,8 @@ import {
   getOutputHome,
   mirrorRunArtifacts,
 } from "../lib/outputHome.js";
+import { warnLegacyRepoArtifacts } from "../lib/legacyArtifacts.js";
+import { resolveTaskReadPath } from "../lib/taskPaths.js";
 import { initPersistence, getPersistence, getDriver } from "../lib/db/index.js";
 import {
   startDurableRun,
@@ -264,8 +266,10 @@ async function readTaskConfig(): Promise<{
   body?: string;
 }> {
   try {
+    const taskTs =
+      resolveTaskReadPath("task.ts", ROOT) || path.join(ROOT, "task.ts");
     const mod = await import(
-      pathToFileURL(path.join(ROOT, "task.ts")).href + `?t=${Date.now()}`
+      pathToFileURL(taskTs).href + `?t=${Date.now()}`
     );
     const cfg = mod.taskConfig || mod.default;
     return {
@@ -2594,6 +2598,7 @@ async function boot() {
       const layout = ensureOutputHome(tenantOutputHome());
       cleanOutputTemp();
       console.log(`[Control Plane] Output home → ${layout.home}`);
+      warnLegacyRepoArtifacts(ROOT, (line) => console.warn(line));
     } catch (e: any) {
       console.warn(`[Control Plane] Output home init failed: ${e?.message || e}`);
     }

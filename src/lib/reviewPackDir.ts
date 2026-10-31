@@ -1,6 +1,11 @@
 import * as fs from "fs";
 import * as path from "path";
-import { agentReportPath, ensureOutputHome } from "./outputHome.js";
+import {
+  agentReportPath,
+  ensureOutputHome,
+  getOutputHome,
+  isUnderOutputHome,
+} from "./outputHome.js";
 
 /**
  * True when cwd (or given root) is the Sam-Harness project itself.
@@ -23,14 +28,23 @@ export function isSamHarnessWorkspace(root = process.cwd()): boolean {
 }
 
 /**
- * Next review pack folder under a project's docs/metadata directory:
+ * Next review pack folder under SAM_OUTPUT_HOME/reports:
  *   "Sam-Harness no.1", "Sam-Harness no.2", ...
+ * Never creates packs inside a git repo or target project docs/.
  */
-export function resolveNextSamHarnessReviewDir(docsRoot: string): {
+export function resolveNextSamHarnessReviewDir(docsRoot?: string): {
   dir: string;
   reviewNo: number;
 } {
-  const root = path.normalize(docsRoot);
+  // Ignore any legacy docsRoot that points inside a repo — packs are output-home only.
+  const preferred = docsRoot ? path.normalize(docsRoot) : "";
+  const root =
+    preferred && isUnderOutputHome(preferred)
+      ? preferred
+      : (() => {
+          ensureOutputHome();
+          return agentReportPath();
+        })();
   fs.mkdirSync(root, { recursive: true });
 
   let max = 0;
@@ -78,15 +92,38 @@ export function resolveTargetRepoPath(targetRepo: string): string {
 }
 
 /**
- * Pack / report root for a target repo.
- * Sam-Harness self-reports go under SAM_OUTPUT_HOME/reports (Documents/Sam-Harness).
- * External client repos keep packs under <repo>/docs.
+ * Pack / report root — ALWAYS SAM_OUTPUT_HOME/reports.
+ * Target project repos are read-only for packs (no <repo>/docs fallback).
  */
-export function defaultProjectDocsRoot(targetRepo: string): string {
-  const repo = resolveTargetRepoPath(targetRepo);
-  if (isSamHarnessWorkspace(repo)) {
-    ensureOutputHome();
-    return agentReportPath();
+export function defaultProjectDocsRoot(_targetRepo?: string): string {
+  ensureOutputHome();
+  return agentReportPath();
+}
+
+/** Assert a pack archive path never resolves inside the Sam-Harness repo. */
+export function assertPackDirOutsideRepo(
+  packDir: string,
+  repoRoot: string = process.cwd()
+): void {
+  const pack = path.normalize(packDir);
+  const root = path.normalize(repoRoot);
+  const home = path.normalize(getOutputHome());
+  if (!isUnderOutputHome(pack, home)) {
+    throw new Error(`Pack path must be under SAM_OUTPUT_HOME, got: ${pack}`);
   }
-  return path.join(repo, "docs");
+  const rootLower = root.toLowerCase();
+  const homeLower = home.toLowerCase();
+  const homeInsideRepo =
+    homeLower === rootLower || homeLower.startsWith(rootLower + path.sep);
+  if (homeInsideRepo) {
+    throw new Error(
+      `SAM_OUTPUT_HOME must not be inside the Sam-Harness repo (got ${home} under ${root})`
+    );
+  }
+  const packLower = pack.toLowerCase();
+  if (packLower === rootLower || packLower.startsWith(rootLower + path.sep)) {
+    throw new Error(
+      `Pack path must not resolve inside the Sam-Harness repo: ${pack}`
+    );
+  }
 }
