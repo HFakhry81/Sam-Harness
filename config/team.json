@@ -1,6 +1,6 @@
 {
   "version": 1,
-  "updatedAt": "2026-04-30T00:00:00.000Z",
+  "updatedAt": "2026-10-31T08:33:33.580Z",
   "roles": [
     {
       "id": "ceo_router",
@@ -10,13 +10,16 @@
       "builtin": true,
       "prefersCloud": false,
       "models": {
-        "local": "qwen2.5-coder:1.5b",
+        "local": "qwen2.5:1.5b",
         "cloud": "gemma4:cloud",
         "free": null
       },
       "stage": "none",
       "order": 0,
-      "outputs": ["route", "gate_decision"]
+      "outputs": [
+        "route",
+        "gate_decision"
+      ]
     },
     {
       "id": "quick",
@@ -34,7 +37,9 @@
       "numPredict": 256,
       "stage": "none",
       "order": 1,
-      "outputs": ["quick_reply"]
+      "outputs": [
+        "quick_reply"
+      ]
     },
     {
       "id": "intake",
@@ -44,13 +49,15 @@
       "builtin": true,
       "prefersCloud": false,
       "models": {
-        "local": "qwen2.5-coder:1.5b",
+        "local": "qwen2.5:1.5b",
         "cloud": "gemma4:cloud",
         "free": null
       },
       "stage": "intake",
       "order": 10,
-      "outputs": ["engagement.json"]
+      "outputs": [
+        "engagement.json"
+      ]
     },
     {
       "id": "evidence",
@@ -66,7 +73,9 @@
       },
       "stage": "evidence",
       "order": 20,
-      "outputs": ["evidence-pack.md"]
+      "outputs": [
+        "evidence-pack.md"
+      ]
     },
     {
       "id": "strategist",
@@ -76,7 +85,7 @@
       "builtin": true,
       "prefersCloud": true,
       "models": {
-        "local": "qwen2.5-coder:1.5b",
+        "local": "local-deepseek:latest",
         "cloud": "gemma4:cloud",
         "free": null
       },
@@ -84,7 +93,9 @@
       "numPredict": 1600,
       "stage": "review",
       "order": 30,
-      "outputs": ["strategy-vN.md"]
+      "outputs": [
+        "strategy-vN.md"
+      ]
     },
     {
       "id": "auditor",
@@ -94,7 +105,7 @@
       "builtin": true,
       "prefersCloud": true,
       "models": {
-        "local": "gemma3:1b",
+        "local": "local-deepseek:latest",
         "cloud": "gemma4:cloud",
         "free": null
       },
@@ -102,7 +113,10 @@
       "numPredict": 1200,
       "stage": "review",
       "order": 40,
-      "outputs": ["audit-vN.md", "rejection-vN.md"]
+      "outputs": [
+        "audit-vN.md",
+        "rejection-vN.md"
+      ]
     },
     {
       "id": "architect",
@@ -112,7 +126,7 @@
       "builtin": true,
       "prefersCloud": true,
       "models": {
-        "local": "qwen2.5:1.5b",
+        "local": "local-deepseek:latest",
         "cloud": "gemma4:cloud",
         "free": null
       },
@@ -120,7 +134,10 @@
       "numPredict": 1400,
       "stage": "downstream",
       "order": 50,
-      "outputs": ["execution-plan.md", "CODE_VS_PLAN_GAP_MATRIX.md"]
+      "outputs": [
+        "execution-plan.md",
+        "CODE_VS_PLAN_GAP_MATRIX.md"
+      ]
     },
     {
       "id": "help",
@@ -128,7 +145,7 @@
       "mission": "In-app help for multi-purpose ops (not vertical-locked wording).",
       "enabled": true,
       "builtin": true,
-      "prefersCloud": true,
+      "prefersCloud": false,
       "models": {
         "local": "qwen2.5:1.5b",
         "cloud": "gemma4:cloud",
@@ -138,7 +155,9 @@
       "numPredict": 1000,
       "stage": "downstream",
       "order": 60,
-      "outputs": ["help-system-spec.md"]
+      "outputs": [
+        "help-system-spec.md"
+      ]
     },
     {
       "id": "marketer",
@@ -148,7 +167,7 @@
       "builtin": true,
       "prefersCloud": true,
       "models": {
-        "local": "qwen2.5:1.5b",
+        "local": "gemma3:1b",
         "cloud": "gemma4:cloud",
         "free": null
       },
@@ -156,7 +175,9 @@
       "numPredict": 900,
       "stage": "downstream",
       "order": 70,
-      "outputs": ["marketing-campaign.md"]
+      "outputs": [
+        "marketing-campaign.md"
+      ]
     },
     {
       "id": "verifier",
@@ -166,13 +187,15 @@
       "builtin": true,
       "prefersCloud": false,
       "models": {
-        "local": "qwen2.5-coder:1.5b",
+        "local": "qwen2.5:1.5b",
         "cloud": "gemma4:cloud",
         "free": null
       },
       "stage": "downstream",
       "order": 80,
-      "outputs": ["final-report.md"]
+      "outputs": [
+        "final-report.md"
+      ]
     },
     {
       "id": "implementer",
@@ -190,7 +213,9 @@
       "numPredict": 1200,
       "stage": "implement",
       "order": 90,
-      "outputs": ["EXECUTION_JOURNAL.md"]
+      "outputs": [
+        "EXECUTION_JOURNAL.md"
+      ]
     },
     {
       "id": "operator",
@@ -206,7 +231,9 @@
       },
       "stage": "operator",
       "order": 100,
-      "outputs": ["tool results"]
+      "outputs": [
+        "tool results"
+      ]
     },
     {
       "id": "coder",
@@ -224,11 +251,18 @@
       "numPredict": 1200,
       "stage": "implement",
       "order": 95,
-      "outputs": ["level3 writes"]
+      "outputs": [
+        "level3 writes"
+      ]
     }
   ],
   "pipeline": {
-    "downstreamOrder": ["architect", "help", "marketer", "verifier"],
+    "downstreamOrder": [
+      "architect",
+      "help",
+      "marketer",
+      "verifier"
+    ],
     "keepReviewLoop": true,
     "keepGoGate": true
   }

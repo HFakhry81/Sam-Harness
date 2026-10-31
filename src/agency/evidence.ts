@@ -29,6 +29,7 @@ import {
   runAuditChecklist,
   type AuditChecklistResult,
 } from "./auditChecklist.js";
+import { isJunkDirName, isJunkEvidencePath } from "./pathFilters.js";
 
 const require = createRequire(import.meta.url);
 
@@ -104,23 +105,13 @@ export type ScanEvidenceOpts = {
   includeSpec?: boolean;
 };
 
-const SKIP_DIRS = new Set([
-  "node_modules",
-  ".git",
-  "dist",
-  "build",
-  ".next",
-  "coverage",
-  "vendor",
-]);
-
 const INTERESTING = [
   { re: /occupancy_mode|RESOURCE_RENTAL|BATCH_SCHEDULE/i, note: "booking/occupancy keyword (legacy)" },
   { re: /supabase|firebase|appwrite/i, note: "backend SDK keyword" },
   { re: /mockData|mocks?\//i, note: "mock-data keyword" },
 ];
 
-function walk(dir: string, out: string[], depth = 0): void {
+function walk(dir: string, out: string[], root: string, depth = 0): void {
   if (depth > 6 || out.length > 4000) return;
   let entries: fs.Dirent[];
   try {
@@ -129,19 +120,25 @@ function walk(dir: string, out: string[], depth = 0): void {
     return;
   }
   for (const e of entries) {
-    if (SKIP_DIRS.has(e.name)) continue;
+    if (isJunkDirName(e.name)) continue;
     const full = path.join(dir, e.name);
-    if (e.isDirectory()) walk(full, out, depth + 1);
-    else out.push(full);
+    const rel = path.relative(root, full).replace(/\\/g, "/");
+    if (e.isDirectory()) {
+      if (isJunkEvidencePath(rel + "/x")) continue;
+      walk(full, out, root, depth + 1);
+    } else if (!isJunkEvidencePath(rel)) {
+      out.push(full);
+    }
   }
 }
 
 function legacyKeywordHits(root: string): EvidenceHit[] {
   const files: string[] = [];
-  walk(root, files);
+  walk(root, files, root);
   const hits: EvidenceHit[] = [];
   for (const file of files.slice(0, 2000)) {
     const rel = path.relative(root, file).replace(/\\/g, "/");
+    if (isJunkEvidencePath(rel)) continue;
     const base = path.basename(file);
     for (const rule of INTERESTING) {
       if (rule.re.test(rel) || rule.re.test(base)) {
@@ -211,7 +208,12 @@ function ingestSpecFolderSync(root: string): SpecIngestResult {
       return;
     }
     for (const e of entries) {
-      if (SKIP_DIRS.has(e.name)) continue;
+      // Spec trees are documentation — only skip VCS/deps/build dirs
+      if (
+        /^(node_modules|\.git|dist|build|\.next|coverage|vendor)$/i.test(e.name)
+      ) {
+        continue;
+      }
       const full = path.join(dir, e.name);
       if (e.isDirectory()) walkSync(full, depth + 1);
       else if (/\.(md|txt|json|ya?ml|docx|pdf)$/i.test(e.name)) files.push(full);
@@ -349,10 +351,6 @@ function assemblePack(
   const scannedAt = new Date().toISOString();
   const repoIndex = indexRepo(root);
   const localeCurrency = inferLocaleCurrency(repoIndex);
-  const reqMatrix =
-    spec && spec.requirements.length
-      ? buildReqTraceMatrix(spec.requirements, repoIndex)
-      : undefined;
 
   const specTextBlob = spec
     ? [
@@ -362,6 +360,7 @@ function assemblePack(
       ].join("\n")
     : "";
 
+  // Checklist first so P0 findings can cap related REQ statuses in the RTM
   const checklist = runAuditChecklist({
     targetRepo: root,
     index: repoIndex,
@@ -369,6 +368,11 @@ function assemblePack(
     localeCurrency,
     specTextBlob,
   });
+
+  const reqMatrix =
+    spec && spec.requirements.length
+      ? buildReqTraceMatrix(spec.requirements, repoIndex, checklist.findings)
+      : undefined;
 
   const hitsMap = new Map<string, EvidenceHit>();
   for (const h of toEvidenceHits(repoIndex)) {
@@ -392,6 +396,7 @@ function assemblePack(
   }
   const hits: EvidenceHit[] = [];
   for (const h of hitsMap.values()) {
+    if (isJunkEvidencePath(h.path)) continue;
     const full = path.join(root, h.path);
     if (
       fs.existsSync(full) ||
