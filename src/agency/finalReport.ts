@@ -15,6 +15,7 @@ const STATUS_WORDS =
 /** Strip model-authored per-REQ / feature status, coverage, counts, dependency lists. */
 export function stripModelOwnedClaims(text: string): string {
   let body = stripTruncationMarkers(stripModelCoverageClaims(text));
+  body = stripDeterministicPlaceholders(body);
   body = body.replace(
     /##\s*Deterministic blocks\b[\s\S]*?(?=\n##\s|\n#\s|$)/gi,
     ""
@@ -570,12 +571,16 @@ export function formatCompactRtmSummary(input: {
     .join("\n");
 }
 
-/** Strip full RTM / status-index tables from evidence so clip() cannot cut mid-table. */
+/**
+ * Strip RTM / status-index from evidence pack when the strategy already carries
+ * the authoritative deterministic blocks (avoid mid-table clip confusion).
+ * No placeholders — the strategy prompt holds the full RTM + Key Findings.
+ */
 export function stripRtmSectionsForPrompt(text: string): string {
   return String(text || "")
     .replace(
       /##\s*Requirements traceability\b[\s\S]*?(?=\n##\s|\n#\s|$)/gi,
-      "\n## Requirements traceability\n_(full table omitted in prompt — see DETERMINISTIC RTM SUMMARY)_\n"
+      ""
     )
     .replace(
       /##\s*REQ status index \(deterministic[\s\S]*?(?=\n##\s|\n#\s|$)/gi,
@@ -585,12 +590,50 @@ export function stripRtmSectionsForPrompt(text: string): string {
     .trim();
 }
 
+/** Pull narrative vs deterministic blocks from a written strategy. */
+export function extractDeterministicStrategyBlocks(strategy: string): {
+  narrative: string;
+  statusIndex: string;
+  rtm: string;
+  keyFindings: string;
+} {
+  const text = String(strategy || "");
+  const statusIndex =
+    text.match(
+      /##\s*REQ status index \(deterministic[\s\S]*?(?=\n##\s|\n#\s|$)/i
+    )?.[0] || "";
+  const rtm =
+    text.match(
+      /##\s*Requirements traceability \(deterministic\)[\s\S]*?(?=\n##\s|\n#\s|$)/i
+    )?.[0] || "";
+  const keyFindings =
+    text.match(/##\s*Key Findings\b[\s\S]*?(?=\n##\s|\n#\s|$)/i)?.[0] || "";
+  const narrative = text
+    .replace(
+      /##\s*REQ status index \(deterministic[\s\S]*?(?=\n##\s|\n#\s|$)/gi,
+      ""
+    )
+    .replace(
+      /##\s*Requirements traceability \(deterministic\)[\s\S]*?(?=\n##\s|\n#\s|$)/gi,
+      ""
+    )
+    .replace(/##\s*Key Findings\b[\s\S]*?(?=\n##\s|\n#\s|$)/gi, "")
+    .replace(/##\s*Deterministic blocks\b[\s\S]*?(?=\n##\s|\n#\s|$)/gi, "")
+    .replace(/<!--\s*PROMPT_ONLY_DETERMINISTIC_SUMMARY[\s\S]*?-->/gi, "")
+    .replace(
+      /Requirement Status List:\s*\n?(?:<!--[\s\S]*?-->|_[^\n]*written strategy[^\n]*_\s*)/gi,
+      ""
+    )
+    .replace(/\n{3,}/g, "\n\n")
+    .trim();
+  return { narrative, statusIndex, rtm, keyFindings };
+}
+
 /**
- * Clip strategy for LLM prompts without truncating deterministic RTM / Key Findings.
- * Those blocks are replaced by a compact ALL-REQ id:status summary; written files
- * must always keep the full blocks (never append "...(truncated)" into them).
- *
- * Prefer `opts.reqRows` (full list) so every REQ id/status reaches the auditor.
+ * Clip strategy for LLM prompts WITHOUT stripping deterministic RTM / Key Findings.
+ * Auditor input must match the written strategy for those blocks — only model
+ * prose may be clipped when over budget. Never emit "lives in written file"
+ * placeholders in place of the real table / findings.
  */
 export function clipStrategyForPrompt(
   strategy: string,
@@ -598,90 +641,65 @@ export function clipStrategyForPrompt(
   opts?: {
     reqRowCount?: number;
     findingCount?: number;
-    reqRows?: Array<{ id: string; status: string; kind?: string }>;
+    reqRows?: Array<{ id: string; status: string; kind?: string; text?: string; codePaths?: string[] }>;
+    checklistFindings?: ChecklistFinding[];
     coverageRatio?: number;
     assessedCoverageRatio?: number;
     eligibleCount?: number;
     codeBackedCount?: number;
     assessedCount?: number;
+    groundedCurrency?: string;
   }
 ): string {
-  const text = String(strategy || "");
-  const rtm = text.match(
-    /##\s*Requirements traceability \(deterministic\)[\s\S]*?(?=\n##\s(?!Requirements traceability)|\n#\s|$)/i
-  )?.[0];
-  const findings = text.match(
-    /##\s*Key Findings\b[\s\S]*?(?=\n##\s(?!Key Findings)|\n#\s|$)/i
-  )?.[0];
+  const extracted = extractDeterministicStrategyBlocks(strategy);
+  let { narrative, statusIndex, rtm, keyFindings } = extracted;
 
-  let narrative = text
-    .replace(
-      /##\s*REQ status index \(deterministic[\s\S]*?(?=\n##\s|\n#\s|$)/gi,
-      ""
-    )
-    .replace(
-      /##\s*Requirements traceability \(deterministic\)[\s\S]*?(?=\n##\s(?!Requirements traceability)|\n#\s|$)/gi,
-      ""
-    )
-    .replace(/##\s*Key Findings\b[\s\S]*?(?=\n##\s(?!Key Findings)|\n#\s|$)/gi, "")
-    .replace(/##\s*Deterministic blocks\b[\s\S]*?(?=\n##\s|\n#\s|$)/gi, "")
-    .replace(/\n{3,}/g, "\n\n")
-    .trim();
-
-  const parsedFromTable = [
-    ...((rtm || "").matchAll(/\|\s*(REQ[-_]?\d+)\s*\|\s*([a-z/]+)/gi) || []),
-  ].map((m) => ({ id: m[1].toUpperCase().replace("_", "-"), status: m[2].toLowerCase() }));
-  // Also parse "REQ-001: missing" status-index style
-  const parsedFromIndex = [
-    ...((text || "").matchAll(/\b(REQ[-_]?\d+)\s*:\s*\*\*([a-z/]+)\*\*/gi) || []),
-  ].map((m) => ({
-    id: m[1].toUpperCase().replace("_", "-"),
-    status: m[2].toLowerCase(),
-  }));
-  const optRows = opts?.reqRows || [];
-  const compactRows =
-    optRows.length > 0
-      ? optRows
-      : parsedFromTable.length
-        ? parsedFromTable
-        : parsedFromIndex;
-
-  const parsedRows = compactRows.length;
-  const reqRows =
-    typeof opts?.reqRowCount === "number" && opts.reqRowCount >= 0
-      ? opts.reqRowCount
-      : parsedRows;
-  const parsedFindings = (findings || "").match(/^\s*-\s+\[/gm)?.length || 0;
-  const findingBullets =
-    typeof opts?.findingCount === "number" && opts.findingCount >= 0
-      ? opts.findingCount
-      : parsedFindings;
-
-  const compact = formatCompactRtmSummary({
-    reqRows: compactRows,
-    coverageRatio: opts?.coverageRatio,
-    assessedCoverageRatio: opts?.assessedCoverageRatio,
-    eligibleCount: opts?.eligibleCount,
-    codeBackedCount: opts?.codeBackedCount,
-    assessedCount: opts?.assessedCount,
-  });
-
-  // Prompt-only summary — never copy into written pack files
-  const summary = [
-    `<!-- PROMPT_ONLY_DETERMINISTIC_SUMMARY: do not copy into written strategy -->`,
-    `Deterministic RTM/Key Findings live in the written strategy file — do not invent statuses, coverage, counts, or dependency lists.`,
-    `RTM rows (grounded): ${reqRows}; Key Findings bullets (grounded): ${findingBullets}`,
-    `Coverage line: ${(rtm || "").match(/Coverage[^\n]*/)?.[0] || "(see compact RTM)"}`,
-    compact,
-  ].join("\n");
+  // If the written strategy lost deterministic blocks, rebuild from grounded opts
+  if ((!rtm || !keyFindings || !statusIndex) && opts?.reqRows?.length) {
+    const rebuilt = injectGroundedStrategyBlocks(narrative || "## Direct answer\n", {
+      checklistFindings: opts.checklistFindings || [],
+      reqRows: opts.reqRows,
+      coverageRatio: opts.coverageRatio,
+      assessedCoverageRatio: opts.assessedCoverageRatio,
+      eligibleCount: opts.eligibleCount,
+      codeBackedCount: opts.codeBackedCount,
+      assessedCount: opts.assessedCount,
+      groundedCurrency: opts.groundedCurrency,
+    });
+    const again = extractDeterministicStrategyBlocks(rebuilt);
+    narrative = again.narrative || narrative;
+    statusIndex = statusIndex || again.statusIndex;
+    rtm = rtm || again.rtm;
+    keyFindings = keyFindings || again.keyFindings;
+  }
 
   if (narrative.length > max) {
     narrative =
       narrative.slice(0, max) +
-      "\n<!-- PROMPT_NARRATIVE_CLIPPED: full text remains in written strategy file -->";
+      "\n<!-- PROMPT_NARRATIVE_CLIPPED: full narrative remains in written strategy file -->";
   }
-  // Compact RTM is NEVER truncated — append after narrative clip
-  return `${narrative}\n\n${summary}\n`;
+
+  // Full deterministic blocks — never truncated, never replaced by a placeholder
+  const parts = [narrative, statusIndex, rtm, keyFindings].filter((p) =>
+    String(p || "").trim()
+  );
+  return parts.join("\n\n").replace(/\n{3,}/g, "\n\n").trim() + "\n";
+}
+
+/** Drop model-echoed placeholders that claim RTM lives only in ceo-draft. */
+export function stripDeterministicPlaceholders(text: string): string {
+  return String(text || "")
+    .replace(/<!--\s*PROMPT_ONLY_DETERMINISTIC_SUMMARY[\s\S]*?-->/gi, "")
+    .replace(
+      /Requirement Status List:\s*\n?(?:<!--[\s\S]*?-->|_[^\n]*(?:written strategy|ceo-draft)[^\n]*_\s*)/gi,
+      ""
+    )
+    .replace(
+      /Deterministic RTM\/Key Findings live in the written strategy file[^\n]*/gi,
+      ""
+    )
+    .replace(/\n{3,}/g, "\n\n")
+    .trim();
 }
 
 /**

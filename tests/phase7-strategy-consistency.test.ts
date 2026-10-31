@@ -166,8 +166,8 @@ describe("claim checker rejects mismatched REQ status prose", () => {
   });
 });
 
-describe("clipStrategyForPrompt uses grounded row counts", () => {
-  it("does not report RTM rows in file: 0 when opts supply the count", () => {
+describe("clipStrategyForPrompt preserves full grounded RTM + Key Findings", () => {
+  it("keeps every REQ id/status and finding id (no PROMPT_ONLY placeholder)", () => {
     const pack = scanRepoEvidence(SPENDY_REPO, {
       goal: `examine ${SPENDY_REPO} against ${SPENDY_SPEC}`,
       specRoot: SPENDY_SPEC,
@@ -184,20 +184,28 @@ describe("clipStrategyForPrompt uses grounded row counts", () => {
       reqRowCount: pack.reqMatrix!.rows.length,
       findingCount: 5,
       reqRows: pack.reqMatrix!.rows,
+      checklistFindings: pack.checklist!.findings,
       coverageRatio: pack.reqMatrix!.coverageRatio,
       assessedCoverageRatio: pack.reqMatrix!.assessedCoverageRatio,
       eligibleCount: pack.reqMatrix!.eligibleCount,
       codeBackedCount: pack.reqMatrix!.codeBackedCount,
+      groundedCurrency: "EGP",
     });
-    expect(clip).toMatch(
-      new RegExp(`RTM rows \\(grounded\\): ${pack.reqMatrix!.rows.length}`)
-    );
+    expect(clip).not.toMatch(/PROMPT_ONLY_DETERMINISTIC_SUMMARY/);
+    expect(clip).not.toMatch(/Requirement Status List:/i);
     expect(clip).not.toMatch(/RTM rows in file:\s*0/);
-    expect(clip).toMatch(/PROMPT_ONLY_DETERMINISTIC_SUMMARY/);
-    // Compact summary lists EVERY REQ id:status — never truncated mid-table
-    expect(clip).toMatch(/DETERMINISTIC RTM SUMMARY/);
+    expect(clip).toMatch(/## Requirements traceability \(deterministic\)/);
+    expect(clip).toMatch(/## Key Findings/);
+    expect(clip).toMatch(/## REQ status index \(deterministic/);
     for (const r of pack.reqMatrix!.rows) {
-      expect(clip).toContain(`${r.id}:${r.status}`);
+      expect(clip).toContain(r.id);
+      expect(clip).toMatch(
+        new RegExp(`\\|\\s*${r.id}\\s*\\|\\s*${r.status}\\b`, "i")
+      );
+    }
+    for (const f of pack.checklist!.findings) {
+      if (!f?.id || /^CUR-OK$/i.test(f.id)) continue;
+      expect(clip).toContain(f.id);
     }
   });
 });

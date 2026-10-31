@@ -1,6 +1,10 @@
 /**
  * Detect degenerate repeated lines / n-grams in long-form artifacts.
  * Ollama repeat_penalty helper + regenerate-once policy.
+ *
+ * Deterministic RTM / Key Findings / REQ status index blocks are EXEMPT —
+ * their repeated `| REQ-00N | status |` rows and `REQ-xxx:status` lines are
+ * intentional and must never trip strategy degeneration.
  */
 export type RepetitionReport = {
   ok: boolean;
@@ -9,9 +13,37 @@ export type RepetitionReport = {
   repeatedLine?: string;
 };
 
+/** Strip harness-injected deterministic blocks before repetition scoring. */
+export function stripDeterministicBlocksForRepetition(text: string): string {
+  return String(text || "")
+    .replace(
+      /##\s*REQ status index \(deterministic[\s\S]*?(?=\n##\s|\n#\s|$)/gi,
+      "\n"
+    )
+    .replace(
+      /##\s*Requirements traceability(?:\s*\(deterministic\))?[\s\S]*?(?=\n##\s|\n#\s|$)/gi,
+      "\n"
+    )
+    .replace(/##\s*Key Findings\b[\s\S]*?(?=\n##\s|\n#\s|$)/gi, "\n")
+    .replace(
+      /DETERMINISTIC RTM SUMMARY[\s\S]*?(?=\n##\s|\n#\s|$)/gi,
+      "\n"
+    )
+    .replace(/<!--\s*PROMPT_ONLY_DETERMINISTIC_SUMMARY[\s\S]*?-->/gi, "")
+    // Table rows and compact id:status tokens left outside headed blocks
+    .replace(/^\s*\|\s*REQ[-_]?\d+\b.*$/gim, "")
+    .replace(
+      /\bREQ[-_]?\d+:(?:implemented|partial|missing|contradicts|unverified|n\/a)\b/gi,
+      ""
+    )
+    .replace(/\n{3,}/g, "\n\n")
+    .trim();
+}
+
 /** Fraction of lines that are duplicates of another line (len>=20). */
 export function detectRepetition(text: string): RepetitionReport {
-  const lines = String(text || "")
+  const cleaned = stripDeterministicBlocksForRepetition(text);
+  const lines = cleaned
     .split(/\r?\n/)
     .map((l) => l.trim())
     .filter((l) => l.length >= 20);
@@ -37,7 +69,7 @@ export function detectRepetition(text: string): RepetitionReport {
   const score = Math.min(1, dupLines / lines.length);
 
   // Also check long repeated n-gram (same 12-word window thrice)
-  const words = String(text || "").toLowerCase().split(/\s+/).filter(Boolean);
+  const words = cleaned.toLowerCase().split(/\s+/).filter(Boolean);
   let ngramHits = 0;
   if (words.length > 40) {
     const grams = new Map<string, number>();

@@ -34,8 +34,8 @@ import {
 } from "./fidelityRubric.js";
 import {
   clipStrategyForPrompt,
-  formatCompactRtmSummary,
   injectGroundedStrategyBlocks,
+  stripDeterministicPlaceholders,
   stripRtmSectionsForPrompt,
 } from "./finalReport.js";
 import {
@@ -247,6 +247,21 @@ function findingsAsChecklist(
   }));
 }
 
+/** Test-only override for strategist/auditor LLM invokes. */
+export type ReviewInvokeOverride = (
+  prompt: string,
+  meta: { role?: string }
+) => Promise<string>;
+
+let reviewInvokeOverride: ReviewInvokeOverride | null = null;
+
+/** Inject a stub LLM for review-graph tests (null clears). */
+export function __setReviewInvokeForTests(
+  fn: ReviewInvokeOverride | null
+): void {
+  reviewInvokeOverride = fn;
+}
+
 async function invoke(
   model: ReturnType<typeof makeSpecialistModel>,
   prompt: string
@@ -273,6 +288,9 @@ async function invokeWithCloudFallback(
   },
   prompt: string
 ): Promise<string> {
+  if (reviewInvokeOverride) {
+    return reviewInvokeOverride(prompt, { role: localOpts.role });
+  }
   try {
     return await invoke(primary, prompt);
   } catch (e) {
@@ -455,8 +473,16 @@ ${clip(state.brief, 8000)}`
         reqRows: (state.reqRows || []).map((r) => ({
           id: r.id,
           status: r.status,
+          text: r.text,
+          codePaths: r.codePaths,
         })),
+        checklistFindings: findingsAsChecklist(state.findings || []),
         reqRowCount: (state.reqRows || []).length,
+        findingCount: (state.findings || []).filter((f) => {
+          if (!f) return false;
+          if (/^CUR-OK$/i.test(String(f.id || ""))) return false;
+          return true;
+        }).length,
         coverageRatio:
           typeof state.implementationCoverage === "number"
             ? state.implementationCoverage
@@ -472,6 +498,7 @@ ${clip(state.brief, 8000)}`
           typeof state.assessedCoverage === "number"
             ? Math.round(state.assessedCoverage * state.eligibleCount)
             : undefined,
+        groundedCurrency: currency,
       };
       const briefRem = [
         `REMEDIATION CHECKLIST for strategy-v${loopNo} (item-by-item — do not skip):`,
@@ -486,7 +513,7 @@ ${clip(state.brief, 8000)}`
         `FULL REJECTION REPORT:`,
         clip(state.auditReport, 4000),
         ``,
-        `PRIOR STRATEGY (do not reproduce unchanged; deterministic RTM/Key Findings are summarized — full blocks stay in the written file):`,
+        `PRIOR STRATEGY (deterministic RTM + Key Findings are authoritative — match them; only narrative may have been clipped for prompt size):`,
         clipStrategyForPrompt(state.strategy || "", 4500, remClipOpts),
         ``,
         `EVIDENCE (cite only these real paths under TARGET REPO):`,
@@ -756,6 +783,7 @@ ${clip(state.evidenceMarkdown, 3000)}`;
       codeBackedCount: state.codeBackedCount,
       groundedCurrency: currency,
     });
+    strategy = stripDeterministicPlaceholders(strategy);
     strategy = normalizeMarkdownStructure(strategy);
     if (hasStructuralMarkdownHoles(strategy)) {
       strategy = normalizeMarkdownStructure(strategy);
@@ -863,7 +891,10 @@ ${clip(state.evidenceMarkdown, 3000)}`;
       reqRows: (state.reqRows || []).map((r) => ({
         id: r.id,
         status: r.status,
+        text: r.text,
+        codePaths: r.codePaths,
       })),
+      checklistFindings: findingsAsChecklist(state.findings || []),
       coverageRatio:
         typeof state.implementationCoverage === "number"
           ? state.implementationCoverage
@@ -879,15 +910,8 @@ ${clip(state.evidenceMarkdown, 3000)}`;
         typeof state.assessedCoverage === "number"
           ? Math.round(state.assessedCoverage * state.eligibleCount)
           : undefined,
+      groundedCurrency: currency,
     };
-    const compactRtm = formatCompactRtmSummary({
-      reqRows: clipOpts.reqRows,
-      coverageRatio: clipOpts.coverageRatio,
-      assessedCoverageRatio: clipOpts.assessedCoverageRatio,
-      eligibleCount: clipOpts.eligibleCount,
-      codeBackedCount: clipOpts.codeBackedCount,
-      assessedCount: clipOpts.assessedCount,
-    });
     const auditTargetBlock = formatTargetRepoPromptBlock({
       targetRepo,
       specRoot: state.specRoot || undefined,
@@ -919,6 +943,14 @@ or "will include later" language.`
         : `REJECT topic drift away from ORIGINAL USER GOAL (e.g. BookingType/clinic blueprints when the goal was memory/Daily Ops/Control Plane UI).
 REJECT strategies that ignore the stated goal.`;
 
+      // Auditor-visible strategy MUST match written ceo-draft for deterministic
+      // RTM + Key Findings (only model prose may be clipped for prompt size).
+      const strategyForAuditorPrompt = clipStrategyForPrompt(
+        strategyForAudit,
+        5500,
+        clipOpts
+      );
+
       auditReport = await invokeWithCloudFallback(
         auditor,
         auditorOpts,
@@ -927,8 +959,8 @@ REJECT rubber-stamp checklists. Prefer citing EVIDENCE paths under TARGET REPO.
 REJECT invented files not in evidence.
 REJECT drafts that contain erasure placeholders or invent wrong currencies / nonexistent monorepo roots.
 REJECT citing the Sam-Harness harness cwd as the audited target.
-Do NOT invent per-REQ statuses, coverage percentages, counts, or dependency lists — use the DETERMINISTIC RTM SUMMARY below (complete id:status list).
-Never treat a truncated evidence-pack table as incomplete coverage when the DETERMINISTIC RTM SUMMARY lists all REQs.
+Do NOT invent per-REQ statuses, coverage percentages, counts, or dependency lists — use the STRATEGY deterministic RTM table and Key Findings below (same blocks as written ceo-draft.md).
+Never treat a truncated evidence-pack table as incomplete coverage when the STRATEGY RTM lists all REQs.
 ${bookingRules}
 
 APPROVE only if strategy is concrete, consistent with evidence (or honestly marks gaps),
@@ -942,13 +974,11 @@ ${clip(userGoal, 2000)}
 Rubric hint (gate): ${rubricPre.reason}
 Keyword hits (informational only, not a gate): ${keywordInfo.hit}/${keywordInfo.total} (${keywordFidelity.reason})
 
-${compactRtm}
-
-EVIDENCE PACK (RTM table omitted here — use DETERMINISTIC RTM SUMMARY above for all REQ statuses):
+EVIDENCE PACK (RTM table may be omitted here — STRATEGY below carries the authoritative deterministic RTM + Key Findings):
 ${clip(stripRtmSectionsForPrompt(state.evidenceMarkdown), 5000)}
 
-STRATEGY-v${loopNo} (deterministic RTM/Key Findings summarized here with COMPLETE id:status list; full blocks are in ceo-draft.md — never reject solely for prompt truncation):
-${clipStrategyForPrompt(strategyForAudit, 5500, clipOpts)}
+STRATEGY-v${loopNo} (same deterministic RTM + Key Findings as the written strategy; narrative alone may be clipped for size — never reject solely for narrative prompt truncation):
+${strategyForAuditorPrompt}
 
 Line 1: [APPROVED] or [REJECTED]
 ${REJECTION_FORMAT}`
@@ -1258,6 +1288,7 @@ function getCompiled() {
 /** Reset compiled graph (tests / checkpointer swap). */
 export function __resetReviewGraphForTests(): void {
   compiled = null;
+  reviewInvokeOverride = null;
 }
 
 export async function runReviewGraph(input: {

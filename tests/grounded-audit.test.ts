@@ -23,6 +23,7 @@ import {
   verifyCitationsAgainstRepo,
 } from "../src/agency/claimVerify.js";
 import { detectRepetition } from "../src/agency/repetitionGuard.js";
+import { injectGroundedStrategyBlocks } from "../src/agency/finalReport.js";
 import {
   isTinyModel,
   parseModelSizeB,
@@ -228,6 +229,90 @@ describe("repetition guard", () => {
       "\n"
     );
     expect(detectRepetition(text).ok).toBe(true);
+  });
+
+  it("exempts deterministic RTM / status-index / Key Findings from degeneration", () => {
+    const rows = Array.from({ length: 70 }, (_, i) => ({
+      id: `REQ-${String(i + 1).padStart(3, "0")}`,
+      text: `Spendy feature requirement number ${i + 1}`,
+      status: i % 5 === 0 ? "partial" : "missing",
+      codePaths: i % 5 === 0 ? ["src/screens/HomeScreen.js"] : ([] as string[]),
+    }));
+    const findings = [
+      {
+        id: "DEP-async_storage",
+        category: "dependency" as const,
+        severity: "P0" as const,
+        summary: "Missing @react-native-async-storage/async-storage",
+        paths: ["package.json"],
+        detail: "add dep",
+      },
+      {
+        id: "DEP-supabase",
+        category: "dependency" as const,
+        severity: "P0" as const,
+        summary: "Missing @supabase/supabase-js",
+        paths: ["package.json"],
+        detail: "add dep",
+      },
+      {
+        id: "AUTH-OTP",
+        category: "auth" as const,
+        severity: "P0" as const,
+        summary: "OTP missing",
+        paths: [] as string[],
+        detail: "add otp",
+      },
+      {
+        id: "UI-HANDLER-1",
+        category: "ui_handler" as const,
+        severity: "P0" as const,
+        summary: "Logout without onPress",
+        paths: ["src/screens/HomeScreen.js:15"],
+        detail: "wire onPress",
+      },
+      {
+        id: "MOCK-001",
+        category: "mock_data" as const,
+        severity: "P0" as const,
+        summary: "mock data",
+        paths: ["src/data/mockData.js"],
+        detail: "wire backend",
+      },
+      {
+        id: "STACK-001",
+        category: "stack_conflict" as const,
+        severity: "P0" as const,
+        summary: "Flutter vs RN",
+        paths: ["package.json"],
+        detail: "align stack",
+      },
+    ];
+    const strategy = injectGroundedStrategyBlocks(
+      [
+        "## Direct answer",
+        "Spendy audit against the product brief.",
+        "## Stack conflict",
+        "Spec wants Flutter+FastAPI; repo is React Native.",
+        "## Recommendations",
+        "1. Install missing deps",
+        "2. Wire OTP auth",
+        "3. Add Logout onPress",
+      ].join("\n"),
+      {
+        checklistFindings: findings,
+        reqRows: rows,
+        coverageRatio: 0.14,
+        assessedCoverageRatio: 1,
+        eligibleCount: 70,
+        codeBackedCount: 14,
+        assessedCount: 70,
+        groundedCurrency: "EGP",
+      }
+    );
+    const r = detectRepetition(strategy);
+    expect(r.ok).toBe(true);
+    expect(r.reason).not.toMatch(/degenerate/i);
   });
 });
 
