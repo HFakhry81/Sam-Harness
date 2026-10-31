@@ -4,6 +4,7 @@ import { ok, sys } from "../../lib/colors.js";
 import { parseBacklogMarkdown } from "./parseBacklog.js";
 import { defaultDod, loadBoard, saveBoard } from "./store.js";
 import type { DeliveryBoard } from "./types.js";
+import { packArtifactExists, readPackArtifact } from "../../lib/packWorkspace.js";
 
 /**
  * Build/refresh delivery-board.json from IMPLEMENTATION_BACKLOG.md after agency pack.
@@ -15,9 +16,17 @@ export function syncDeliveryBoardFromBacklog(opts: {
   backlogPath?: string;
   cwd?: string;
 }): DeliveryBoard {
-  const cwd = opts.cwd || process.cwd();
-  const backlogPath = opts.backlogPath || path.join(cwd, "IMPLEMENTATION_BACKLOG.md");
-  const md = fs.existsSync(backlogPath) ? fs.readFileSync(backlogPath, "utf-8") : "";
+  // Omit cwd → saveBoard writes under SAM_OUTPUT_HOME pack workspace
+  const cwd = opts.cwd;
+  let md = "";
+  if (opts.backlogPath && fs.existsSync(opts.backlogPath)) {
+    md = fs.readFileSync(opts.backlogPath, "utf-8");
+  } else if (packArtifactExists("IMPLEMENTATION_BACKLOG.md")) {
+    md = readPackArtifact("IMPLEMENTATION_BACKLOG.md") || "";
+  } else {
+    const legacy = path.join(process.cwd(), "IMPLEMENTATION_BACKLOG.md");
+    if (fs.existsSync(legacy)) md = fs.readFileSync(legacy, "utf-8");
+  }
   const parsed = parseBacklogMarkdown(md);
   const existing = loadBoard(cwd);
 
@@ -74,7 +83,9 @@ export function syncDeliveryBoardFromBacklog(opts: {
   };
 
   saveBoard(board, cwd);
-  sys(`Delivery board: ${board.tickets.length} tickets → delivery-board.json + DELIVERY_BOARD.md`);
+  sys(
+    `Delivery board: ${board.tickets.length} tickets → pack workspace (delivery-board.json + DELIVERY_BOARD.md)`
+  );
   ok(
     "Delivery OS",
     `P0 ready=${board.tickets.filter((t) => t.priority === "P0" && t.status === "ready").length}`

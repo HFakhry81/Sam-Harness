@@ -124,31 +124,36 @@ describe("path filters — junk / backup / prior reports", () => {
     expect(isNonFeatureEvidencePath("src/screens/HomeScreen.js")).toBe(false);
     expect(isSpecHeadingNotRequirement("Project Overview")).toBe(true);
     expect(isSpecHeadingNotRequirement("Functional Requirements Analysis")).toBe(
-      false
+      true
     );
-    expect(isSpecHeadingNotRequirement("Tech Stack")).toBe(false);
+    expect(isSpecHeadingNotRequirement("Tech Stack")).toBe(true);
+    expect(isSpecHeadingNotRequirement("Implementation Roadmap")).toBe(true);
+    expect(isSpecHeadingNotRequirement("UI/UX Design Guidelines")).toBe(true);
     expect(
       isSpecHeadingNotRequirement("MUST support OCR receipt scanning via camera")
     ).toBe(false);
   });
 
-  it("marks only pure document-structure headings as n/a", async () => {
+  it("skips document headings at extract; feature MUST lines remain eligible", async () => {
     const spec = await ingestSpecFolder(HEADING_SPEC);
-    const headings = spec.requirements.filter((r) =>
-      isSpecHeadingNotRequirement(r.text)
-    );
-    expect(headings.length).toBeGreaterThanOrEqual(1);
-    expect(headings.every((h) => /overview/i.test(h.text))).toBe(true);
+    // Bare heading bullets are not extracted as feature REQs
+    expect(
+      spec.requirements.every(
+        (r) => !isSpecHeadingNotRequirement(r.text) || r.kind === "document_only"
+      )
+    ).toBe(true);
+    expect(spec.requirements.some((r) => /voice/i.test(r.text))).toBe(true);
+    expect(spec.requirements.some((r) => /ocr/i.test(r.text))).toBe(true);
+    expect(spec.requirements.some((r) => /EGP/i.test(r.text))).toBe(true);
     const index = indexRepo(JUNK_REPO);
     const matrix = buildReqTraceMatrix(spec.requirements, index, []);
     const na = matrix.rows.filter((r) => r.status === "n/a");
-    expect(na.length).toBeGreaterThanOrEqual(1);
     expect(matrix.naCount).toBe(na.length);
     expect(matrix.eligibleCount).toBe(matrix.rows.length - matrix.naCount);
-    // Tech Stack / Functional Requirements stay eligible
+    // Feature MUST lines stay eligible
     expect(
       matrix.rows.filter((r) => r.status !== "n/a").length
-    ).toBeGreaterThanOrEqual(4);
+    ).toBeGreaterThanOrEqual(3);
     const line = formatGroundedCoverageLine({
       coverageRatio: matrix.coverageRatio,
       codeBackedCount: matrix.codeBackedCount,
@@ -184,7 +189,7 @@ describe("path filters — junk / backup / prior reports", () => {
 });
 
 describe("deterministic blocks never truncated in written files", () => {
-  it("clipStrategyForPrompt summarizes RTM/Key Findings without ...(truncated) inside those blocks", () => {
+  it("clipStrategyForPrompt keeps full RTM/Key Findings; only narrative may clip", () => {
     const pack = scanRepoEvidence(SPENDY_REPO, {
       goal: `examine ${SPENDY_REPO} against ${SPENDY_SPEC}`,
       specRoot: SPENDY_SPEC,
@@ -236,13 +241,26 @@ describe("deterministic blocks never truncated in written files", () => {
     const promptClip = clipStrategyForPrompt(strategy, 800, {
       reqRowCount: pack.reqMatrix!.rows.length,
       findingCount: pack.checklist!.findings.length,
+      reqRows: pack.reqMatrix!.rows,
+      checklistFindings: pack.checklist!.findings,
+      groundedCurrency: "EGP",
     });
-    // Prompt may truncate narrative, but must not embed truncated RTM table
-    expect(promptClip).toMatch(/PROMPT_ONLY_DETERMINISTIC_SUMMARY/);
-    expect(promptClip).toMatch(
-      new RegExp(`RTM rows \\(grounded\\): ${pack.reqMatrix!.rows.length}`)
-    );
-    expect(promptClip).not.toMatch(/RTM rows in file:\s*0/);
+    // Auditor prompt keeps the same deterministic blocks as the written strategy
+    expect(promptClip).not.toMatch(/PROMPT_ONLY_DETERMINISTIC_SUMMARY/);
+    expect(promptClip).not.toMatch(/Requirement Status List:/i);
+    expect(promptClip).toMatch(/## Requirements traceability \(deterministic\)/);
+    expect(promptClip).toMatch(/## Key Findings/);
+    expect(promptClip).toMatch(/PROMPT_NARRATIVE_CLIPPED/);
+    for (const r of pack.reqMatrix!.rows) {
+      expect(promptClip).toContain(r.id);
+      expect(promptClip).toMatch(
+        new RegExp(`${r.id}[\\s\\S]{0,40}${r.status}`, "i")
+      );
+    }
+    for (const f of pack.checklist!.findings) {
+      if (!f?.id || /^CUR-OK$/i.test(f.id)) continue;
+      expect(promptClip).toContain(f.id);
+    }
     expect(promptClip).not.toMatch(
       /## Requirements traceability \(deterministic\)[\s\S]*\.\.\.\(truncated\)/
     );

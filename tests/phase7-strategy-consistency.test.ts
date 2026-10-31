@@ -32,18 +32,22 @@ const SPENDY_SPEC = path.join(FIX, "spendy-spec");
 const HEADING_SPEC = path.join(FIX, "heading-reqs-spec");
 const JUNK_REPO = path.join(FIX, "junk-paths-repo");
 
-describe("n/a only for pure document-structure headings", () => {
-  it("marks Project Overview n/a but keeps Tech Stack / Functional Requirements Analysis eligible", async () => {
+describe("document-only section titles are n/a; feature bullets stay eligible", () => {
+  it("marks overview/roadmap/guidelines/tech-stack headings as document-only", async () => {
     expect(isSpecHeadingNotRequirement("Project Overview")).toBe(true);
     expect(isSpecHeadingNotRequirement("Introduction")).toBe(true);
     expect(isSpecHeadingNotRequirement("Table of Contents")).toBe(true);
     expect(isSpecHeadingNotRequirement("Glossary")).toBe(true);
-    expect(isSpecHeadingNotRequirement("Tech Stack")).toBe(false);
+    expect(isSpecHeadingNotRequirement("Tech Stack")).toBe(true);
     expect(isSpecHeadingNotRequirement("Functional Requirements Analysis")).toBe(
-      false
+      true
     );
-    expect(isSpecHeadingNotRequirement("Architecture Overview")).toBe(false);
-    expect(isSpecHeadingNotRequirement("Database Schema")).toBe(false);
+    expect(isSpecHeadingNotRequirement("Architecture Overview")).toBe(true);
+    expect(isSpecHeadingNotRequirement("Database Schema")).toBe(true);
+    expect(isSpecHeadingNotRequirement("Implementation Roadmap")).toBe(true);
+    expect(isSpecHeadingNotRequirement("Estimated Costs & Infrastructure")).toBe(
+      true
+    );
 
     const spec = await ingestSpecFolder(HEADING_SPEC);
     const matrix = buildReqTraceMatrix(
@@ -51,23 +55,18 @@ describe("n/a only for pure document-structure headings", () => {
       indexRepo(JUNK_REPO),
       []
     );
-    const na = matrix.rows.filter((r) => r.status === "n/a");
-    expect(na.every((r) => /overview|introduction|glossary|contents/i.test(r.text))).toBe(
-      true
-    );
+    // Bare headings are skipped at extract — remaining rows are feature MUST lines
     expect(
-      matrix.rows.some(
-        (r) => /tech\s*stack/i.test(r.text) && r.status !== "n/a"
-      )
-    ).toBe(true);
-    expect(
-      matrix.rows.some(
+      matrix.rows.every(
         (r) =>
-          /functional\s+requirements/i.test(r.text) && r.status !== "n/a"
+          r.status === "n/a" ||
+          /must|should|shall|voice|ocr|egp/i.test(r.text)
       )
     ).toBe(true);
-    // Denominator must not collapse to a tiny eligible set from aggressive n/a
-    expect(matrix.eligibleCount).toBeGreaterThanOrEqual(matrix.rows.length - 2);
+    expect(matrix.eligibleCount).toBeGreaterThanOrEqual(3);
+    expect(
+      matrix.rows.some((r) => /voice/i.test(r.text) && r.status !== "n/a")
+    ).toBe(true);
   });
 });
 
@@ -167,8 +166,8 @@ describe("claim checker rejects mismatched REQ status prose", () => {
   });
 });
 
-describe("clipStrategyForPrompt uses grounded row counts", () => {
-  it("does not report RTM rows in file: 0 when opts supply the count", () => {
+describe("clipStrategyForPrompt preserves full grounded RTM + Key Findings", () => {
+  it("keeps every REQ id/status and finding id (no PROMPT_ONLY placeholder)", () => {
     const pack = scanRepoEvidence(SPENDY_REPO, {
       goal: `examine ${SPENDY_REPO} against ${SPENDY_SPEC}`,
       specRoot: SPENDY_SPEC,
@@ -184,12 +183,54 @@ describe("clipStrategyForPrompt uses grounded row counts", () => {
     const clip = clipStrategyForPrompt(strategy, 800, {
       reqRowCount: pack.reqMatrix!.rows.length,
       findingCount: 5,
+      reqRows: pack.reqMatrix!.rows,
+      checklistFindings: pack.checklist!.findings,
+      coverageRatio: pack.reqMatrix!.coverageRatio,
+      assessedCoverageRatio: pack.reqMatrix!.assessedCoverageRatio,
+      eligibleCount: pack.reqMatrix!.eligibleCount,
+      codeBackedCount: pack.reqMatrix!.codeBackedCount,
+      groundedCurrency: "EGP",
     });
-    expect(clip).toMatch(
-      new RegExp(`RTM rows \\(grounded\\): ${pack.reqMatrix!.rows.length}`)
-    );
+    expect(clip).not.toMatch(/PROMPT_ONLY_DETERMINISTIC_SUMMARY/);
+    expect(clip).not.toMatch(/Requirement Status List:/i);
     expect(clip).not.toMatch(/RTM rows in file:\s*0/);
-    expect(clip).toMatch(/PROMPT_ONLY_DETERMINISTIC_SUMMARY/);
+    expect(clip).toMatch(/## Requirements traceability \(deterministic\)/);
+    expect(clip).toMatch(/## Key Findings/);
+    expect(clip).toMatch(/## REQ status index \(deterministic/);
+    for (const r of pack.reqMatrix!.rows) {
+      expect(clip).toContain(r.id);
+      expect(clip).toMatch(
+        new RegExp(`\\|\\s*${r.id}\\s*\\|\\s*${r.status}\\b`, "i")
+      );
+    }
+    for (const f of pack.checklist!.findings) {
+      if (!f?.id || /^CUR-OK$/i.test(f.id)) continue;
+      expect(clip).toContain(f.id);
+    }
+  });
+});
+
+describe("target repo prompt injection", () => {
+  it("formatTargetRepoPromptBlock labels harness cwd as non-target", async () => {
+    const { formatTargetRepoPromptBlock, scrubHarnessCwdLeak } = await import(
+      "../src/agency/reviewGraph.js"
+    );
+    const block = formatTargetRepoPromptBlock({
+      targetRepo: "E:\\UpNexa.com\\spendy",
+      specRoot: "D:\\My Documents\\Spendy",
+      harnessCwd: "E:\\UpNexa.com\\Sam-Harness",
+    });
+    expect(block).toMatch(/TARGET REPO/);
+    expect(block).toContain("E:\\UpNexa.com\\spendy");
+    expect(block).toMatch(/HARNESS CWD \(internal only/);
+    expect(block).toContain("Sam-Harness");
+    const scrubbed = scrubHarnessCwdLeak(
+      "Auditing `E:\\UpNexa.com\\Sam-Harness` next.",
+      "E:\\UpNexa.com\\spendy",
+      "E:\\UpNexa.com\\Sam-Harness"
+    );
+    expect(scrubbed).toContain("spendy");
+    expect(scrubbed).not.toMatch(/Sam-Harness/);
   });
 });
 

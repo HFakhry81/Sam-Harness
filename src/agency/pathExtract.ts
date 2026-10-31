@@ -35,6 +35,25 @@ const PATH_STOP =
 
 const QUOTE_CHARS = `"'«»“”‘’`;
 
+/**
+ * Truncate a path candidate that swallowed markdown / RTM prose
+ * (e.g. `D:\...\Expensa\1. ## 3. Deterministic Requirement…`).
+ */
+export function sanitizeExtractedPath(raw: string): string {
+  let p = String(raw || "").replace(/\r/g, "");
+  // Hard stop at line breaks
+  p = p.split("\n")[0] || "";
+  // Stop before markdown heading / bold / table / backtick glue
+  const mdCut = p.search(
+    /(?:\s|^)(?:#{1,6}\s|\*\*|__|`|\|(?=\s)|\[REQ[-_]?\d)/i
+  );
+  if (mdCut > 2) p = p.slice(0, mdCut);
+  // Stop before numbered-list marker glued after a path segment: `\1. ##` or ` 1. Text`
+  const numCut = p.search(/[\\/\s]\d+\.\s+(?:#|\*\*|[A-Z])/);
+  if (numCut > 2) p = p.slice(0, numCut);
+  return cleanRaw(p);
+}
+
 function cleanRaw(raw: string): string {
   return String(raw || "")
     .trim()
@@ -45,7 +64,27 @@ function cleanRaw(raw: string): string {
 
 function isPathChar(ch: string): boolean {
   // Allow typical path characters including space (trimmed later via stopwords).
-  return !/[<>|*?\r\n]/.test(ch);
+  // Never continue into markdown tokens (# * | ?) or newlines.
+  return !/[<>|*?#`\r\n]/.test(ch);
+}
+
+function isPathStopToken(tok: string): boolean {
+  const t = String(tok || "").replace(/[.,;:!?]+$/, "");
+  if (!t) return true;
+  if (PATH_STOP.test(t)) return true;
+  if (/^[A-Za-z]:[\\/]/.test(t)) return true;
+  if (/^#{1,6}/.test(t) || /^\*\*/.test(t) || /^\|/.test(t)) return true;
+  // Numbered list / RTM glue: "1." "3." "12."
+  if (/^\d+\.$/.test(t)) return true;
+  // Coverage / RTM prose words that must never extend a filesystem path
+  if (
+    /^(coverage|summary|deterministic|requirement|traceability|matrix|implemented|partial|missing|status)$/i.test(
+      t
+    )
+  ) {
+    return true;
+  }
+  return false;
 }
 
 /**
@@ -63,11 +102,13 @@ function findWindowsPaths(text: string): string[] {
       if (endQ > i + 1) {
         const inner = text.slice(i + 1, endQ);
         if (/^[A-Za-z]:[\\/]/.test(inner)) {
-          const cleaned = cleanRaw(inner);
-          const key = cleaned.toLowerCase();
-          if (!seen.has(key)) {
-            seen.add(key);
-            out.push(cleaned);
+          const cleaned = sanitizeExtractedPath(inner);
+          if (cleaned.length >= 3) {
+            const key = cleaned.toLowerCase();
+            if (!seen.has(key)) {
+              seen.add(key);
+              out.push(cleaned);
+            }
           }
           i = endQ + 1;
           continue;
@@ -91,8 +132,7 @@ function findWindowsPaths(text: string): string[] {
           const rest = text.slice(j + 1);
           const nextTok = rest.match(/^([^\s\\/]+)/);
           if (!nextTok) break;
-          const tok = nextTok[1].replace(/[.,;:!?]+$/, "");
-          if (PATH_STOP.test(tok) || /^[A-Za-z]:[\\/]/.test(tok)) break;
+          if (isPathStopToken(nextTok[1])) break;
           // Space + path segment (e.g. "My Documents") — keep going
           j += 1;
           continue;
@@ -107,7 +147,7 @@ function findWindowsPaths(text: string): string[] {
         // Include space-separated segments already validated
         raw = text.slice(i, j).replace(/[.,;:\s]+$/, "");
       }
-      const cleaned = cleanRaw(raw);
+      const cleaned = sanitizeExtractedPath(raw);
       if (cleaned.length >= 3) {
         const key = cleaned.toLowerCase();
         if (!seen.has(key)) {
@@ -251,10 +291,12 @@ export function extractGoalPaths(prompt: string): GoalPaths {
   const seen = new Set<string>();
 
   const push = (rawIn: string) => {
-    const raw = cleanRaw(rawIn);
+    const raw = sanitizeExtractedPath(rawIn);
     if (!raw || raw.length < 3) return;
     // Skip bare drive roots like "E:\"
     if (/^[A-Za-z]:[\\/]?$/.test(raw)) return;
+    // Reject leftover markdown pollution
+    if (/#{1,6}|\*\*|\|/.test(raw)) return;
     const normalized = path.normalize(raw);
     const key = normalized.toLowerCase();
     if (seen.has(key)) return;

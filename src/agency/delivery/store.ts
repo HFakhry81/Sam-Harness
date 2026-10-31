@@ -9,10 +9,31 @@ import {
   type TicketStatus,
 } from "./types.js";
 import { loadStoreDoc, saveStoreDoc } from "../../lib/db/storeBridge.js";
+import {
+  getPackWriteRoot,
+  packArtifactPath,
+  writePackArtifact,
+} from "../../lib/packWorkspace.js";
 
 const BOARD_JSON = "delivery-board.json";
 const BOARD_MD = "DELIVERY_BOARD.md";
 const GONOGO_JSON = "go-nogo.json";
+
+/** Pack workspace when cwd is omitted or equals process.cwd(); else explicit dir. */
+function resolveDeliveryDir(cwd?: string): string {
+  if (cwd && path.normalize(cwd) !== path.normalize(process.cwd())) {
+    fs.mkdirSync(cwd, { recursive: true });
+    return cwd;
+  }
+  return getPackWriteRoot();
+}
+
+function deliveryFile(name: string, cwd?: string): string {
+  if (cwd && path.normalize(cwd) !== path.normalize(process.cwd())) {
+    return path.join(cwd, name);
+  }
+  return packArtifactPath(name);
+}
 
 export function defaultDod(): DeliveryTicket["dod"] {
   return DEFAULT_DOD.map((d) => ({ ...d, done: false }));
@@ -26,9 +47,10 @@ export function assertTransition(from: TicketStatus, to: TicketStatus): void {
   }
 }
 
-export function loadBoard(cwd = process.cwd()): DeliveryBoard | null {
+export function loadBoard(cwd?: string): DeliveryBoard | null {
+  const dir = resolveDeliveryDir(cwd);
   const board = loadStoreDoc<DeliveryBoard | Record<string, never>>(
-    cwd,
+    dir,
     "delivery-board",
     BOARD_JSON,
     {}
@@ -39,14 +61,23 @@ export function loadBoard(cwd = process.cwd()): DeliveryBoard | null {
   return null;
 }
 
-export function saveBoard(board: DeliveryBoard, cwd = process.cwd()): void {
+export function saveBoard(board: DeliveryBoard, cwd?: string): void {
   board.updatedAt = new Date().toISOString();
-  saveStoreDoc(cwd, "delivery-board", board);
-  // Dual-write board JSON + MD — pack archives and smokes still expect cwd files
-  // (operational state like daily-ops/cost lives DB-only).
+  const dir = resolveDeliveryDir(cwd);
+  saveStoreDoc(dir, "delivery-board", board);
+  // Write under SAM_OUTPUT_HOME pack workspace (never Sam-Harness repo cwd)
   try {
-    fs.writeFileSync(path.join(cwd, BOARD_JSON), JSON.stringify(board, null, 2), "utf-8");
-    fs.writeFileSync(path.join(cwd, BOARD_MD), renderBoardMarkdown(board), "utf-8");
+    if (cwd && path.normalize(cwd) !== path.normalize(process.cwd())) {
+      fs.writeFileSync(
+        path.join(cwd, BOARD_JSON),
+        JSON.stringify(board, null, 2),
+        "utf-8"
+      );
+      fs.writeFileSync(path.join(cwd, BOARD_MD), renderBoardMarkdown(board), "utf-8");
+    } else {
+      writePackArtifact(BOARD_JSON, JSON.stringify(board, null, 2));
+      writePackArtifact(BOARD_MD, renderBoardMarkdown(board), { bom: true });
+    }
   } catch {
     /* mirror best-effort */
   }
@@ -113,18 +144,31 @@ export function setGoNoGo(board: DeliveryBoard, record: GoNoGoRecord): DeliveryB
   return board;
 }
 
-export function readGoNoGoFile(cwd = process.cwd()): GoNoGoRecord | null {
-  const p = path.join(cwd, GONOGO_JSON);
-  if (!fs.existsSync(p)) return null;
-  try {
-    return JSON.parse(fs.readFileSync(p, "utf-8")) as GoNoGoRecord;
-  } catch {
-    return null;
+export function readGoNoGoFile(cwd?: string): GoNoGoRecord | null {
+  // Prefer pack workspace; also accept owner-placed go-nogo.json in cwd
+  const candidates = [
+    deliveryFile(GONOGO_JSON, cwd),
+    path.join(process.cwd(), GONOGO_JSON),
+  ];
+  for (const p of candidates) {
+    if (!fs.existsSync(p)) continue;
+    try {
+      return JSON.parse(fs.readFileSync(p, "utf-8")) as GoNoGoRecord;
+    } catch {
+      /* try next */
+    }
   }
+  return null;
 }
 
-export function writeGoNoGoFile(record: GoNoGoRecord, cwd = process.cwd()): void {
-  fs.writeFileSync(path.join(cwd, GONOGO_JSON), JSON.stringify(record, null, 2), "utf-8");
+export function writeGoNoGoFile(record: GoNoGoRecord, cwd?: string): void {
+  const body = JSON.stringify(record, null, 2);
+  if (cwd && path.normalize(cwd) !== path.normalize(process.cwd())) {
+    fs.mkdirSync(cwd, { recursive: true });
+    fs.writeFileSync(path.join(cwd, GONOGO_JSON), body, "utf-8");
+  } else {
+    writePackArtifact(GONOGO_JSON, body);
+  }
 }
 
 export { BOARD_JSON, BOARD_MD, GONOGO_JSON };

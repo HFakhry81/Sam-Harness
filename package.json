@@ -6,8 +6,8 @@
   "scripts": {
     "ensure-task": "tsx scripts/ensure-task.ts",
     "typecheck": "tsx scripts/ensure-task.ts && tsc --noEmit",
-    "test": "vitest run",
-    "test:watch": "vitest",
+    "test": "node --max-old-space-size=4096 ./node_modules/vitest/vitest.mjs run",
+    "test:watch": "node --max-old-space-size=4096 ./node_modules/vitest/vitest.mjs",
     "test:desktop": "vitest run tests/desktop-operator.test.ts",
     "test:desktop:windows": "vitest run --config vitest.desktop-windows.config.ts",
     "smoke": "tsx scripts/ensure-task.ts && tsx scripts/smoke-agency.ts && tsx scripts/smoke-delivery.ts && tsx scripts/smoke-capabilities.ts && tsx scripts/smoke-ops-planner.ts && tsx scripts/smoke-controlplane.ts && tsx scripts/smoke-mcp.ts && tsx scripts/smoke-sandbox.ts && tsx scripts/smoke-desktop.ts",

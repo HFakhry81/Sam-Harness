@@ -10,14 +10,20 @@ import {
   extractGoalPaths,
   primaryTargetRepo,
   primarySpecRoot,
+  sanitizeExtractedPath,
 } from "../src/agency/pathExtract.js";
 import { scanRepoEvidence } from "../src/agency/evidence.js";
 import { ingestSpecFolder } from "../src/agency/specIngest.js";
 import { indexRepo } from "../src/agency/repoIndex.js";
 import { buildReqTraceMatrix } from "../src/agency/reqTrace.js";
 import { inferLocaleCurrency } from "../src/agency/localeCurrency.js";
-import { verifyCitationsAgainstRepo } from "../src/agency/claimVerify.js";
+import {
+  extractCitedPaths,
+  normalizeCitedPath,
+  verifyCitationsAgainstRepo,
+} from "../src/agency/claimVerify.js";
 import { detectRepetition } from "../src/agency/repetitionGuard.js";
+import { injectGroundedStrategyBlocks } from "../src/agency/finalReport.js";
 import {
   isTinyModel,
   parseModelSizeB,
@@ -56,6 +62,41 @@ describe("path extraction", () => {
     expect(
       paths.targetRepos.length + paths.specRoots.length + paths.other.length
     ).toBeGreaterThanOrEqual(1);
+  });
+
+  it("stops Windows paths at markdown / numbered-list glue (no RTM swallow)", () => {
+    const garbage =
+      "D:\\My Documents\\Spendy\\Easy Expenses\\Easy Expensa\\1. ## 3. Deterministic Requirement Traceability Matrix (RTM) **Coverage Summary:**";
+    const cleaned = sanitizeExtractedPath(garbage);
+    expect(cleaned.toLowerCase()).toContain("easy expensa");
+    expect(cleaned).not.toMatch(/##|Coverage Summary|Deterministic/i);
+    expect(cleaned).not.toMatch(/\d+\.\s+#/);
+
+    const prompt = `audit against ${garbage}`;
+    const paths = extractGoalPaths(prompt);
+    const all = [...paths.targetRepos, ...paths.specRoots, ...paths.other];
+    expect(all.every((p) => !/##|Coverage Summary/i.test(p.normalized))).toBe(
+      true
+    );
+  });
+
+  it("citation extractor rejects markdown-glued Windows paths", () => {
+    const text = [
+      "See `D:\\My Documents\\Spendy\\Easy Expenses\\Easy Expensa\\1. ## 3. Deterministic Requirement Traceability Matrix (RTM) **Coverage Summary:**`",
+      "Real code: `src/screens/HomeScreen.js`",
+    ].join("\n");
+    const cited = extractCitedPaths(text);
+    expect(cited.every((p) => !/##|Coverage Summary/i.test(p))).toBe(true);
+    expect(cited.some((p) => /HomeScreen/i.test(p))).toBe(true);
+    expect(
+      normalizeCitedPath(
+        "D:/My Documents/Spendy/Easy Expensa/1. ## 3. Deterministic RTM"
+      )
+    ).not.toMatch(/##|Deterministic/);
+    const v = verifyCitationsAgainstRepo(text, REPO, { specRoot: SPEC });
+    expect(v.missing.every((m) => !/##|Coverage Summary/i.test(m.raw))).toBe(
+      true
+    );
   });
 });
 
@@ -188,6 +229,90 @@ describe("repetition guard", () => {
       "\n"
     );
     expect(detectRepetition(text).ok).toBe(true);
+  });
+
+  it("exempts deterministic RTM / status-index / Key Findings from degeneration", () => {
+    const rows = Array.from({ length: 70 }, (_, i) => ({
+      id: `REQ-${String(i + 1).padStart(3, "0")}`,
+      text: `Spendy feature requirement number ${i + 1}`,
+      status: i % 5 === 0 ? "partial" : "missing",
+      codePaths: i % 5 === 0 ? ["src/screens/HomeScreen.js"] : ([] as string[]),
+    }));
+    const findings = [
+      {
+        id: "DEP-async_storage",
+        category: "dependency" as const,
+        severity: "P0" as const,
+        summary: "Missing @react-native-async-storage/async-storage",
+        paths: ["package.json"],
+        detail: "add dep",
+      },
+      {
+        id: "DEP-supabase",
+        category: "dependency" as const,
+        severity: "P0" as const,
+        summary: "Missing @supabase/supabase-js",
+        paths: ["package.json"],
+        detail: "add dep",
+      },
+      {
+        id: "AUTH-OTP",
+        category: "auth" as const,
+        severity: "P0" as const,
+        summary: "OTP missing",
+        paths: [] as string[],
+        detail: "add otp",
+      },
+      {
+        id: "UI-HANDLER-1",
+        category: "ui_handler" as const,
+        severity: "P0" as const,
+        summary: "Logout without onPress",
+        paths: ["src/screens/HomeScreen.js:15"],
+        detail: "wire onPress",
+      },
+      {
+        id: "MOCK-001",
+        category: "mock_data" as const,
+        severity: "P0" as const,
+        summary: "mock data",
+        paths: ["src/data/mockData.js"],
+        detail: "wire backend",
+      },
+      {
+        id: "STACK-001",
+        category: "stack_conflict" as const,
+        severity: "P0" as const,
+        summary: "Flutter vs RN",
+        paths: ["package.json"],
+        detail: "align stack",
+      },
+    ];
+    const strategy = injectGroundedStrategyBlocks(
+      [
+        "## Direct answer",
+        "Spendy audit against the product brief.",
+        "## Stack conflict",
+        "Spec wants Flutter+FastAPI; repo is React Native.",
+        "## Recommendations",
+        "1. Install missing deps",
+        "2. Wire OTP auth",
+        "3. Add Logout onPress",
+      ].join("\n"),
+      {
+        checklistFindings: findings,
+        reqRows: rows,
+        coverageRatio: 0.14,
+        assessedCoverageRatio: 1,
+        eligibleCount: 70,
+        codeBackedCount: 14,
+        assessedCount: 70,
+        groundedCurrency: "EGP",
+      }
+    );
+    const r = detectRepetition(strategy);
+    expect(r.ok).toBe(true);
+    expect(r.reason).not.toMatch(/degenerate/i);
   });
 });
 

@@ -18,7 +18,7 @@ dist/
 .tmp-*.json
 *.bak
 
-# Root runtime only — archived packs live under docs/Sam-Harness no.X
+# Root runtime only — archived packs live under SAM_OUTPUT_HOME (~/Documents/Sam-Harness)
 /controlplane-session.json
 /controlplane-session.md
 /daily-ops.json
@@ -43,6 +43,12 @@ dist/
 /audit-attempt-*.md
 /evidence-pack.md
 /evidence-pack.smoke.md
+/evidence.json
+/REQ_TRACEABILITY.md
+/AUDIT_CHECKLIST.md
+/agency-verdict.md
+/gates.json
+/go-nogo.example.json
 /execution-plan.md
 /execution-result.md
 /final-report.md
