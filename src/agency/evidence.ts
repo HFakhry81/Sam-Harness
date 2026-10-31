@@ -32,6 +32,15 @@ import {
 
 const require = createRequire(import.meta.url);
 
+export type EvidenceReadStats = {
+  specFilesRead: number;
+  specBytes: number;
+  sourceFilesRead: number;
+  sourceBytes: number;
+  specs: Array<{ path: string; bytes: number }>;
+  sources: Array<{ path: string; bytes: number }>;
+};
+
 export type EvidencePackV2 = EvidencePack & {
   version: 2;
   goalPaths: GoalPaths;
@@ -41,8 +50,53 @@ export type EvidencePackV2 = EvidencePack & {
   reqMatrix?: ReqTraceMatrix;
   localeCurrency?: LocaleCurrencyProfile;
   checklist?: AuditChecklistResult;
+  readStats?: EvidenceReadStats;
   json: object;
 };
+
+export function buildReadStats(
+  spec?: SpecIngestResult,
+  repoIndex?: RepoIndexResult
+): EvidenceReadStats {
+  const specs = (spec?.filesReadMeta || []).map((f) => ({
+    path: f.path,
+    bytes: f.bytes,
+  }));
+  // Fallback: filesRead without meta → unknown bytes 0
+  if (!specs.length && spec?.filesRead?.length) {
+    for (const f of spec.filesRead) {
+      let bytes = 0;
+      try {
+        bytes = fs.statSync(f).size;
+      } catch {
+        bytes = 0;
+      }
+      specs.push({
+        path: path.basename(f),
+        bytes,
+      });
+    }
+  }
+  const sources = (repoIndex?.filesReadMeta || []).map((f) => ({
+    path: f.path,
+    bytes: f.bytes,
+  }));
+  return {
+    specFilesRead: specs.length,
+    specBytes: specs.reduce((a, b) => a + b.bytes, 0),
+    sourceFilesRead: sources.length,
+    sourceBytes: sources.reduce((a, b) => a + b.bytes, 0),
+    specs: specs.slice(0, 80),
+    sources: sources.slice(0, 120),
+  };
+}
+
+export function formatReadStatsConsole(stats: EvidenceReadStats): string {
+  return (
+    `spec files read=${stats.specFilesRead} (${stats.specBytes} bytes); ` +
+    `source files read=${stats.sourceFilesRead} (${stats.sourceBytes} bytes)`
+  );
+}
 
 export type ScanEvidenceOpts = {
   goal?: string;
@@ -168,6 +222,7 @@ function ingestSpecFolderSync(root: string): SpecIngestResult {
 
   const rawChunks: SpecIngestResult["rawChunks"] = [];
   const filesRead: string[] = [];
+  const filesReadMeta: SpecIngestResult["filesReadMeta"] = [];
   const errors: string[] = [];
 
   for (const file of files.slice(0, 80)) {
@@ -186,6 +241,13 @@ function ingestSpecFolderSync(root: string): SpecIngestResult {
     if (!text.trim()) continue;
     filesRead.push(file);
     const rel = path.relative(root, file).replace(/\\/g, "/") || path.basename(file);
+    let bytes = Buffer.byteLength(text, "utf-8");
+    try {
+      bytes = fs.statSync(file).size;
+    } catch {
+      /* keep text byte length */
+    }
+    filesReadMeta!.push({ path: rel, bytes });
     rawChunks.push({
       file: rel,
       section: path.basename(file),
@@ -196,6 +258,7 @@ function ingestSpecFolderSync(root: string): SpecIngestResult {
   return {
     root,
     filesRead,
+    filesReadMeta,
     requirements: extractRequirementsHeuristic(rawChunks),
     rawChunks,
     errors,
@@ -233,6 +296,14 @@ function buildMarkdown(input: {
     `Spec root: \`${specRoot || "(none detected)"}\``,
     `Scanned: ${scannedAt}`,
     `Hits: ${hits.length}`,
+    `Spec files read: ${spec?.filesReadMeta?.length ?? spec?.filesRead?.length ?? 0}` +
+      (spec?.filesReadMeta
+        ? ` (${spec.filesReadMeta.reduce((a, b) => a + b.bytes, 0)} bytes)`
+        : ""),
+    `Source files read: ${repoIndex.filesReadMeta?.length ?? 0}` +
+      (repoIndex.filesReadMeta
+        ? ` (${repoIndex.filesReadMeta.reduce((a, b) => a + b.bytes, 0)} bytes)`
+        : ""),
     ``,
     `## Goal paths`,
     ...goalPaths.targetRepos.map(
@@ -262,7 +333,7 @@ function buildMarkdown(input: {
     ``,
     `## Citable file hits (real paths only)`,
     `Auditor MUST cite these paths (or mark "not found") — do not invent frameworks or folders.`,
-    `Currency MUST be ${localeCurrency.currency} (do not invent SAR).`,
+    `Currency MUST be ${localeCurrency.currency} (do not invent other ISO currency codes).`,
     ``,
     ...hits.slice(0, 80).map((h) => `- \`${h.path}\` — ${h.note}`),
     ``,
@@ -331,6 +402,8 @@ function assemblePack(
     }
   }
 
+  const readStats = buildReadStats(spec, repoIndex);
+
   const summaryMarkdown = buildMarkdown({
     root,
     scannedAt,
@@ -360,6 +433,7 @@ function assemblePack(
     usesMockData: repoIndex.usesMockData,
     currencies: repoIndex.currencies,
     locales: repoIndex.locales,
+    readStats,
   };
 
   return {
@@ -375,6 +449,7 @@ function assemblePack(
     reqMatrix,
     localeCurrency,
     checklist,
+    readStats,
     json,
   };
 }

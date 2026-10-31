@@ -23,7 +23,11 @@ import {
   resolveRoleModels,
   type TeamRoleConfig,
 } from "./teamConfig.js";
-import { scanRepoEvidence, scanRepoEvidenceAsync } from "./evidence.js";
+import {
+  formatReadStatsConsole,
+  scanRepoEvidence,
+  scanRepoEvidenceAsync,
+} from "./evidence.js";
 import { MAX_LOOPS, runReviewGraph } from "./reviewGraph.js";
 import { syncDeliveryBoardFromBacklog } from "./delivery/sync.js";
 import { writeGoNoGoTemplate } from "./delivery/goNoGo.js";
@@ -34,9 +38,18 @@ import {
 } from "./goalFidelity.js";
 import {
   assertCleanPackClaims,
-  assertCleanPackFiles,
+  scrubPackFiles,
+  scrubPackMarkdown,
 } from "./fidelityRubric.js";
-import { resetGatesForRun } from "./gatesStore.js";
+import {
+  appendGateEntry,
+  resetGatesForRun,
+} from "./gatesStore.js";
+import {
+  buildAgencyVerdict,
+  verdictConsoleLine,
+  verdictMarkdown,
+} from "./agencyVerdict.js";
 import {
   extractGoalPaths,
   primarySpecRoot,
@@ -46,6 +59,17 @@ import { chooseNonDegenerateDraft } from "./repetitionGuard.js";
 import { learningContextBlock } from "../controlplane/projectMemory.js";
 import { withLanguageDirective } from "../lib/i18n/index.js";
 import type { AgencyRunResult, Engagement } from "./types.js";
+
+/** Stale cwd artifacts from a prior pack must not poison this run's assertions. */
+const STALE_RUN_ARTIFACTS = [
+  "ceo-draft.md",
+  "audit-report.md",
+  "final-report.md",
+  "audit-history.md",
+  "execution-result.md",
+  "PACK_CLAIM_ASSERTION.md",
+  "agency-verdict.md",
+];
 
 function labelForRole(roleId: string): string {
   const m = resolveRoleModels(roleId);
@@ -126,6 +150,15 @@ export async function runAgencyArchitecture(task: string): Promise<AgencyRunResu
     process.env.SAM_RUN_ID ||
     `run-${Date.now().toString(36)}`;
   resetGatesForRun(packRunId);
+
+  // Drop stale cwd pack artifacts so a prior run's [REMOVED]/SAR cannot poison assertions
+  for (const name of STALE_RUN_ARTIFACTS) {
+    try {
+      if (fs.existsSync(name)) fs.unlinkSync(name);
+    } catch {
+      /* ignore */
+    }
+  }
 
   const userGoalEarly = extractUserGoal(
     typeof taskConfig.body === "string" && taskConfig.body.trim()
@@ -234,6 +267,19 @@ export async function runAgencyArchitecture(task: string): Promise<AgencyRunResu
       "utf-8"
     );
   }
+  const readStats = evidence.readStats;
+  if (readStats) {
+    ok("Evidence Scout", formatReadStatsConsole(readStats));
+    sys(
+      `Evidence read detail: specs=${readStats.specs
+        .slice(0, 6)
+        .map((s) => `${s.path}(${s.bytes}b)`)
+        .join(", ") || "none"}; sources=${readStats.sources
+        .slice(0, 6)
+        .map((s) => `${s.path}(${s.bytes}b)`)
+        .join(", ") || "none"}`
+    );
+  }
   ok(
     "Evidence Scout",
     `${evidence.hits.length} hits · REQs=${evidence.spec?.requirements.length || 0} · currency=${evidence.localeCurrency?.currency || "?"} → evidence-pack.md + evidence.json`
@@ -284,47 +330,74 @@ export async function runAgencyArchitecture(task: string): Promise<AgencyRunResu
     runId: packRunId,
   });
 
-  // Pack-level claim assertion — fail loudly if residues remain
-  let auditPassed = review.auditPassed;
-  let goalPassed = review.goalPassed;
-  {
-    const draftCheck = assertCleanPackClaims(review.strategy || "");
-    const filesCheck = assertCleanPackFiles(process.cwd());
-    if (!draftCheck.ok || !filesCheck.ok) {
-      const violations = [
-        ...new Set([...draftCheck.violations, ...filesCheck.violations]),
-      ];
-      const msg = `Pack claim assertion FAIL: forbidden residues ${violations.join(", ")}${
-        filesCheck.file ? ` in ${filesCheck.file}` : ""
-      }`;
-      warn("Pack", msg);
-      try {
-        fs.writeFileSync(
-          "PACK_CLAIM_ASSERTION.md",
-          `# Pack claim assertion FAIL\n\n${msg}\n`,
-          "utf-8"
-        );
-      } catch {
-        /* ignore */
-      }
-      if (auditPassed) {
-        auditPassed = false;
-        goalPassed = false;
-        warn("Pack", "Forced gate CLOSED due to pack claim assertion");
-      }
+  // Residue check on THIS run's strategy (sanitizer already ran before audit).
+  // Do NOT inspect stale final-report.md from a prior pack here.
+  const strategyScrub = scrubPackMarkdown(review.strategy || "");
+  if (strategyScrub.text !== review.strategy) {
+    try {
+      fs.writeFileSync("ceo-draft.md", strategyScrub.text, "utf-8");
+    } catch {
+      /* ignore */
     }
+  }
+  const draftCheck = assertCleanPackClaims(strategyScrub.text);
+  const packRejectReasons: string[] = [];
+  let packClaimsOk = draftCheck.ok;
+  if (!draftCheck.ok) {
+    packRejectReasons.push(
+      `Pack claim assertion FAIL: forbidden residues ${draftCheck.violations.join(", ")} in strategy`
+    );
+    packClaimsOk = false;
+    warn("Pack", packRejectReasons[0]);
+  }
+
+  // Single-sourced verdict — console / final-report / gates.json must agree
+  const verdict = buildAgencyVerdict({
+    auditPassed: review.auditPassed,
+    goalPassed: review.goalPassed,
+    goalFidelityScore: review.goalFidelityScore,
+    loop: review.loop,
+    maxLoops: MAX_LOOPS,
+    packClaimsOk,
+    rejectReasons: packRejectReasons,
+  });
+  const auditPassed = verdict.auditPassed;
+  const goalPassed = verdict.goalPassed;
+  fs.writeFileSync("agency-verdict.md", verdictMarkdown(verdict), "utf-8");
+  try {
+    appendGateEntry(
+      {
+        at: new Date().toISOString(),
+        loop: review.loop,
+        gate: verdict.gate,
+        auditPassed: verdict.auditPassed,
+        goalPassed: verdict.goalPassed,
+        goalFidelityScore: verdict.goalFidelityScore,
+        rejectReasons: verdict.rejectReasons,
+        packClaimsOk: verdict.packClaimsOk,
+        reason: verdict.reason,
+      },
+      packRunId
+    );
+  } catch {
+    /* ignore */
+  }
+  if (verdict.gate === "OPEN") {
+    ok("Gate", verdictConsoleLine(verdict));
+  } else {
+    warn("Gate", verdictConsoleLine(verdict));
   }
 
   fs.writeFileSync(
     "audit-history.md",
-    [
-      `# Audit History (LangGraph, max ${MAX_LOOPS})`,
-      `Final: ${auditPassed ? "[APPROVED]" : "[REJECTED] — gate CLOSED"}`,
-      `goalPassed: ${goalPassed}`,
-      `goalFidelityScore: ${review.goalFidelityScore.toFixed(3)}`,
-      ``,
-      ...review.history.map((h, i) => `---\n## Loop ${i + 1}\n\n${h}`),
-    ].join("\n"),
+    scrubPackMarkdown(
+      [
+        `# Audit History (LangGraph, max ${MAX_LOOPS})`,
+        verdictMarkdown(verdict),
+        ``,
+        ...review.history.map((h, i) => `---\n## Loop ${i + 1}\n\n${h}`),
+      ].join("\n")
+    ).text,
     "utf-8"
   );
   fs.writeFileSync(
@@ -334,12 +407,18 @@ export async function runAgencyArchitecture(task: string): Promise<AgencyRunResu
       `- engine: LangGraph StateGraph`,
       `- loops_run: ${review.loop}`,
       `- max: ${MAX_LOOPS}`,
-      `- auditPassed: ${auditPassed}`,
-      `- goalPassed: ${goalPassed}`,
-      `- goalFidelityScore: ${review.goalFidelityScore.toFixed(3)}`,
-      `- gate: ${auditPassed ? "OPEN" : "CLOSED"}`,
+      `- auditPassed: ${verdict.auditPassed}`,
+      `- goalPassed: ${verdict.goalPassed}`,
+      `- goalFidelityScore: ${verdict.goalFidelityScore.toFixed(3)}`,
+      `- gate: ${verdict.gate}`,
+      `- reason: ${verdict.reason}`,
       `- evidence_hits: ${evidence.hits.length}`,
-    ].join("\n"),
+      readStats
+        ? `- read_stats: specs=${readStats.specFilesRead}/${readStats.specBytes}b sources=${readStats.sourceFilesRead}/${readStats.sourceBytes}b`
+        : "",
+    ]
+      .filter(Boolean)
+      .join("\n"),
     "utf-8"
   );
 
@@ -458,18 +537,22 @@ ${clip(brief, 3000)}`,
   }
 
   if (!auditPassed) {
-    warn("Gate", "Auditor never APPROVED — downstream specialists SKIPPED");
-    finalReport = [
-      `# Final report — AUDIT GATE FAILED`,
-      `[FAILED_AUDIT_GATE]`,
-      `loops=${review.loop}/${MAX_LOOPS}`,
-      ``,
-      clip(review.auditReport, 2500),
-    ].join("\n");
+    warn("Gate", `Downstream specialists SKIPPED — ${verdict.reason}`);
+    finalReport = scrubPackMarkdown(
+      [
+        `# Final report — AUDIT GATE FAILED`,
+        `[FAILED_AUDIT_GATE]`,
+        verdictMarkdown(verdict),
+        ``,
+        clip(review.auditReport, 2500),
+      ].join("\n")
+    ).text;
     fs.writeFileSync("final-report.md", finalReport, "utf-8");
     fs.writeFileSync(
       "execution-result.md",
-      `# Agency Result\n- engine: LangGraph\n- auditPassed: false\n- goalPassed: ${goalPassed}\n- goalFidelityScore: ${review.goalFidelityScore.toFixed(3)}\n- gate: CLOSED\n- loops: ${review.loop}\n`,
+      scrubPackMarkdown(
+        `# Agency Result\n- engine: LangGraph\n${verdictMarkdown(verdict)}\n- loops: ${review.loop}\n`
+      ).text,
       "utf-8"
     );
   } else {
@@ -532,18 +615,38 @@ ${clip(layeredBlueprint, 3000)}`
     if (!finalReport) {
       finalReport = [
         `# Final report`,
-        `Audit gate OPEN. Downstream steps: ${downstream.map((r) => r.id).join(", ")}`,
+        verdictMarkdown(verdict),
+        `Downstream steps: ${downstream.map((r) => r.id).join(", ")}`,
         ``,
         clip(layeredBlueprint, 2000),
       ].join("\n");
-      fs.writeFileSync("final-report.md", finalReport, "utf-8");
     }
+    finalReport = scrubPackMarkdown(finalReport).text;
+    fs.writeFileSync("final-report.md", finalReport, "utf-8");
 
     fs.writeFileSync(
       "execution-result.md",
-      `# Agency Result\n- engine: LangGraph\n- auditPassed: true\n- goalPassed: ${goalPassed}\n- goalFidelityScore: ${review.goalFidelityScore.toFixed(3)}\n- gate: OPEN\n- loops: ${review.loop}\n- downstream: ${downstream.map((r) => r.id).join(",")}\n`,
+      scrubPackMarkdown(
+        `# Agency Result\n- engine: LangGraph\n${verdictMarkdown(verdict)}\n- loops: ${review.loop}\n- downstream: ${downstream.map((r) => r.id).join(",")}\n`
+      ).text,
       "utf-8"
     );
+  }
+
+  // Scrub all pack markdown BEFORE archive — residues only allowed in model-errors fences
+  {
+    const { scrubbed, stillDirty } = scrubPackFiles(process.cwd());
+    if (scrubbed.length) {
+      sys(`Pack scrub: cleaned ${scrubbed.join(", ")}`);
+    }
+    if (stillDirty.length) {
+      warn(
+        "Pack",
+        `Residues remain after scrub: ${stillDirty
+          .map((d) => `${d.file}[${d.violations.join(",")}]`)
+          .join("; ")}`
+      );
+    }
   }
 
   let packDir: string | undefined;
@@ -598,18 +701,25 @@ ${clip(layeredBlueprint, 3000)}`
         packGates,
         JSON.stringify(
           {
+            runId: packRunId,
             gates: [],
             latest: {
-              gate: auditPassed ? "OPEN" : "CLOSED",
-              auditPassed: auditPassed,
+              gate: verdict.gate,
+              auditPassed: verdict.auditPassed,
+              goalPassed: verdict.goalPassed,
+              reason: verdict.reason,
               at: new Date().toISOString(),
             },
+            modelErrors: [],
           },
           null,
           2
         ),
         "utf-8"
       );
+    }
+    if (fs.existsSync("agency-verdict.md")) {
+      fs.copyFileSync("agency-verdict.md", path.join(dir, "agency-verdict.md"));
     }
     const loopArchive = path.join(dir, "review-loop");
     fs.mkdirSync(loopArchive, { recursive: true });
@@ -620,7 +730,20 @@ ${clip(layeredBlueprint, 3000)}`
     }
     fs.writeFileSync(
       path.join(dir, "PACK_HANDOFF.md"),
-      `# Pack — Sam-Harness no.${n}\n\nengine: LangGraph agency\nauditPassed: ${auditPassed}\ngoalPassed: ${goalPassed}\ngoalFidelityScore: ${review.goalFidelityScore.toFixed(3)}\nloops: ${review.loop}/${MAX_LOOPS}\nevidence_hits: ${evidence.hits.length}\n`,
+      scrubPackMarkdown(
+        [
+          `# Pack — Sam-Harness no.${n}`,
+          ``,
+          `engine: LangGraph agency`,
+          verdictMarkdown(verdict),
+          `evidence_hits: ${evidence.hits.length}`,
+          readStats
+            ? `read_stats: specs=${readStats.specFilesRead} (${readStats.specBytes} bytes); sources=${readStats.sourceFilesRead} (${readStats.sourceBytes} bytes)`
+            : "",
+        ]
+          .filter(Boolean)
+          .join("\n") + "\n"
+      ).text,
       "utf-8"
     );
     fs.writeFileSync(
@@ -635,11 +758,18 @@ ${clip(layeredBlueprint, 3000)}`
 
   return {
     engagement,
-    auditPassed: auditPassed,
-    goalPassed: goalPassed,
-    goalFidelityScore: review.goalFidelityScore,
+    auditPassed: verdict.auditPassed,
+    goalPassed: verdict.goalPassed,
+    goalFidelityScore: verdict.goalFidelityScore,
+    verdict: {
+      auditPassed: verdict.auditPassed,
+      goalPassed: verdict.goalPassed,
+      gate: verdict.gate,
+      reason: verdict.reason,
+      packClaimsOk: verdict.packClaimsOk,
+    },
     revisionCount: review.loop,
-    strategyPlan: review.strategy,
+    strategyPlan: strategyScrub.text || review.strategy,
     auditReport: review.auditReport,
     layeredBlueprint,
     helpSystemSpec,

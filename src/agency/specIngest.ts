@@ -15,9 +15,16 @@ export type SpecRequirement = {
   section: string;
 };
 
+export type SpecFileRead = {
+  path: string;
+  bytes: number;
+};
+
 export type SpecIngestResult = {
   root: string;
   filesRead: string[];
+  /** Per-file byte sizes for files that were actually read. */
+  filesReadMeta?: SpecFileRead[];
   requirements: SpecRequirement[];
   rawChunks: Array<{ file: string; section: string; text: string }>;
   errors: string[];
@@ -233,6 +240,7 @@ export async function ingestSpecFolder(rootIn: string): Promise<SpecIngestResult
 
   const rawChunks: SpecIngestResult["rawChunks"] = [];
   const filesRead: string[] = [];
+  const filesReadMeta: SpecFileRead[] = [];
   for (const file of files.slice(0, 80)) {
     try {
       const text = await readSpecFile(file);
@@ -241,6 +249,16 @@ export async function ingestSpecFolder(rootIn: string): Promise<SpecIngestResult
         continue;
       }
       filesRead.push(file);
+      let bytes = Buffer.byteLength(text, "utf-8");
+      try {
+        bytes = fs.statSync(file).size;
+      } catch {
+        /* keep text byte length */
+      }
+      filesReadMeta.push({
+        path: path.relative(root, file).replace(/\\/g, "/") || path.basename(file),
+        bytes,
+      });
       const rel = path.relative(root, file).replace(/\\/g, "/") || path.basename(file);
       for (const ch of sectionize(text, rel)) {
         rawChunks.push({ file: rel, section: ch.section, text: ch.text.slice(0, 12000) });
@@ -251,7 +269,7 @@ export async function ingestSpecFolder(rootIn: string): Promise<SpecIngestResult
   }
 
   const requirements = extractRequirementsHeuristic(rawChunks);
-  return { root, filesRead, requirements, rawChunks, errors };
+  return { root, filesRead, filesReadMeta, requirements, rawChunks, errors };
 }
 
 export function requirementsMarkdown(reqs: SpecRequirement[]): string {

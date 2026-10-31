@@ -29,6 +29,7 @@ import {
   GROUNDED_FIDELITY_THRESHOLD,
   keywordHitInfo,
   scoreGroundedAuditRubric,
+  scrubPackMarkdown,
   type RubricContext,
 } from "./fidelityRubric.js";
 import {
@@ -234,8 +235,8 @@ function buildGraph() {
 ## Delivery phases (handoff; do not claim already shipped)`
         : `Required sections for THIS user goal (do NOT invent BookingType/clinic content unless the goal asks for it):
 ## Direct answer to ORIGINAL USER GOAL (must be the main body)
-## Current state vs gaps (cite ONLY real evidence paths — never packages/ or apps/web unless they exist)
-## Currency/locale MUST use ${currency} (never invent SAR)
+## Current state vs gaps (cite ONLY real evidence paths — never invented monorepo roots unless they exist)
+## Currency/locale MUST use ${currency} (never invent other ISO currency codes)
 ## Concrete recommendations / next actions for failing checklist items
 ## Risks & verification
 ## Delivery / handoff notes`;
@@ -263,8 +264,8 @@ ${clip(state.brief, 8000)}`
       const fixes = extractFixes(state.auditReport || "");
       const checklistItems = [
         `You MUST address EVERY item below. Mark each as DONE or GAP with a real path citation.`,
-        `1. Remove/replace any SAR or non-${currency} currency claims with ${currency}.`,
-        `2. Remove citations to nonexistent paths (packages/, apps/web, etc.).`,
+        `1. Remove any non-${currency} currency claims; rewrite using ${currency} only.`,
+        `2. Remove citations to nonexistent paths (invented monorepo roots, etc.).`,
         `3. Cover failing REQs / checklist items from the rejection (auth wiring, mock data, missing deps, stack conflict, UI handlers without onPress).`,
         `4. Do NOT copy the prior strategy verbatim — change structure and fill the gaps.`,
         ...fixes.map((f, i) => `FIX ${i + 1}: ${f}`),
@@ -534,7 +535,7 @@ REJECT strategies that ignore the stated goal.`;
       `You are Agency Auditor (evidence-grounded + goal-fidelity).
 REJECT rubber-stamp checklists. Prefer citing EVIDENCE paths.
 REJECT invented files not in evidence.
-REJECT drafts that contain [REMOVED] placeholders or invent SAR / packages/ / apps/web.
+REJECT drafts that contain erasure placeholders or invent wrong currencies / nonexistent monorepo roots.
 ${bookingRules}
 
 APPROVE only if strategy is concrete, consistent with evidence (or honestly marks gaps),
@@ -668,7 +669,7 @@ ${REJECTION_FORMAT}`
         ``,
         ...rejectReasons.map(
           (r, i) =>
-            `### Issue ${i + 1}\n- Rejection reason: ${r}\n- Severity: Critical\n- How to fix: Ground claims in evidence-pack.md / evidence.json; cite only real paths; raise REQ coverage; never use [REMOVED] placeholders or invent SAR/packages/apps/web.\nFIX ${i + 1}: ${r}`
+            `### Issue ${i + 1}\n- Rejection reason: ${r}\n- Severity: Critical\n- How to fix: Ground claims in evidence-pack.md / evidence.json; cite only real paths; raise REQ coverage; never use erasure placeholders or invent wrong currencies/paths.\nFIX ${i + 1}: ${r}`
         ),
         ``,
         `--- LLM draft (overridden by grounded gates) ---`,
@@ -727,8 +728,10 @@ ${REJECTION_FORMAT}`
       ``,
       auditReport,
     ].join("\n");
-    fs.writeFileSync(path.join(state.loopDir, `audit-v${loopNo}.md`), auditDoc, "utf-8");
-    fs.writeFileSync("audit-report.md", auditDoc, "utf-8");
+    // Scrub instructional residues before persisting — pack must not contain erasure placeholders
+    const cleanAudit = scrubPackMarkdown(auditDoc).text;
+    fs.writeFileSync(path.join(state.loopDir, `audit-v${loopNo}.md`), cleanAudit, "utf-8");
+    fs.writeFileSync("audit-report.md", cleanAudit, "utf-8");
     if (!auditPassed) {
       fs.writeFileSync(
         path.join(state.loopDir, `rejection-v${loopNo}.md`),

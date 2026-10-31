@@ -231,7 +231,7 @@ ${list}
 
 GROUNDED CURRENCY: ${input.groundedCurrency} (never write SAR/USD/AED unless that is the grounded currency)
 Cite ONLY paths that exist in EVIDENCE. Do not mention packages/ or apps/web unless those folders exist.
-Do NOT write the tokens [REMOVED] or REMOVED.
+Do NOT write erasure placeholders (bracketed REMOVED tokens) or the bare word REMOVED as a stand-in.
 
 EVIDENCE (real paths only):
 ${input.evidenceClip}

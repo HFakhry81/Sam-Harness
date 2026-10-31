@@ -12,6 +12,7 @@ import {
   GROUNDED_FIDELITY_THRESHOLD,
   keywordHitInfo,
   scoreGroundedAuditRubric,
+  scrubPackMarkdown,
 } from "../src/agency/fidelityRubric.js";
 import {
   buildClaimRewritePrompt,
@@ -27,6 +28,7 @@ import {
   resetGatesForRun,
 } from "../src/agency/gatesStore.js";
 import { scanRepoEvidence } from "../src/agency/evidence.js";
+import { buildAgencyVerdict } from "../src/agency/agencyVerdict.js";
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 const FIX = path.join(HERE, "fixtures", "grounded-audit");
@@ -125,6 +127,11 @@ describe("fidelity rubric scoring", () => {
     });
     expect(pack.spec?.filesRead.length).toBeGreaterThan(0);
     expect(pack.reqMatrix?.rows.length).toBeGreaterThan(0);
+    expect(pack.readStats?.specFilesRead).toBeGreaterThan(0);
+    expect(pack.readStats?.specBytes).toBeGreaterThan(0);
+    expect(pack.readStats?.sourceFilesRead).toBeGreaterThan(0);
+    expect(pack.readStats?.sourceBytes).toBeGreaterThan(0);
+    expect((pack.json as { readStats?: { specFilesRead: number } }).readStats?.specFilesRead).toBeGreaterThan(0);
     const strategy = [
       "## Stack conflict: Flutter/FastAPI vs Expo",
       "REQ-001 missing — cite requirements.md.",
@@ -167,7 +174,7 @@ describe("claim sanitizer rewrite flow — no placeholders", () => {
     expect(s.rewritePrompt).not.toMatch(/replace SAR with EGP/i);
   });
 
-  it("buildClaimRewritePrompt includes grounded facts and bans [REMOVED]", () => {
+  it("buildClaimRewritePrompt includes grounded facts and bans erasure placeholders", () => {
     const invalid = detectInvalidClaims(
       "SAR and `packages/x.ts` are wrong.",
       REPO,
@@ -180,8 +187,39 @@ describe("claim sanitizer rewrite flow — no placeholders", () => {
       evidenceClip: "src/data/mockData.js uses EGP",
     });
     expect(prompt).toMatch(/GROUNDED CURRENCY: EGP/);
-    expect(prompt).toMatch(/Do NOT write the tokens \[REMOVED\]/);
+    expect(prompt).toMatch(/erasure placeholders/i);
+    expect(prompt).not.toMatch(/\[REMOVED\]/);
     expect(prompt).toMatch(/mockData/);
+  });
+
+  it("allows forbidden tokens only inside fenced model-errors sections", () => {
+    const fenced = [
+      "# Findings",
+      "Auth wiring is missing in HomeScreen.",
+      "",
+      "```model-errors",
+      "1. [invalid_currency] SAR — conflicts with EGP",
+      "2. [invalid_path] packages/core — path does not exist",
+      "3. [invalid_path] apps/web — path does not exist",
+      "```",
+    ].join("\n");
+    expect(assertCleanPackClaims(fenced).ok).toBe(true);
+  });
+
+  it("scrubPackMarkdown moves residues into model-errors fence and strips erasure placeholders", () => {
+    const dirty = [
+      "Use SAR for Gulf.",
+      "See packages/core and apps/web.",
+      "Real path: src/data/mockData.js uses EGP.",
+      "Was [REMOVED] by an old sanitizer.",
+    ].join("\n");
+    const { text, violationsMoved } = scrubPackMarkdown(dirty);
+    expect(violationsMoved.length).toBeGreaterThan(0);
+    expect(text).not.toMatch(/\[REMOVED\]/);
+    // Outside fence must be clean
+    expect(assertCleanPackClaims(text).ok).toBe(true);
+    expect(text).toMatch(/```model-errors/);
+    expect(text).toMatch(/mockData/);
   });
 
   it("finalizeClaimsClean deletes sentences — zero SAR/packages/apps/web/[REMOVED]", () => {
@@ -382,5 +420,39 @@ describe("per-run gates.json isolation", () => {
     const gates = readGates();
     expect(gates?.runId).toBe("run-stable");
     expect(gates?.modelErrors.length).toBe(3);
+  });
+});
+
+describe("single-sourced agency verdict", () => {
+  it("keeps APPROVED/CLOSED consistent and does not claim never-approved when score is 1.0 after pack scrub pass", () => {
+    const v = buildAgencyVerdict({
+      auditPassed: true,
+      goalPassed: true,
+      goalFidelityScore: 1,
+      loop: 1,
+      maxLoops: 5,
+      packClaimsOk: true,
+    });
+    expect(v.gate).toBe("OPEN");
+    expect(v.auditPassed).toBe(true);
+    expect(v.reason).toMatch(/APPROVED/);
+    expect(v.reason).not.toMatch(/never/i);
+  });
+
+  it("pack claim failure forces CLOSED even if auditor approved", () => {
+    const v = buildAgencyVerdict({
+      auditPassed: true,
+      goalPassed: true,
+      goalFidelityScore: 1,
+      loop: 1,
+      maxLoops: 5,
+      packClaimsOk: false,
+      rejectReasons: ["Pack claim assertion FAIL: forbidden residues [REMOVED]"],
+    });
+    expect(v.gate).toBe("CLOSED");
+    expect(v.auditPassed).toBe(false);
+    expect(v.reason).toMatch(/REJECTED/);
+    expect(v.reason).toMatch(/pack claim/i);
+    expect(v.reason).not.toMatch(/did not approve/i);
   });
 });

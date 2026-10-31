@@ -321,13 +321,21 @@ async function main() {
           ? Number((result as { goalFidelityScore?: number }).goalFidelityScore || 0)
           : null;
 
+      const verdictObj =
+        "verdict" in result
+          ? (result as { verdict?: { reason?: string } }).verdict
+          : undefined;
+      const verdictReason =
+        verdictObj && typeof verdictObj.reason === "string" ? verdictObj.reason : null;
+
       if (!result.auditPassed) {
         warn(
           "Gate",
-          `Audit/goal not approved after ${result.revisionCount} loops — downstream previews skipped.` +
-            (goalPassed != null
-              ? ` goalPassed=${goalPassed} score=${(goalScore ?? 0).toFixed(2)}`
-              : "")
+          verdictReason ||
+            `REJECTED after ${result.revisionCount} loops — downstream previews skipped.` +
+              (goalPassed != null
+                ? ` goalPassed=${goalPassed} score=${(goalScore ?? 0).toFixed(2)}`
+                : "")
         );
         console.log(`\n${colors.yellow}--- Final (FAILED_AUDIT_GATE) ---${colors.reset}`);
         console.log(result.finalReport.slice(0, 500) + "\n...");
@@ -336,6 +344,9 @@ async function main() {
         if (goalPassed === false) {
           warn("Gate", "auditPassed without goalPassed — treating as failure");
           process.exitCode = 1;
+        }
+        if (verdictReason) {
+          ok("Gate", verdictReason);
         }
         console.log(`\n${colors.cyan}--- Architectural Summary (preview) ---${colors.reset}`);
         console.log(result.layeredBlueprint.slice(0, 400) + "\n...");

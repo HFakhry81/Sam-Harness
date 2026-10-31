@@ -225,23 +225,96 @@ export function keywordHitInfo(
   };
 }
 
-/** Pack-level assertion: final text must not contain forbidden residues. */
+/**
+ * Strip fenced model-errors sections before residue checks.
+ * Forbidden tokens are allowed ONLY inside these fences.
+ */
+export function stripModelErrorFences(text: string): string {
+  return String(text || "")
+    .replace(/```model-errors\b[\s\S]*?```/gi, "")
+    .replace(/##\s*Model errors log\b[\s\S]*?(?=\n##\s|\n#\s|$)/gi, "");
+}
+
+/** Format invalid claims into a fenced model-errors log (ASCII). */
+export function formatModelErrorsFence(
+  errors: Array<{ kind?: string; claim?: string; detail?: string }>
+): string {
+  if (!errors.length) return "";
+  const lines = errors.map(
+    (e, i) =>
+      `${i + 1}. [${e.kind || "other"}] ${e.claim || "?"} — ${e.detail || ""}`
+  );
+  return ["```model-errors", ...lines, "```"].join("\n");
+}
+
+/** Pack-level assertion: final text must not contain forbidden residues (outside model-error fences). */
 export function assertCleanPackClaims(text: string): {
   ok: boolean;
   violations: string[];
 } {
+  const check = stripModelErrorFences(text);
   const violations: string[] = [];
-  if (/\bSAR\b/.test(text)) violations.push("SAR");
-  if (/packages\//i.test(text)) violations.push("packages/");
-  if (/apps\/web/i.test(text)) violations.push("apps/web");
-  if (/\[REMOVED\]/i.test(text)) violations.push("[REMOVED]");
+  if (/\bSAR\b/.test(check)) violations.push("SAR");
+  if (/packages\//i.test(check)) violations.push("packages/");
+  if (/apps\/web/i.test(check)) violations.push("apps/web");
+  if (/\[REMOVED\]/i.test(check)) violations.push("[REMOVED]");
   return { ok: violations.length === 0, violations };
 }
 
+/**
+ * Scrub pack markdown: delete erasure-placeholder tokens; move leftover
+ * forbidden path/currency claims into a fenced model-errors log.
+ * Never leaves [REMOVED] in the output.
+ */
+export function scrubPackMarkdown(
+  text: string,
+  extraErrors: Array<{ kind?: string; claim?: string; detail?: string }> = []
+): { text: string; violationsMoved: string[] } {
+  let out = String(text || "").replace(/\s*\[REMOVED[^\]]*\]\s*/gi, " ");
+  out = out.replace(/\n{3,}/g, "\n\n");
+  const body = stripModelErrorFences(out);
+  const violationsMoved: string[] = [];
+  const errors = [...extraErrors];
+
+  // Drop lines that still carry forbidden residues outside fences
+  const kept: string[] = [];
+  for (const line of body.split(/\r?\n/)) {
+    const bad: string[] = [];
+    if (/\bSAR\b/.test(line)) bad.push("SAR");
+    if (/packages\//i.test(line)) bad.push("packages/");
+    if (/apps\/web/i.test(line)) bad.push("apps/web");
+    if (/\[REMOVED\]/i.test(line)) bad.push("[REMOVED]");
+    if (bad.length) {
+      for (const b of bad) {
+        violationsMoved.push(b);
+        errors.push({
+          kind: b === "SAR" ? "invalid_currency" : b === "[REMOVED]" ? "placeholder" : "invalid_path",
+          claim: b,
+          detail: `scrubbed from pack line: ${line.slice(0, 120)}`,
+        });
+      }
+      continue;
+    }
+    kept.push(line);
+  }
+  out = kept.join("\n").replace(/\n{3,}/g, "\n\n").trim() + "\n";
+  // Preserve any pre-existing model-errors fence from original
+  const existingFence = String(text || "").match(/```model-errors\b[\s\S]*?```/i)?.[0];
+  const fence = formatModelErrorsFence(errors);
+  if (existingFence && !out.includes("```model-errors")) {
+    out += `\n## Model errors log\n${existingFence}\n`;
+  } else if (fence && !out.includes("```model-errors")) {
+    out += `\n## Model errors log\n${fence}\n`;
+  }
+  // Absolute ban on erasure placeholder token
+  out = out.replace(/\s*\[REMOVED[^\]]*\]\s*/gi, " ");
+  return { text: out.replace(/\n{3,}/g, "\n\n").trim() + "\n", violationsMoved };
+}
+
 export function assertCleanPackFiles(
-  cwd: string = process.cwd()
+  cwd: string = process.cwd(),
+  checkFiles: string[] = ["ceo-draft.md", "audit-report.md", "final-report.md"]
 ): { ok: boolean; violations: string[]; file?: string } {
-  const checkFiles = ["ceo-draft.md", "final-report.md", "audit-report.md"];
   for (const name of checkFiles) {
     const p = path.join(cwd, name);
     if (!fs.existsSync(p)) continue;
@@ -250,4 +323,33 @@ export function assertCleanPackFiles(
     if (!r.ok) return { ok: false, violations: r.violations, file: name };
   }
   return { ok: true, violations: [] };
+}
+
+/** Scrub listed pack markdown files in cwd; returns files that still fail. */
+export function scrubPackFiles(
+  cwd: string = process.cwd(),
+  files: string[] = [
+    "ceo-draft.md",
+    "audit-report.md",
+    "final-report.md",
+    "audit-history.md",
+    "execution-result.md",
+    "PACK_HANDOFF.md",
+  ]
+): { scrubbed: string[]; stillDirty: Array<{ file: string; violations: string[] }> } {
+  const scrubbed: string[] = [];
+  const stillDirty: Array<{ file: string; violations: string[] }> = [];
+  for (const name of files) {
+    const p = path.join(cwd, name);
+    if (!fs.existsSync(p)) continue;
+    const raw = fs.readFileSync(p, "utf-8");
+    const { text } = scrubPackMarkdown(raw);
+    if (text !== raw) {
+      fs.writeFileSync(p, text, "utf-8");
+      scrubbed.push(name);
+    }
+    const check = assertCleanPackClaims(text);
+    if (!check.ok) stillDirty.push({ file: name, violations: check.violations });
+  }
+  return { scrubbed, stillDirty };
 }

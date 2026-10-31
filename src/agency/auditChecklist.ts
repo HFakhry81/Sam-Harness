@@ -339,7 +339,7 @@ export function runAuditChecklist(input: {
         severity: "P2",
         summary: `Grounded currency/locale: ${lc.currency} / ${lc.locale} (source=${lc.source})`,
         paths: [],
-        detail: "Use this currency in reports; do not invent SAR or other codes.",
+        detail: "Use this currency in reports; do not invent other ISO currency codes.",
       });
     }
   }

@@ -69,6 +69,14 @@ export type AgencyRunResult = {
   /** Strategy answers the user goal (deterministic + audit gate). */
   goalPassed?: boolean;
   goalFidelityScore?: number;
+  /** Single-sourced gate verdict used by console / final-report / gates.json. */
+  verdict?: {
+    auditPassed: boolean;
+    goalPassed: boolean;
+    gate: "OPEN" | "CLOSED";
+    reason: string;
+    packClaimsOk: boolean;
+  };
   revisionCount: number;
   strategyPlan: string;
   auditReport: string;

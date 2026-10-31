@@ -82,7 +82,7 @@ export function localeCurrencyMarkdown(profile: LocaleCurrencyProfile): string {
     `- source: ${profile.source}`,
     ...profile.evidence.map((e) => `- evidence: ${e}`),
     ``,
-    `Do NOT invent a different currency (e.g. SAR) unless code evidence shows it.`,
+    `Do NOT invent a different currency unless code evidence shows it.`,
     ``,
   ].join("\n");
 }

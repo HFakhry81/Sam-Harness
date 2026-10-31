@@ -20,6 +20,11 @@ export type RepoIndexHit = {
     | "other";
 };
 
+export type RepoFileRead = {
+  path: string;
+  bytes: number;
+};
+
 export type RepoIndexResult = {
   targetRepo: string;
   scannedAt: string;
@@ -29,6 +34,8 @@ export type RepoIndexResult = {
   currencies: string[];
   locales: string[];
   usesMockData: boolean;
+  /** Source files actually read (content sampled), with byte sizes. */
+  filesReadMeta?: RepoFileRead[];
 };
 
 const SKIP = new Set([
@@ -65,6 +72,14 @@ function safeRead(file: string, max = 200_000): string {
     return fs.readFileSync(file, "utf-8").slice(0, max);
   } catch {
     return "";
+  }
+}
+
+function fileBytes(file: string, fallbackText = ""): number {
+  try {
+    return fs.statSync(file).size;
+  } catch {
+    return Buffer.byteLength(fallbackText, "utf-8");
   }
 }
 
@@ -115,6 +130,8 @@ export function indexRepo(targetRepo: string): RepoIndexResult {
   const currencies = new Set<string>();
   const locales = new Set<string>();
   let usesMockData = false;
+  const filesReadMeta: RepoFileRead[] = [];
+  const readSeen = new Set<string>();
 
   if (!fs.existsSync(root)) {
     return {
@@ -126,12 +143,20 @@ export function indexRepo(targetRepo: string): RepoIndexResult {
       currencies: [],
       locales: [],
       usesMockData: false,
+      filesReadMeta: [],
     };
   }
 
   const allDeps = new Set<string>();
   const files: string[] = [];
   walk(root, files);
+
+  const trackRead = (file: string, sample: string) => {
+    const r = rel(root, file);
+    if (readSeen.has(r)) return;
+    readSeen.add(r);
+    filesReadMeta.push({ path: r, bytes: fileBytes(file, sample) });
+  };
 
   // package.json / workspace
   for (const file of files) {
@@ -148,6 +173,7 @@ export function indexRepo(targetRepo: string): RepoIndexResult {
       if (name) packageNames.push(name);
       for (const d of deps) allDeps.add(d);
       const raw = safeRead(file);
+      if (raw) trackRead(file, raw);
       if (/scripts/.test(raw)) {
         hits.push({
           path: r,
@@ -204,6 +230,7 @@ export function indexRepo(targetRepo: string): RepoIndexResult {
     if (r.split("/").length > 8) continue;
     const sample = safeRead(file, 80_000);
     if (!sample) continue;
+    trackRead(file, sample);
 
     if (/\bprocess\.env\.|EXPO_PUBLIC_|NEXT_PUBLIC_/i.test(sample)) {
       hits.push({
@@ -269,5 +296,6 @@ export function indexRepo(targetRepo: string): RepoIndexResult {
     currencies: [...currencies],
     locales: [...locales],
     usesMockData,
+    filesReadMeta: filesReadMeta.slice(0, 500),
   };
 }
