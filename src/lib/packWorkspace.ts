@@ -105,7 +105,9 @@ export function writePackArtifact(
         ? text
         : `\uFEFF${text}`
       : text;
-  fs.writeFileSync(dest, withBom, "utf-8");
+  // Always write explicit UTF-8 bytes — never rely on platform default encoding.
+  // Using Buffer.from(..., "utf8") prevents accidental latin1/binary re-encode.
+  fs.writeFileSync(dest, Buffer.from(withBom, "utf8"));
   return dest;
 }
 

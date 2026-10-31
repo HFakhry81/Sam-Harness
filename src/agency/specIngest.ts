@@ -104,12 +104,20 @@ export function decodeSpecBuffer(buf: Buffer): string {
     return swapped.toString("utf16le");
   }
 
-  // Strict UTF-8 first — valid UTF-8 (incl. Arabic) wins unconditionally
+  // Strict UTF-8 first — valid UTF-8 (incl. Arabic) wins unconditionally.
+  // Never latin1-mask a string that already contains Arabic letters.
   const utf8Strict = tryUtf8Strict(buf);
   if (utf8Strict != null) {
-    if (looksLikeMojibake(utf8Strict)) {
+    if (
+      looksLikeMojibake(utf8Strict) &&
+      !/[\u0600-\u06FF]/.test(utf8Strict)
+    ) {
       const repaired = repairUtf8Mojibake(utf8Strict);
-      if (repaired && /[\u0600-\u06FF]/.test(repaired) && !looksLikeMojibake(repaired)) {
+      if (
+        repaired &&
+        /[\u0600-\u06FF]/.test(repaired) &&
+        !looksLikeMojibake(repaired)
+      ) {
         return repaired;
       }
     }
@@ -145,11 +153,17 @@ function looksLikeMojibake(text: string): boolean {
   return false;
 }
 
+/**
+ * Repair classic UTF-8-as-Latin1 mojibake (ØÙÃ…).
+ * NEVER call this on text that already contains Arabic letters — masking
+ * charCodeAt&0xff destroys valid Arabic into ASCII garbage.
+ */
 function repairUtf8Mojibake(text: string): string {
+  if (/[\u0600-\u06FF]/.test(text)) return text;
   try {
     const bytes = Buffer.from([...text].map((ch) => ch.charCodeAt(0) & 0xff));
     const fixed = bytes.toString("utf-8");
-    if (/[\u0600-\u06FF]/.test(fixed)) return fixed;
+    if (/[\u0600-\u06FF]/.test(fixed) && !looksLikeMojibake(fixed)) return fixed;
   } catch {
     /* ignore */
   }
@@ -187,7 +201,7 @@ async function readDocx(file: string): Promise<string> {
       extractRawText: (opts: { path: string }) => Promise<{ value: string }>;
     };
     const r = await mammoth.extractRawText({ path: file });
-    return String(r.value || "");
+    return preserveUnicodeText(String(r.value || ""));
   } catch {
     return "";
   }
@@ -265,7 +279,9 @@ export function docxXmlToText(xml: string): string {
 
 function readDocxXmlWithLists(file: string): string {
   try {
-    return docxXmlToText(extractDocumentXml(file));
+    const raw = docxXmlToText(extractDocumentXml(file));
+    // Repair whole-doc mojibake if OOXML/mammoth path somehow latin1-decoded UTF-8
+    return preserveUnicodeText(raw);
   } catch {
     return "";
   }
@@ -511,6 +527,20 @@ export function isDocumentOnlyRequirement(text: string): boolean {
 export function classifyReqKind(text: string): SpecReqKind {
   const t = String(text || "").replace(/\s+/g, " ").trim();
   if (isDocumentOnlyRequirement(t)) return "document_only";
+  // Footnoted / catalog-style vendor recommendations → non_functional
+  // (e.g. "Speech-to-Text: Deepgram Nova-3 API [^2^]"). Do NOT classify
+  // product features like "Bank Integration with Plaid import" as NFR.
+  if (
+    (/\[\^\d+\^\]/.test(t) ||
+      /^(?:speech-to-text|stt|tts|ocr\s*engine|nlp|nlu|llm|provider|vendor)\s*:/i.test(
+        t
+      )) &&
+    /\b(?:deepgram|openai|whisper|nova-?\d|stripe|plaid|firebase|aws|azure|gcp)\b/i.test(
+      t
+    )
+  ) {
+    return "non_functional";
+  }
   if (NON_FUNCTIONAL_RE.test(t) && !/\b(screen|button|wallet|expense|otp|ocr|voice|receipt|category|budget|chart|report|login|offline|cache)\b|محفظ|مصروف|ميزاني/i.test(t)) {
     return "non_functional";
   }
@@ -524,6 +554,92 @@ export function classifyReqKind(text: string): SpecReqKind {
     return "non_functional";
   }
   return "feature";
+}
+
+/**
+ * Drop intro prose, examples, schema field lists, feature-summary chips,
+ * footnoted vendor lines (as extractable features), and tiny fragments.
+ */
+export function isNoiseRequirementLine(text: string): boolean {
+  const t = String(text || "").replace(/\s+/g, " ").trim();
+  if (!t) return true;
+  const words = t.split(/\s+/).filter(Boolean);
+  if (words.length < 4) return true;
+  // Examples
+  if (
+    /^(?:example|e\.g\.|eg\.|for example|sample|demo)\b/i.test(t) ||
+    /\bexample\s*\(/i.test(t) ||
+    /\bspent (?:fifty|\$?\d+)/i.test(t)
+  ) {
+    return true;
+  }
+  // Schema / column field lists (id, user_id, name, type…)
+  if (
+    /^(?:[\w./-]+\s*,\s*){2,}[\w./-]+$/.test(t) ||
+    /\b(?:user_id|team_id|created_at|updated_at|varchar|uuid|primary key)\b/i.test(
+      t
+    )
+  ) {
+    return true;
+  }
+  // Intro / blueprint / summary prose
+  if (
+    /\b(this document|comprehensive technical|blueprint|provides an? overview|executive summary|the following (?:sections?|chapters?)|feature summary)\b/i.test(
+      t
+    )
+  ) {
+    return true;
+  }
+  // Chip / summary lines joined by ? · | / arrows
+  if (
+    /(?:^|[\s])(?:Multi-Wallet|Voice AI|Team Collaboration|OCR|OTP)(?:\s*[?·|/→\-–—]\s*(?:Multi-Wallet|Voice AI|Team Collaboration|OCR|OTP)){1,}/i.test(
+      t
+    ) &&
+    t.length < 120
+  ) {
+    return true;
+  }
+  // Footnoted citations only (vendor catalog)
+  if (/\[\^\d+\^\]/.test(t) && !FEATURE_MODAL_RE.test(t) && words.length < 16) {
+    return true;
+  }
+  // Vendor / tech recommendation lines (Speech-to-Text: Deepgram…)
+  if (
+    /^(?:speech-to-text|stt|tts|ocr\s*engine|nlp|nlu|llm|provider|vendor)\s*:/i.test(
+      t
+    ) ||
+    (/\b(?:deepgram|nova-?\d|openai|whisper|stripe|plaid)\b/i.test(t) &&
+      /(?:api|sdk|service|provider|:)/i.test(t) &&
+      !FEATURE_MODAL_RE.test(t) &&
+      words.length < 14)
+  ) {
+    return true;
+  }
+  return false;
+}
+
+/**
+ * Keep Arabic / Unicode intact — never latin1-roundtrip valid Unicode.
+ * If the string is pure mojibake (ØÙ… with no Arabic letters), repair it.
+ */
+export function preserveUnicodeText(text: string): string {
+  const t = String(text || "");
+  if (!t) return t;
+  // Already has Arabic script → leave untouched (repair would destroy it)
+  if (/[\u0600-\u06FF]/.test(t)) return t;
+  if (looksLikeMojibake(t)) {
+    const repaired = repairUtf8Mojibake(t);
+    if (/[\u0600-\u06FF]/.test(repaired)) return repaired;
+  }
+  return t;
+}
+
+/**
+ * Ensure a REQ title / RTM cell is UTF-8 Unicode Arabic when the source
+ * was mis-decoded. Safe to call on every write path.
+ */
+export function ensureUtf8ReqText(text: string): string {
+  return preserveUnicodeText(String(text || "").replace(/\uFEFF/g, "").trim());
 }
 
 function stripBulletPrefix(line: string): string {
@@ -542,6 +658,7 @@ function isExtractableFeatureLine(body: string): boolean {
   if (/^#{1,6}\s/.test(body)) return false;
   if (/\n/.test(body) || looksLikeFusedReqBlob(body)) return false;
   if (isDocumentOnlyRequirement(body)) return false;
+  if (isNoiseRequirementLine(body)) return false;
   // Bare Title Case without modal → skip (section heading leaked as bullet)
   if (
     body.length <= 70 &&
@@ -568,7 +685,7 @@ function pushCand(
   text: string,
   ch: { file: string; section: string }
 ): void {
-  const t = text.replace(/\s+/g, " ").trim();
+  const t = preserveUnicodeText(text.replace(/\s+/g, " ").trim());
   if (!isExtractableFeatureLine(t)) return;
   cands.push({
     text: t,
@@ -577,6 +694,9 @@ function pushCand(
     kind: classifyReqKind(t),
   });
 }
+
+/** Soft cap — prefer tens of features, never hundreds of prose fragments. */
+export const MAX_FEATURE_REQS = 50;
 
 /** Heuristic requirement extraction from bullets / numbered / MUST / يجب / user stories. */
 export function extractRequirementsHeuristic(
@@ -643,53 +763,78 @@ export function extractRequirementsHeuristic(
 /**
  * Merge near-identical REQs (exact normalized match or high token similarity),
  * keeping all source citations. Prefers feature over document_only when merging.
+ * Caps feature REQs so RTM stays in the tens, not hundreds.
  */
 export function dedupeRequirements(cands: RawCand[]): SpecRequirement[] {
   const out: SpecRequirement[] = [];
   for (const c of cands) {
     const norm = normalizeReqText(c.text);
     if (!norm) continue;
+    if (isNoiseRequirementLine(c.text) && c.kind === "feature") continue;
     let merged = false;
     for (const existing of out) {
       const same = areNearDuplicateReqs(existing.text, c.text);
       if (!same) continue;
       existing.sources.push({ sourceFile: c.sourceFile, section: c.section });
-      // Prefer richer / feature kind
+      // Prefer richer / feature kind; prefer English feature phrasing when merging AR/EN
       if (existing.kind === "document_only" && c.kind !== "document_only") {
         existing.kind = c.kind;
         existing.text = c.text;
       } else if (
         c.kind === "feature" &&
-        existing.kind === "non_functional" &&
-        c.text.length > existing.text.length
+        existing.kind === "non_functional"
       ) {
         existing.kind = "feature";
+        existing.text = c.text;
+      } else if (
+        c.kind === existing.kind &&
+        /[A-Za-z]/.test(c.text) &&
+        !/[A-Za-z]/.test(existing.text) &&
+        /[\u0600-\u06FF]/.test(existing.text)
+      ) {
+        // Keep Arabic in sources; surface English title when both describe same feature
         existing.text = c.text;
       } else if (c.text.length > existing.text.length * 1.15) {
         existing.text = c.text;
       }
-      // Prefer first source as primary; already appended
       merged = true;
       break;
     }
     if (merged) continue;
     out.push({
       id: "",
-      text: c.text,
+      text: preserveUnicodeText(c.text),
       sourceFile: c.sourceFile,
       section: c.section,
       kind: c.kind,
       sources: [{ sourceFile: c.sourceFile, section: c.section }],
     });
-    if (out.length >= 200) break;
   }
 
+  // Prefer features with modal/topic signal; drop lowest-value extras beyond cap
+  const features = out.filter((r) => r.kind === "feature");
+  const others = out.filter((r) => r.kind !== "feature");
+  const scored = features
+    .map((r) => {
+      let score = 0;
+      if (FEATURE_MODAL_RE.test(r.text)) score += 3;
+      if (FEATURE_TOPIC_RE.test(r.text)) score += 2;
+      if (USER_STORY_RE.test(r.text)) score += 2;
+      if (r.sources.length > 1) score += 1; // cross-file agreement
+      if (/\[\^\d+\^\]/.test(r.text)) score -= 2;
+      score += Math.min(3, Math.floor(r.text.split(/\s+/).length / 4));
+      return { r, score };
+    })
+    .sort((a, b) => b.score - a.score);
+  const keptFeatures = scored.slice(0, MAX_FEATURE_REQS).map((x) => x.r);
+  const capped = [...keptFeatures, ...others];
+
   let n = 1;
-  for (const r of out) {
+  for (const r of capped) {
     r.id = `REQ-${String(n).padStart(3, "0")}`;
     n += 1;
   }
-  return out;
+  return capped;
 }
 
 function readDocxSync(file: string): string {
