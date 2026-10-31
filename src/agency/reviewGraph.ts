@@ -32,6 +32,12 @@ import {
   scrubPackMarkdown,
   type RubricContext,
 } from "./fidelityRubric.js";
+import { injectGroundedStrategyBlocks } from "./finalReport.js";
+import {
+  hasStructuralMarkdownHoles,
+  normalizeMarkdownStructure,
+} from "./markdownNormalize.js";
+import type { ChecklistFinding } from "./auditChecklist.js";
 import {
   appendGateEntry,
   currentRunId,
@@ -106,6 +112,65 @@ function extractFixes(report: string): string[] {
   return [...new Set(fixes)].slice(0, 14);
 }
 
+/** Pull explicit auditor rejection reasons for the next rewrite prompt. */
+export function extractAuditorIssues(report: string): string[] {
+  const issues: string[] = [];
+  const text = String(report || "");
+  for (const line of text.split(/\r?\n/)) {
+    const reason = line.match(
+      /(?:Rejection reason|أسباب الرفض)\s*(?:\/\s*Rejection reason)?\s*:\s*(.+)$/i
+    );
+    if (reason?.[1] && reason[1].trim().length > 6) {
+      issues.push(reason[1].trim());
+      continue;
+    }
+    const how = line.match(/(?:How to fix|طريقة الحل)\s*(?:\/\s*How to fix)?\s*:\s*(.+)$/i);
+    if (how?.[1] && how[1].trim().length > 6) {
+      issues.push(`Fix: ${how[1].trim()}`);
+    }
+  }
+  for (const f of extractFixes(text)) {
+    if (!issues.some((x) => x.includes(f.slice(0, 40)))) issues.push(f);
+  }
+  // Catch common structural / RTM complaints even without FIX lines
+  if (/empty (section|bullet|list)|structural|trailing colon|incomplete content|erasure placeholder/i.test(text)) {
+    issues.push(
+      "Repair structural holes: no empty sections/bullets, renumber lists, fill or remove empty headings"
+    );
+  }
+  if (/RTM|traceability|coverage|implemented.*docx|hallucin/i.test(text)) {
+    issues.push(
+      "Use deterministic RTM statuses/coverage from evidence; never mark Implemented from spec-only citations"
+    );
+  }
+  if (/P0|dependency|onPress|mock data|Key Findings/i.test(text)) {
+    issues.push(
+      "Include all P0 checklist findings with real file:line code citations from evidence"
+    );
+  }
+  return [...new Set(issues)].slice(0, 20);
+}
+
+function findingsAsChecklist(
+  findings: Array<{
+    id?: string;
+    severity?: string;
+    summary?: string;
+    category?: string;
+    paths?: string[];
+    detail?: string;
+  }>
+): ChecklistFinding[] {
+  return (findings || []).map((f, i) => ({
+    id: f.id || `F-${i + 1}`,
+    category: (f.category as ChecklistFinding["category"]) || "mock_data",
+    severity: (f.severity as ChecklistFinding["severity"]) || "P0",
+    summary: f.summary || "",
+    paths: f.paths || [],
+    detail: f.detail || "",
+  }));
+}
+
 async function invoke(
   model: ReturnType<typeof makeSpecialistModel>,
   prompt: string
@@ -157,10 +222,21 @@ export const ReviewState = Annotation.Root({
   runId: Annotation<string>,
   /** Spec files ingested (rubric: specs_read). */
   specsReadCount: Annotation<number>,
-  /** REQ rows for rubric scoring. */
-  reqRows: Annotation<Array<{ id: string; status: string; codePaths?: string[] }>>,
-  /** Checklist findings for P0/P1 rubric. */
-  findings: Annotation<Array<{ severity?: string; summary?: string; category?: string }>>,
+  /** REQ rows for rubric scoring + deterministic RTM injection. */
+  reqRows: Annotation<
+    Array<{ id: string; status: string; codePaths?: string[]; text?: string }>
+  >,
+  /** Checklist findings for P0/P1 rubric + Key Findings injection. */
+  findings: Annotation<
+    Array<{
+      id?: string;
+      severity?: string;
+      summary?: string;
+      category?: string;
+      paths?: string[];
+      detail?: string;
+    }>
+  >,
   strategy: Annotation<string>,
   auditReport: Annotation<string>,
   loop: Annotation<number>,
@@ -262,12 +338,16 @@ ${clip(state.brief, 8000)}`
       );
     } else {
       const fixes = extractFixes(state.auditReport || "");
+      const auditorIssues = extractAuditorIssues(state.auditReport || "");
       const checklistItems = [
         `You MUST address EVERY item below. Mark each as DONE or GAP with a real path citation.`,
         `1. Remove any non-${currency} currency claims; rewrite using ${currency} only.`,
         `2. Remove citations to nonexistent paths (invented monorepo roots, etc.).`,
         `3. Cover failing REQs / checklist items from the rejection (auth wiring, mock data, missing deps, stack conflict, UI handlers without onPress).`,
         `4. Do NOT copy the prior strategy verbatim — change structure and fill the gaps.`,
+        `5. Do NOT leave empty sections, empty bullets, skipped list numbers, or trailing colons with no content.`,
+        `6. Do NOT mark REQs Implemented from spec .docx alone — cite code paths; use the deterministic RTM block.`,
+        ...auditorIssues.map((f, i) => `AUDITOR ISSUE ${i + 1}: ${f}`),
         ...fixes.map((f, i) => `FIX ${i + 1}: ${f}`),
       ];
       const briefRem = [
@@ -395,9 +475,21 @@ ${clip(state.evidenceMarkdown, 3000)}`;
 
     // Claim sanitizer: detect → rewrite (max 2) → clean-delete (never [REMOVED] / never auto-sub currency)
     const runId = state.runId || currentRunId();
+    const groundedReqRows = (state.reqRows || []).map((r) => ({
+      id: r.id,
+      status: r.status,
+      codePaths: r.codePaths,
+    }));
+    const priorAuditorIssues = extractAuditorIssues(state.auditReport || "");
     {
       let claimErrors: ModelClaimError[] = [];
-      let detected = sanitizeDraftClaims(strategy, targetRepo, currency);
+      let detected = sanitizeDraftClaims(
+        strategy,
+        targetRepo,
+        currency,
+        groundedReqRows,
+        priorAuditorIssues
+      );
       if (detected.modelErrors.length) {
         claimErrors = claimErrors.concat(
           detected.modelErrors.map((e) => ({ ...e, loop: loopNo }))
@@ -419,6 +511,7 @@ ${clip(state.evidenceMarkdown, 3000)}`;
             invalid: detected.invalid,
             groundedCurrency: currency,
             evidenceClip: clip(state.evidenceMarkdown, 3500),
+            priorAuditorIssues,
           });
         // Inject full evidence clip into rewrite prompt
         const fullRewrite = rewritePrompt.includes("EVIDENCE (real paths only):")
@@ -434,7 +527,13 @@ ${clip(state.evidenceMarkdown, 3000)}`;
             fullRewrite
           );
           strategy = rewritten;
-          detected = sanitizeDraftClaims(strategy, targetRepo, currency);
+          detected = sanitizeDraftClaims(
+            strategy,
+            targetRepo,
+            currency,
+            groundedReqRows,
+            priorAuditorIssues
+          );
           if (detected.modelErrors.length) {
             claimErrors = claimErrors.concat(
               detected.modelErrors.map((e) => ({
@@ -453,7 +552,12 @@ ${clip(state.evidenceMarkdown, 3000)}`;
         }
       }
       if (detected.needsRewrite) {
-        const cleaned = finalizeClaimsClean(strategy, targetRepo, currency);
+        const cleaned = finalizeClaimsClean(
+          strategy,
+          targetRepo,
+          currency,
+          groundedReqRows
+        );
         strategy = cleaned.text;
         if (cleaned.flags.length) {
           warn("Strategist", `Claim clean-delete: ${cleaned.flags.join("; ")}`);
@@ -468,7 +572,7 @@ ${clip(state.evidenceMarkdown, 3000)}`;
       }
       // Absolute ban residues — strip any leftover placeholders without substituting currency
       strategy = strategy.replace(/\s*\[REMOVED[^\]]*\]\s*/gi, " ");
-      strategy = strategy.replace(/\n{3,}/g, "\n\n").trim() + "\n";
+      strategy = normalizeMarkdownStructure(strategy);
       if (claimErrors.length) {
         logModelClaimErrors(claimErrors, runId);
       }
@@ -479,6 +583,23 @@ ${clip(state.evidenceMarkdown, 3000)}`;
           `Pack claim assertion FAIL after sanitize: ${packCheck.violations.join(", ")}`
         );
       }
+    }
+
+    // Inject deterministic RTM + Key Findings so auditor always sees grounded P0s / coverage
+    strategy = injectGroundedStrategyBlocks(strategy, {
+      checklistFindings: findingsAsChecklist(state.findings || []),
+      reqRows: (state.reqRows || []).map((r) => ({
+        id: r.id,
+        text: r.text || "",
+        status: r.status,
+        codePaths: r.codePaths || [],
+      })),
+      coverageRatio: state.reqCoverage,
+      groundedCurrency: currency,
+    });
+    strategy = normalizeMarkdownStructure(strategy);
+    if (hasStructuralMarkdownHoles(strategy)) {
+      strategy = normalizeMarkdownStructure(strategy);
     }
 
     if (stallCount >= MAX_CONSECUTIVE_STALLS) {
@@ -590,13 +711,29 @@ ${REJECTION_FORMAT}`
 
     // Detect residual invalid claims (strategize should have rewritten/deleted)
     let strategyText = state.strategy || "";
-    const residual = sanitizeDraftClaims(strategyText, targetRepo, currency);
+    const groundedReqRows = (state.reqRows || []).map((r) => ({
+      id: r.id,
+      status: r.status,
+      codePaths: r.codePaths,
+    }));
+    const residual = sanitizeDraftClaims(
+      strategyText,
+      targetRepo,
+      currency,
+      groundedReqRows,
+      extractAuditorIssues(state.auditReport || "")
+    );
     if (residual.needsRewrite || residual.invalid.length) {
       logModelClaimErrors(
         residual.modelErrors.map((e) => ({ ...e, loop: loopNo })),
         runId
       );
-      const cleaned = finalizeClaimsClean(strategyText, targetRepo, currency);
+      const cleaned = finalizeClaimsClean(
+        strategyText,
+        targetRepo,
+        currency,
+        groundedReqRows
+      );
       strategyText = cleaned.text;
       try {
         fs.writeFileSync("ceo-draft.md", strategyText, "utf-8");
@@ -614,6 +751,25 @@ ${REJECTION_FORMAT}`
           runId
         );
       }
+    }
+    // Keep structure clean before grounded gates / auditor persistence
+    strategyText = normalizeMarkdownStructure(strategyText);
+    if (
+      !/##\s*Key Findings\b/i.test(strategyText) ||
+      !/##\s*Requirements traceability \(deterministic\)/i.test(strategyText)
+    ) {
+      strategyText = injectGroundedStrategyBlocks(strategyText, {
+        checklistFindings: findingsAsChecklist(state.findings || []),
+        reqRows: (state.reqRows || []).map((r) => ({
+          id: r.id,
+          text: r.text || "",
+          status: r.status,
+          codePaths: r.codePaths || [],
+        })),
+        coverageRatio: state.reqCoverage,
+        groundedCurrency: currency,
+      });
+      strategyText = normalizeMarkdownStructure(strategyText);
     }
 
     const cites = verifyCitationsAgainstRepo(strategyText, targetRepo);
@@ -791,8 +947,20 @@ export async function runReviewGraph(input: {
   groundedCurrency?: string;
   /** Spec files ingested — rubric specs_read. */
   specsReadCount?: number;
-  reqRows?: Array<{ id: string; status: string; codePaths?: string[] }>;
-  findings?: Array<{ severity?: string; summary?: string; category?: string }>;
+  reqRows?: Array<{
+    id: string;
+    status: string;
+    codePaths?: string[];
+    text?: string;
+  }>;
+  findings?: Array<{
+    id?: string;
+    severity?: string;
+    summary?: string;
+    category?: string;
+    paths?: string[];
+    detail?: string;
+  }>;
   /** LangGraph thread id — stable across resume after crash/restart */
   threadId?: string;
   /** When true, resume from last checkpoint instead of fresh state */

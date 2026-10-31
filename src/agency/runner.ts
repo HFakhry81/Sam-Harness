@@ -325,11 +325,15 @@ export async function runAgencyArchitecture(task: string): Promise<AgencyRunResu
       id: r.id,
       status: r.status,
       codePaths: r.codePaths,
+      text: r.text,
     })),
     findings: (evidence.checklist?.findings || []).map((f) => ({
+      id: f.id,
       severity: f.severity,
       summary: f.summary,
       category: f.category,
+      paths: f.paths,
+      detail: f.detail,
     })),
     runId: packRunId,
   });

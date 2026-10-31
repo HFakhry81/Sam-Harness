@@ -13,6 +13,7 @@ import {
   finalReportCoversStructuredFindings,
   finalReportHasFindingsCoverage,
 } from "./finalReport.js";
+import { normalizeMarkdownStructure } from "./markdownNormalize.js";
 
 export const GROUNDED_FIDELITY_THRESHOLD = 0.8;
 
@@ -494,7 +495,7 @@ export async function enforcePackResiduesAfterWrite(opts: {
     );
     // Never leave erasure placeholders; never auto-substitute currency tokens
     let next = remediated.text.replace(/\s*\[REMOVED[^\]]*\]\s*/gi, " ");
-    next = next.replace(/\n{3,}/g, "\n\n").trim() + "\n";
+    next = normalizeMarkdownStructure(next);
     fs.writeFileSync(p, next, "utf-8");
     remediations.push({
       file: name,
