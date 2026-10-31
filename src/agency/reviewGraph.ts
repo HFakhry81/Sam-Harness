@@ -48,6 +48,7 @@ import {
 } from "./strategyConsistency.js";
 import { asciiGateReason, toAsciiDashes } from "./asciiText.js";
 import { classifyRouteIntent } from "./routeIntent.js";
+import { writePackArtifact } from "../lib/packWorkspace.js";
 import {
   appendGateEntry,
   currentRunId,
@@ -672,7 +673,7 @@ ${clip(state.evidenceMarkdown, 3000)}`;
     }
 
     fs.writeFileSync(path.join(state.loopDir, `strategy-v${loopNo}.md`), strategy, "utf-8");
-    fs.writeFileSync("ceo-draft.md", strategy, "utf-8");
+    writePackArtifact("ceo-draft.md", strategy, { bom: true });
     ok("Strategist", `strategy-v${loopNo}.md (stallCount=${stallCount})`);
     return { strategy, loop: loopNo, stallCount };
   };
@@ -726,7 +727,7 @@ ${clip(state.evidenceMarkdown, 3000)}`;
         consistencyGrounding
       );
       try {
-        fs.writeFileSync("ceo-draft.md", strategyForAudit, "utf-8");
+        writePackArtifact("ceo-draft.md", strategyForAudit, { bom: true });
         fs.writeFileSync(
           path.join(state.loopDir, `strategy-v${loopNo}-consistency-repair.md`),
           strategyForAudit,
@@ -901,7 +902,7 @@ ${REJECTION_FORMAT}`
       );
       strategyText = cleaned.text;
       try {
-        fs.writeFileSync("ceo-draft.md", strategyText, "utf-8");
+        writePackArtifact("ceo-draft.md", strategyText, { bom: true });
         fs.writeFileSync(
           path.join(state.loopDir, `strategy-v${loopNo}-sanitized.md`),
           strategyText,
@@ -1067,7 +1068,7 @@ ${REJECTION_FORMAT}`
     // Scrub instructional residues before persisting - pack must not contain erasure placeholders
     const cleanAudit = scrubPackMarkdown(toAsciiDashes(auditDoc)).text;
     fs.writeFileSync(path.join(state.loopDir, `audit-v${loopNo}.md`), cleanAudit, "utf-8");
-    fs.writeFileSync("audit-report.md", cleanAudit, "utf-8");
+    writePackArtifact("audit-report.md", cleanAudit, { bom: true });
     if (!auditPassed) {
       fs.writeFileSync(
         path.join(state.loopDir, `rejection-v${loopNo}.md`),

@@ -1,9 +1,11 @@
 /**
  * Per-run gates.json — keyed by runId, reset for each pack/run.
  * Prevents prior-run loop entries from leaking into the next pack.
+ * Default write root is the SAM_OUTPUT_HOME pack workspace (never repo cwd).
  */
 import * as fs from "fs";
 import * as path from "path";
+import { getPackWriteRoot, packArtifactPath } from "../lib/packWorkspace.js";
 
 export type GateEntry = {
   at: string;
@@ -35,8 +37,31 @@ export type GatesDocument = {
   modelErrors: ModelClaimError[];
 };
 
-function gatesPath(cwd: string = process.cwd()): string {
-  return path.join(cwd, "gates.json");
+/**
+ * Resolve the directory used for gates/evidence pack files.
+ * Omitted / cwd === process.cwd() → pack workspace under SAM_OUTPUT_HOME.
+ * Explicit other directory (tests) → that directory.
+ */
+function resolvePackDir(cwd?: string): string {
+  if (cwd && path.normalize(cwd) !== path.normalize(process.cwd())) {
+    fs.mkdirSync(cwd, { recursive: true });
+    return cwd;
+  }
+  return getPackWriteRoot();
+}
+
+function gatesPath(cwd?: string): string {
+  if (cwd && path.normalize(cwd) !== path.normalize(process.cwd())) {
+    return path.join(cwd, "gates.json");
+  }
+  return packArtifactPath("gates.json");
+}
+
+function evidencePath(cwd?: string): string {
+  if (cwd && path.normalize(cwd) !== path.normalize(process.cwd())) {
+    return path.join(cwd, "evidence.json");
+  }
+  return packArtifactPath("evidence.json");
 }
 
 /**
@@ -44,7 +69,7 @@ function gatesPath(cwd: string = process.cwd()): string {
  * Prefer a stable id — never mint a fresh Date.now() id when a gates doc
  * for this pack already exists (avoids mid-append resets on slow clocks).
  */
-export function currentRunId(explicit?: string, cwd: string = process.cwd()): string {
+export function currentRunId(explicit?: string, cwd?: string): string {
   if (explicit) return explicit;
   if (process.env.SAM_HARNESS_RUN_ID) return process.env.SAM_HARNESS_RUN_ID;
   if (process.env.SAM_RUN_ID) return process.env.SAM_RUN_ID;
@@ -56,7 +81,7 @@ export function currentRunId(explicit?: string, cwd: string = process.cwd()): st
 /** Reset gates.json for a new run (call at agency start / pack begin). */
 export function resetGatesForRun(
   runId?: string,
-  cwd: string = process.cwd()
+  cwd?: string
 ): GatesDocument {
   // When explicitly resetting, do not reuse the prior doc id
   const id =
@@ -77,11 +102,12 @@ export function resetGatesForRun(
     },
     modelErrors: [],
   };
+  resolvePackDir(cwd);
   fs.writeFileSync(gatesPath(cwd), JSON.stringify(doc, null, 2), "utf-8");
   return doc;
 }
 
-export function readGates(cwd: string = process.cwd()): GatesDocument | null {
+export function readGates(cwd?: string): GatesDocument | null {
   const p = gatesPath(cwd);
   if (!fs.existsSync(p)) return null;
   try {
@@ -119,7 +145,7 @@ export function readGates(cwd: string = process.cwd()): GatesDocument | null {
 export function appendGateEntry(
   entry: GateEntry,
   runId?: string,
-  cwd: string = process.cwd()
+  cwd?: string
 ): GatesDocument {
   const id = currentRunId(runId, cwd);
   let doc = readGates(cwd);
@@ -135,7 +161,7 @@ export function appendGateEntry(
 export function appendModelClaimError(
   err: ModelClaimError,
   runId?: string,
-  cwd: string = process.cwd()
+  cwd?: string
 ): GatesDocument {
   const id = currentRunId(runId, cwd);
   let doc = readGates(cwd);
@@ -150,7 +176,7 @@ export function appendModelClaimError(
 /** Ensure gates file exists for this run (CLOSED until APPROVED). */
 export function ensureGatesForRun(
   runId?: string,
-  cwd: string = process.cwd()
+  cwd?: string
 ): GatesDocument {
   const id = currentRunId(runId, cwd);
   const existing = readGates(cwd);
@@ -161,10 +187,10 @@ export function ensureGatesForRun(
 /** Append model claim errors into evidence.json (and gates). */
 export function appendModelErrorsToEvidence(
   errors: ModelClaimError[],
-  cwd: string = process.cwd()
+  cwd?: string
 ): void {
   if (!errors.length) return;
-  const p = path.join(cwd, "evidence.json");
+  const p = evidencePath(cwd);
   if (!fs.existsSync(p)) return;
   try {
     const raw = JSON.parse(fs.readFileSync(p, "utf-8")) as {
@@ -183,7 +209,7 @@ export function appendModelErrorsToEvidence(
 export function logModelClaimErrors(
   errors: ModelClaimError[],
   runId?: string,
-  cwd: string = process.cwd()
+  cwd?: string
 ): void {
   if (!errors.length) return;
   // Resolve once so a Date.now() tick mid-loop cannot reset gates.json

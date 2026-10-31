@@ -64,9 +64,21 @@ import {
 import { chooseNonDegenerateDraft } from "./repetitionGuard.js";
 import { learningContextBlock } from "../controlplane/projectMemory.js";
 import { withLanguageDirective } from "../lib/i18n/index.js";
+import { beginOutputRun } from "../lib/outputHome.js";
+import {
+  assertNoPackFilesInCwd,
+  copyPackArtifactsTo,
+  getPackWriteRoot,
+  packArtifactExists,
+  packArtifactPath,
+  PACK_ARTIFACT_NAMES,
+  PACK_CWD_FORBIDDEN,
+  readPackArtifact,
+  writePackArtifact,
+} from "../lib/packWorkspace.js";
 import type { AgencyRunResult, Engagement } from "./types.js";
 
-/** Stale cwd artifacts from a prior pack must not poison this run's assertions. */
+/** Stale pack artifacts from a prior pack must not poison this run's assertions. */
 const STALE_RUN_ARTIFACTS = [
   "ceo-draft.md",
   "audit-report.md",
@@ -75,7 +87,16 @@ const STALE_RUN_ARTIFACTS = [
   "execution-result.md",
   "PACK_CLAIM_ASSERTION.md",
   "agency-verdict.md",
+  ...PACK_CWD_FORBIDDEN,
 ];
+
+function writePack(name: string, content: string): void {
+  writePackArtifact(name, content, { bom: /\.md$/i.test(name) });
+}
+
+function readPackOrEmpty(name: string): string {
+  return readPackArtifact(name) || "";
+}
 
 function labelForRole(roleId: string): string {
   const m = resolveRoleModels(roleId);
@@ -155,10 +176,19 @@ export async function runAgencyArchitecture(task: string): Promise<AgencyRunResu
     process.env.SAM_HARNESS_RUN_ID ||
     process.env.SAM_RUN_ID ||
     `run-${Date.now().toString(36)}`;
+  // Stage all pack output under SAM_OUTPUT_HOME (never the Sam-Harness repo cwd)
+  beginOutputRun(packRunId);
+  const packWriteRoot = getPackWriteRoot(packRunId);
   resetGatesForRun(packRunId);
 
-  // Drop stale cwd pack artifacts so a prior run's [REMOVED]/SAR cannot poison assertions
+  // Drop stale pack + accidental cwd leftovers so prior [REMOVED]/SAR cannot poison assertions
   for (const name of STALE_RUN_ARTIFACTS) {
+    try {
+      const staged = packArtifactPath(name);
+      if (fs.existsSync(staged)) fs.unlinkSync(staged);
+    } catch {
+      /* ignore */
+    }
     try {
       if (fs.existsSync(name)) fs.unlinkSync(name);
     } catch {
@@ -220,7 +250,7 @@ export async function runAgencyArchitecture(task: string): Promise<AgencyRunResu
     },
     specRoot: specRoot || undefined,
   };
-  fs.writeFileSync("engagement.json", JSON.stringify(engagement, null, 2), "utf-8");
+  writePack("engagement.json", JSON.stringify(engagement, null, 2));
   ok(
     "Intake",
     `engagement ${engagement.id} → repo=${engagement.targetRepo}` +
@@ -262,16 +292,12 @@ export async function runAgencyArchitecture(task: string): Promise<AgencyRunResu
   if (evidence.localeCurrency) {
     engagement.locale = evidence.localeCurrency.locale;
     engagement.currency = evidence.localeCurrency.currency;
-    fs.writeFileSync("engagement.json", JSON.stringify(engagement, null, 2), "utf-8");
+    writePack("engagement.json", JSON.stringify(engagement, null, 2));
   }
-  fs.writeFileSync("evidence-pack.md", evidence.summaryMarkdown, "utf-8");
-  fs.writeFileSync("evidence.json", JSON.stringify(evidence.json, null, 2), "utf-8");
+  writePack("evidence-pack.md", evidence.summaryMarkdown);
+  writePack("evidence.json", JSON.stringify(evidence.json, null, 2));
   if (evidence.reqMatrix) {
-    fs.writeFileSync(
-      "REQ_TRACEABILITY.md",
-      evidence.reqMatrix.markdown,
-      "utf-8"
-    );
+    writePack("REQ_TRACEABILITY.md", evidence.reqMatrix.markdown);
   }
   const readStats = evidence.readStats;
   if (readStats) {
@@ -292,7 +318,7 @@ export async function runAgencyArchitecture(task: string): Promise<AgencyRunResu
   );
 
   const brief = `${task}\n${loadBriefExtras(task)}`;
-  const loopDir = path.join(process.cwd(), "review-loop");
+  const loopDir = path.join(packWriteRoot, "review-loop");
   // Fresh loop dir — avoid stale strategy-v1 from prior runs leaking into the next task
   try {
     fs.rmSync(loopDir, { recursive: true, force: true });
@@ -304,11 +330,7 @@ export async function runAgencyArchitecture(task: string): Promise<AgencyRunResu
   // Always persist checklist markdown for the pack (including on rejection)
   if (evidence.checklist) {
     try {
-      fs.writeFileSync(
-        "AUDIT_CHECKLIST.md",
-        evidence.checklist.markdown,
-        "utf-8"
-      );
+      writePack("AUDIT_CHECKLIST.md", evidence.checklist.markdown);
     } catch {
       /* ignore */
     }
@@ -358,7 +380,7 @@ export async function runAgencyArchitecture(task: string): Promise<AgencyRunResu
   const strategyScrub = scrubPackMarkdown(review.strategy || "", [], groundedCurrency);
   if (strategyScrub.text !== review.strategy) {
     try {
-      fs.writeFileSync("ceo-draft.md", strategyScrub.text, "utf-8");
+      writePack("ceo-draft.md", strategyScrub.text);
     } catch {
       /* ignore */
     }
@@ -389,7 +411,7 @@ export async function runAgencyArchitecture(task: string): Promise<AgencyRunResu
   let goalPassed = verdict.goalPassed;
 
   function persistVerdict(v: AgencyVerdict): void {
-    fs.writeFileSync("agency-verdict.md", verdictMarkdown(v), "utf-8");
+    writePack("agency-verdict.md", verdictMarkdown(v));
     try {
       appendGateEntry(
         {
@@ -430,7 +452,7 @@ export async function runAgencyArchitecture(task: string): Promise<AgencyRunResu
       evidence: { ...finalReportEvidence, verdict },
       modelProse,
     });
-    fs.writeFileSync("final-report.md", body, "utf-8");
+    writePack("final-report.md", body);
     return body;
   }
   persistVerdict(verdict);
@@ -440,7 +462,7 @@ export async function runAgencyArchitecture(task: string): Promise<AgencyRunResu
     warn("Gate", verdictConsoleLine(verdict));
   }
 
-  fs.writeFileSync(
+  writePack(
     "audit-history.md",
     toAsciiDashes(
       scrubPackMarkdown(
@@ -453,8 +475,7 @@ export async function runAgencyArchitecture(task: string): Promise<AgencyRunResu
         [],
         groundedCurrency
       ).text
-    ),
-    "utf-8"
+    )
   );
   fs.writeFileSync(
     path.join(loopDir, "LOOP_SUMMARY.md"),
@@ -525,7 +546,7 @@ BRIEF:
 ${clip(brief, 4000)}`,
         task
       );
-      fs.writeFileSync("execution-plan.md", ctx.layeredBlueprint, "utf-8");
+      writePack("execution-plan.md", ctx.layeredBlueprint);
       ok("Architect", "execution-plan.md");
       return ctx;
     }
@@ -535,7 +556,7 @@ ${clip(brief, 4000)}`,
         model,
         `In-app help for multi-purpose ops desk + customer (not clinic-only).\nArchitecture:\n${clip(ctx.layeredBlueprint, 7000)}`
       );
-      fs.writeFileSync("help-system-spec.md", ctx.helpSystemSpec, "utf-8");
+      writePack("help-system-spec.md", ctx.helpSystemSpec);
       return ctx;
     }
     if (role.id === "marketer") {
@@ -544,7 +565,7 @@ ${clip(brief, 4000)}`,
         model,
         `Honest GTM + short video script. No over-claim.\n${clip(ctx.layeredBlueprint, 5000)}\n${clip(task, 2000)}`
       );
-      fs.writeFileSync("marketing-campaign.md", ctx.marketingCampaign, "utf-8");
+      writePack("marketing-campaign.md", ctx.marketingCampaign);
       return ctx;
     }
     if (role.id === "verifier") {
@@ -590,7 +611,7 @@ BRIEF:
 ${clip(brief, 3000)}`,
       task
     );
-    fs.writeFileSync(outName, text, "utf-8");
+    writePack(outName, text);
     ok(role.title, outName);
     return ctx;
   }
@@ -601,14 +622,13 @@ ${clip(brief, 3000)}`,
     finalReport = writeComposedFinalReport(
       [`[FAILED_AUDIT_GATE]`, clip(review.auditReport, 2500)].join("\n")
     );
-    fs.writeFileSync(
+    writePack(
       "execution-result.md",
       scrubPackMarkdown(
         `# Agency Result\n- engine: LangGraph\n${verdictMarkdown(verdict)}\n- loops: ${review.loop}\n`,
         [],
         groundedCurrency
-      ).text,
-      "utf-8"
+      ).text
     );
   } else {
     let ctx = {
@@ -642,22 +662,22 @@ ${clip(review.strategy, 3000)}
 Blueprint:
 ${clip(layeredBlueprint, 3000)}`
       );
-      fs.writeFileSync("CODE_VS_PLAN_GAP_MATRIX.md", gapMatrix, "utf-8");
+      writePack("CODE_VS_PLAN_GAP_MATRIX.md", gapMatrix);
       const backlog = await invoke(
         architect,
         `IMPLEMENTATION_BACKLOG.md P0 then P1 from:\n${clip(gapMatrix, 6000)}\nReal paths under ${engagement.targetRepo}`
       );
-      fs.writeFileSync("IMPLEMENTATION_BACKLOG.md", backlog, "utf-8");
+      writePack("IMPLEMENTATION_BACKLOG.md", backlog);
       const nextSprint = await invoke(
         strategist,
         `NEXT_SPRINT.md short from:\n${clip(gapMatrix, 2500)}`
       );
-      fs.writeFileSync("NEXT_SPRINT.md", nextSprint, "utf-8");
+      writePack("NEXT_SPRINT.md", nextSprint);
       const ticket = await invoke(
         architect,
         `TICKET_P0_STARTER.md for first P0:\n${clip(backlog, 5000)}`
       );
-      fs.writeFileSync("TICKET_P0_STARTER.md", ticket, "utf-8");
+      writePack("TICKET_P0_STARTER.md", ticket);
       ok("Architect", "gap matrix + backlog saved");
 
       syncDeliveryBoardFromBacklog({
@@ -680,14 +700,13 @@ ${clip(layeredBlueprint, 3000)}`
       finalReport = writeComposedFinalReport(finalReport);
     }
 
-    fs.writeFileSync(
+    writePack(
       "execution-result.md",
       scrubPackMarkdown(
         `# Agency Result\n- engine: LangGraph\n${verdictMarkdown(verdict)}\n- loops: ${review.loop}\n- downstream: ${downstream.map((r) => r.id).join(",")}\n`,
         [],
         groundedCurrency
-      ).text,
-      "utf-8"
+      ).text
     );
   }
 
@@ -695,7 +714,7 @@ ${clip(layeredBlueprint, 3000)}`
   // (rewrite max 2 → clean sentence delete). Gate MUST close if anything remains.
   {
     const enforcement = await enforcePackResiduesAfterWrite({
-      cwd: process.cwd(),
+      cwd: packWriteRoot,
       targetRepo: engagement.targetRepo,
       groundedCurrency,
       rewriteFn: async (prompt) => invoke(strategist, prompt, task),
@@ -728,19 +747,19 @@ ${clip(layeredBlueprint, 3000)}`
       persistVerdict(verdict);
       // Refresh final-report with CLOSED verdict + deterministic findings
       finalReport = writeComposedFinalReport(
-        fs.existsSync("final-report.md")
-          ? fs.readFileSync("final-report.md", "utf-8")
+        packArtifactExists("final-report.md")
+          ? readPackOrEmpty("final-report.md")
           : undefined
       );
       warn("Gate", verdictConsoleLine(verdict));
-    } else if (fs.existsSync("final-report.md")) {
-      finalReport = fs.readFileSync("final-report.md", "utf-8");
+    } else if (packArtifactExists("final-report.md")) {
+      finalReport = readPackOrEmpty("final-report.md");
     }
   }
 
   // Fidelity: final-report must cover structured findings
-  if (fs.existsSync("final-report.md")) {
-    const fr = fs.readFileSync("final-report.md", "utf-8");
+  if (packArtifactExists("final-report.md")) {
+    const fr = readPackOrEmpty("final-report.md");
     const coverageRubric = scoreGroundedAuditRubric({
       strategy: review.strategy || "",
       evidenceMarkdown: evidence.summaryMarkdown,
@@ -752,7 +771,7 @@ ${clip(layeredBlueprint, 3000)}`
         summary: f.summary,
         category: f.category,
       })),
-      cwd: process.cwd(),
+      cwd: packWriteRoot,
       finalReport: fr,
       groundedCurrency,
     });
@@ -768,7 +787,7 @@ ${clip(layeredBlueprint, 3000)}`
   // Scrub must NOT be the sole gate for wrong-currency tokens.
   {
     const { scrubbed, stillDirty } = scrubPackFiles(
-      process.cwd(),
+      packWriteRoot,
       undefined,
       groundedCurrency
     );
@@ -795,13 +814,13 @@ ${clip(layeredBlueprint, 3000)}`
       goalPassed = verdict.goalPassed;
       persistVerdict(verdict);
       finalReport = writeComposedFinalReport(
-        fs.existsSync("final-report.md")
-          ? fs.readFileSync("final-report.md", "utf-8")
+        packArtifactExists("final-report.md")
+          ? readPackOrEmpty("final-report.md")
           : undefined
       );
       warn("Gate", verdictConsoleLine(verdict));
-    } else if (fs.existsSync("final-report.md")) {
-      finalReport = fs.readFileSync("final-report.md", "utf-8");
+    } else if (packArtifactExists("final-report.md")) {
+      finalReport = readPackOrEmpty("final-report.md");
     }
   }
 
@@ -820,38 +839,12 @@ ${clip(layeredBlueprint, 3000)}`
       });
     }
 
-    // Always archive grounding artifacts — including on FAILED_AUDIT_GATE rejection
-    const packFiles = [
-      "engagement.json",
-      "evidence-pack.md",
-      "evidence.json",
-      "REQ_TRACEABILITY.md",
-      "AUDIT_CHECKLIST.md",
-      "gates.json",
-      "ceo-draft.md",
-      "audit-report.md",
-      "audit-history.md",
-      "execution-plan.md",
-      "help-system-spec.md",
-      "marketing-campaign.md",
-      "final-report.md",
-      "execution-result.md",
-      "CODE_VS_PLAN_GAP_MATRIX.md",
-      "IMPLEMENTATION_BACKLOG.md",
-      "NEXT_SPRINT.md",
-      "TICKET_P0_STARTER.md",
-      "delivery-board.json",
-      "DELIVERY_BOARD.md",
-      "go-nogo.json",
-      "go-nogo.example.json",
-    ];
-    for (const name of packFiles) {
-      if (fs.existsSync(name)) fs.copyFileSync(name, path.join(dir, name));
-    }
+    // Archive from SAM_OUTPUT_HOME pack workspace — never rely on cwd copies
+    copyPackArtifactsTo(dir, PACK_ARTIFACT_NAMES, packRunId);
     // Ensure gates.json exists in pack even if empty snapshot was never refreshed
     const packGates = path.join(dir, "gates.json");
-    if (!fs.existsSync(packGates) && fs.existsSync("gates.json")) {
-      fs.copyFileSync("gates.json", packGates);
+    if (!fs.existsSync(packGates) && packArtifactExists("gates.json")) {
+      fs.copyFileSync(packArtifactPath("gates.json"), packGates);
     } else if (!fs.existsSync(packGates)) {
       fs.writeFileSync(
         packGates,
@@ -874,8 +867,11 @@ ${clip(layeredBlueprint, 3000)}`
         "utf-8"
       );
     }
-    if (fs.existsSync("agency-verdict.md")) {
-      fs.copyFileSync("agency-verdict.md", path.join(dir, "agency-verdict.md"));
+    if (packArtifactExists("agency-verdict.md")) {
+      fs.copyFileSync(
+        packArtifactPath("agency-verdict.md"),
+        path.join(dir, "agency-verdict.md")
+      );
     }
     const loopArchive = path.join(dir, "review-loop");
     fs.mkdirSync(loopArchive, { recursive: true });
@@ -884,29 +880,40 @@ ${clip(layeredBlueprint, 3000)}`
         fs.copyFileSync(path.join(loopDir, name), path.join(loopArchive, name));
       }
     }
-    fs.writeFileSync(
-      path.join(dir, "PACK_HANDOFF.md"),
-      scrubPackMarkdown(
-        [
-          `# Pack — Sam-Harness no.${n}`,
-          ``,
-          `engine: LangGraph agency`,
-          verdictMarkdown(verdict),
-          `evidence_hits: ${evidence.hits.length}`,
-          readStats
-            ? `read_stats: specs=${readStats.specFilesRead} (${readStats.specBytes} bytes); sources=${readStats.sourceFilesRead} (${readStats.sourceBytes} bytes)`
-            : "",
-        ]
-          .filter(Boolean)
-          .join("\n") + "\n"
-      ).text,
-      "utf-8"
-    );
-    fs.writeFileSync(
+    const handoff = scrubPackMarkdown(
+      [
+        `# Pack — Sam-Harness no.${n}`,
+        ``,
+        `engine: LangGraph agency`,
+        verdictMarkdown(verdict),
+        `evidence_hits: ${evidence.hits.length}`,
+        readStats
+          ? `read_stats: specs=${readStats.specFilesRead} (${readStats.specBytes} bytes); sources=${readStats.sourceFilesRead} (${readStats.sourceBytes} bytes)`
+          : "",
+      ]
+        .filter(Boolean)
+        .join("\n") + "\n"
+    ).text;
+    fs.writeFileSync(path.join(dir, "PACK_HANDOFF.md"), handoff, "utf-8");
+    writePack(
       "pack-location.md",
-      `# Latest pack\n\nSam-Harness no.${n}\n\n\`${dir}\`\n`,
-      "utf-8"
+      `# Latest pack\n\nSam-Harness no.${n}\n\n\`${dir}\`\n`
     );
+    // Defensive: never leave pack files in the Sam-Harness repo root
+    const stray = assertNoPackFilesInCwd(process.cwd());
+    if (!stray.ok) {
+      for (const name of stray.found) {
+        try {
+          fs.unlinkSync(path.join(process.cwd(), name));
+        } catch {
+          /* ignore */
+        }
+      }
+      warn(
+        "Pack",
+        `Removed stray cwd pack files: ${stray.found.join(", ")} (output home only)`
+      );
+    }
     ok("Pack", `Archived → Sam-Harness no.${n}`);
   } catch (e) {
     warn("Pack", String(e));
