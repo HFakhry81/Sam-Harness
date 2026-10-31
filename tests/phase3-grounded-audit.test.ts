@@ -262,13 +262,22 @@ describe("per-run gates.json isolation", () => {
   let tmp: string;
   let prevCwd: string;
 
-  beforeEach(() => {
+  beforeEach(async () => {
     tmp = fs.mkdtempSync(path.join(os.tmpdir(), "sam-gates-"));
     prevCwd = process.cwd();
     process.chdir(tmp);
+    const { __setPackWriteRootForTests } = await import(
+      "../src/lib/packWorkspace.js"
+    );
+    // Pin pack workspace to tmp so gates/evidence stay isolated for this suite
+    __setPackWriteRootForTests(tmp);
   });
 
-  afterEach(() => {
+  afterEach(async () => {
+    const { __setPackWriteRootForTests } = await import(
+      "../src/lib/packWorkspace.js"
+    );
+    __setPackWriteRootForTests(null);
     process.chdir(prevCwd);
     fs.rmSync(tmp, { recursive: true, force: true });
   });

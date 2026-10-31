@@ -3,6 +3,8 @@
  */
 import "../src/lib/loadEnv.js";
 import * as fs from "fs";
+import * as os from "os";
+import * as path from "path";
 import { parseBacklogMarkdown } from "../src/agency/delivery/parseBacklog.js";
 import {
   assertTransition,
@@ -13,8 +15,18 @@ import {
 import { resolveImplementAuthorization } from "../src/agency/delivery/goNoGo.js";
 import { syncDeliveryBoardFromBacklog } from "../src/agency/delivery/sync.js";
 import type { DeliveryBoard } from "../src/agency/delivery/types.js";
+import {
+  __setPackWriteRootForTests,
+  packArtifactExists,
+  packArtifactPath,
+  writePackArtifact,
+} from "../src/lib/packWorkspace.js";
 
 console.log("smoke-delivery");
+
+const smokePack = fs.mkdtempSync(path.join(os.tmpdir(), "sam-smoke-delivery-"));
+__setPackWriteRootForTests(smokePack);
+process.env.SAM_OUTPUT_HOME = smokePack;
 
 const sample = `# Backlog
 ### [M-1009] Multi-Tenant Isolation
@@ -57,12 +69,17 @@ const board: DeliveryBoard = {
 transitionTicket(board, "M-1009", "ready");
 transitionTicket(board, "M-1009", "in_progress");
 saveBoard(board);
-if (!fs.existsSync("delivery-board.json") || !fs.existsSync("DELIVERY_BOARD.md")) {
-  throw new Error("board files missing");
+if (
+  !packArtifactExists("delivery-board.json") ||
+  !packArtifactExists("DELIVERY_BOARD.md")
+) {
+  throw new Error(
+    `board files missing under pack workspace (${packArtifactPath("delivery-board.json")})`
+  );
 }
-console.log("  ✓ board saved");
+console.log("  ✓ board saved (pack workspace)");
 
-fs.writeFileSync("IMPLEMENTATION_BACKLOG.md", sample, "utf-8");
+writePackArtifact("IMPLEMENTATION_BACKLOG.md", sample, { bom: true });
 syncDeliveryBoardFromBacklog({
   engagementId: "eng-smoke",
   targetRepo: "E:\\UpNexa.com\\maw3ed",
@@ -81,5 +98,12 @@ console.log("  ✓ Go/No-Go denies by default / PENDING");
 const allowed = resolveImplementAuthorization(["--go"]);
 if (!allowed.allowed) throw new Error("should allow with --go");
 console.log("  ✓ Go/No-Go allows --go");
+
+__setPackWriteRootForTests(null);
+try {
+  fs.rmSync(smokePack, { recursive: true, force: true });
+} catch {
+  /* ignore */
+}
 
 console.log("PASS");

@@ -14,6 +14,7 @@ import {
   finalReportHasFindingsCoverage,
 } from "./finalReport.js";
 import { normalizeMarkdownStructure } from "./markdownNormalize.js";
+import { packArtifactExists } from "../lib/packWorkspace.js";
 
 export const GROUNDED_FIDELITY_THRESHOLD = 0.8;
 
@@ -182,10 +183,10 @@ export function scoreGroundedAuditRubric(
     detail: hasRecs ? "recommendations/next actions found" : "missing recommendations",
   });
 
-  // 7) pack-ready artifacts written to cwd (archived into pack after review)
+  // 7) pack-ready artifacts written under SAM_OUTPUT_HOME pack workspace
   const root = ctx.cwd || process.cwd();
   const artifacts = ["evidence.json", "evidence-pack.md", "REQ_TRACEABILITY.md"].filter(
-    (n) => fs.existsSync(path.join(root, n))
+    (n) => fs.existsSync(path.join(root, n)) || packArtifactExists(n)
   );
   // ceo-draft may be written mid-loop; also accept strategy length as proxy during audit
   const draftOk =

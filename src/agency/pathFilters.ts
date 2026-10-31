@@ -104,19 +104,25 @@ export function isAppSourcePath(relPath: string): boolean {
 }
 
 /**
- * Pure document-structure headings only (not feature/architecture/database/tech-stack).
- * Those remain real REQs eligible for coverage.
+ * Document-only section titles / planning headings — excluded from coverage (n/a).
+ * Feature bullets under those sections are extracted separately by specIngest.
  */
 export function isSpecHeadingNotRequirement(text: string): boolean {
   const t = String(text || "").replace(/\s+/g, " ").trim();
   if (!t) return true;
-  // ONLY pure document-structure headings — never tech/architecture/feature sections
-  if (
-    /^(project\s+overview|introduction|overview|scope|glossary|appendix|table\s+of\s+contents|executive\s+summary|background|document\s+control|references|assumptions|document\s+history|revision\s+history|about\s+this\s+document|preface|acknowledgements?)$/i.test(
-      t
-    )
-  ) {
-    return true;
+  // Prefer the shared classifier (roadmap, costs, guidelines, overview, API design, …)
+  try {
+    // Lazy require-style import avoided — use inline mirror of document-only titles
+    // so pathFilters stays free of circular deps with specIngest consumers.
+    if (
+      /^(project\s+overview|introduction|overview|scope|glossary|appendix|table\s+of\s+contents|executive\s+summary|background|document\s+control|references|assumptions|document\s+history|revision\s+history|about\s+this\s+document|preface|acknowledgements?|functional\s+requirements(?:\s+analysis)?|implementation\s+roadmap|roadmap|estimated\s+costs?(?:\s*&\s*|\s+and\s+)?infrastructure|estimated\s+costs?|costs?(?:\s*&\s*|\s+and\s+)?infrastructure|ui\/?ux\s+design\s+guidelines|design\s+guidelines|guidelines|api\s+endpoints?\s+design(?:\s*\(.*\))?|tech\s+stack|technology\s+stack|architecture\s+overview|system\s+architecture(?:\s*&\s*|\s+and\s+)?(?:tech\s+stack)?|database\s+architecture(?:\s*\(.*\))?|database\s+schema|data\s+model|non[- ]?functional\s+requirements|acceptance\s+criteria|out\s+of\s+scope|milestones?|timeline|budget|infrastructure|security\s*&\s*compliance|security\s+and\s+compliance|voice-to-expense\s+module(?:\s*\(.*\))?|[A-Za-z0-9/&().,\s-]{2,60}\s+module(?:\s*\(.*\))?)$/i.test(
+        t.replace(/\s*\((?:detailed|details|overview)\)\s*$/i, "").trim()
+      )
+    ) {
+      return true;
+    }
+  } catch {
+    /* fall through */
   }
   return false;
 }
@@ -133,6 +139,10 @@ export function featureFamilySymbols(reqText: string): RegExp | null {
   }
   if (/\bvoice\b|speech|audio\s+record|microphone|dictation/.test(t)) {
     return /\b(stt|tts|expo-av|Speech\.|startRecording|Audio\.Recording|speech.?recognition|dictation|MediaRecorder|expo-speech|@react-native-voice)\b/i;
+  }
+  // Bank / Plaid / open-banking — generic "bank" comments must not mint partial
+  if (/\bbank\b|plaid|open.?banking|bank.?sync|bank.?integrat/i.test(t)) {
+    return /\b(plaid|linkToken|exchangePublicToken|open.?banking|Plaid\.create|bank.?link|financial.?connections|stripe\.financialConnections)\b/i;
   }
   return null;
 }

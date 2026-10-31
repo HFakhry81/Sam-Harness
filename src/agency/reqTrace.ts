@@ -4,7 +4,12 @@
  */
 import * as fs from "fs";
 import * as path from "path";
-import type { SpecRequirement } from "./specIngest.js";
+import type { SpecRequirement, SpecReqKind } from "./specIngest.js";
+import {
+  classifyReqKind,
+  ensureUtf8ReqText,
+  isDocumentOnlyRequirement,
+} from "./specIngest.js";
 import type { RepoIndexResult } from "./repoIndex.js";
 import type { ChecklistFinding } from "./auditChecklist.js";
 import {
@@ -33,6 +38,10 @@ export type ReqTraceRow = {
   evidenceNotes: string[];
   sourceFile: string;
   section: string;
+  /** feature | non_functional | document_only */
+  kind?: SpecReqKind;
+  /** Merged source citations from near-duplicate REQs. */
+  sources?: Array<{ sourceFile: string; section: string }>;
   /**
    * True when per-REQ code search ran and a status was assigned
    * (including missing). n/a headings are not assessed.
@@ -116,6 +125,81 @@ const STOP_TOKENS = new Set(
   ].map((x) => x.toLowerCase())
 );
 
+/**
+ * Ultra-common UI/domain tokens that match almost every Spendy-like screen.
+ * Never sufficient alone for partial — need IDF-distinctive / feature-specific hits.
+ */
+const ALWAYS_GENERIC_TOKENS = new Set(
+  [
+    "amount",
+    "date",
+    "category",
+    "categories",
+    "user",
+    "users",
+    "name",
+    "type",
+    "value",
+    "text",
+    "data",
+    "list",
+    "item",
+    "items",
+    "show",
+    "display",
+    "screen",
+    "screens",
+    "button",
+    "view",
+    "home",
+    "settings",
+    "input",
+    "form",
+    "props",
+    "style",
+    "color",
+    "title",
+    "page",
+    "state",
+    "label",
+    "field",
+    "total",
+    "count",
+    "time",
+    "note",
+    "info",
+    "detail",
+    "content",
+    "description",
+    "expense",
+    "expenses",
+    // Source-code keywords that match nearly every JS/TS file
+    "import",
+    "export",
+    "const",
+    "function",
+    "return",
+    "class",
+    "react",
+    "native",
+    "default",
+    "async",
+    "await",
+    "pressable",
+    "component",
+    "components",
+    "module",
+    "modules",
+    "integration", // too vague alone ("Bank Integration" needs bank/plaid)
+  ].map((x) => x.toLowerCase())
+);
+
+/** Max evidence paths written per REQ (most specific first). */
+export const MAX_EVIDENCE_PATHS_PER_REQ = 3;
+
+/** Token appears in this fraction of app screens → treated as non-distinctive (IDF). */
+const IDF_COMMON_RATIO = 0.5;
+
 function tokenize(text: string): string[] {
   return text
     .toLowerCase()
@@ -125,36 +209,157 @@ function tokenize(text: string): string[] {
     .slice(0, 12);
 }
 
+/** Expand a token with light singular/plural variants for matching. */
+function tokenVariants(t: string): string[] {
+  const out = new Set<string>([t]);
+  if (t.endsWith("ies") && t.length > 5) out.add(t.slice(0, -3) + "y");
+  if (t.endsWith("es") && t.length > 5) out.add(t.slice(0, -2));
+  if (t.endsWith("s") && t.length > 4 && !t.endsWith("ss")) out.add(t.slice(0, -1));
+  return [...out];
+}
+
+function bodyHasToken(lowerBody: string, token: string): boolean {
+  return tokenVariants(token).some((v) => lowerBody.includes(v));
+}
+
+/**
+ * Document frequency of tokens across app source screens (for IDF-style weighting).
+ * Nav/mock/constants are excluded so "wallet" in Tab.Screen labels does not dominate.
+ */
+export function buildAppTokenDocFreq(
+  fileBodies: Map<string, string>
+): { df: Map<string, number>; docCount: number } {
+  const df = new Map<string, number>();
+  let docCount = 0;
+  for (const [rel, body] of fileBodies) {
+    if (!isAppSourcePath(rel) || isNonFeatureEvidencePath(rel)) continue;
+    docCount += 1;
+    const lower = body.toLowerCase();
+    const seen = new Set<string>();
+    const toks = lower
+      .replace(/[^\p{L}\p{N}\-_./]+/gu, " ")
+      .split(/\s+/)
+      .filter((t) => t.length >= 4 && !STOP_TOKENS.has(t) && !ALWAYS_GENERIC_TOKENS.has(t));
+    for (const t of toks) {
+      if (seen.has(t)) continue;
+      seen.add(t);
+      df.set(t, (df.get(t) || 0) + 1);
+    }
+  }
+  return { df, docCount };
+}
+
+/**
+ * Distinctive tokens for a REQ: drop stopwords, always-generic words, and
+ * tokens that appear in most app screens (IDF-style). Soft-generic words like
+ * "wallet" survive when they are rare in the scanned tree.
+ */
+export function distinctiveReqTokens(
+  reqText: string,
+  df: Map<string, number> = new Map(),
+  docCount = 0
+): string[] {
+  const raw = tokenize(reqText).filter((t) => !ALWAYS_GENERIC_TOKENS.has(t));
+  if (!raw.length) return [];
+  // IDF needs a real corpus — with 1–2 screens every present token looks "common"
+  if (docCount < 3) return raw.slice(0, 8);
+  const kept = raw.filter((t) => {
+    const freq = df.get(t) || 0;
+    // Also check variants against DF keys
+    let maxFreq = freq;
+    for (const v of tokenVariants(t)) {
+      maxFreq = Math.max(maxFreq, df.get(v) || 0);
+    }
+    // Drop only when the token appears in a strict majority of screens ("most")
+    return !(maxFreq / docCount > IDF_COMMON_RATIO);
+  });
+  // If IDF wiped everything, keep the longest raw tokens (still not always-generic)
+  if (!kept.length) {
+    return [...raw].sort((a, b) => b.length - a.length).slice(0, 3);
+  }
+  return kept.slice(0, 8);
+}
+
 /**
  * Build a search_code-style pattern from a REQ (distinctive tokens OR'd).
  * Used before scoring so every REQ is actively searched in the tree.
  */
 export function reqSearchPattern(reqText: string): string {
-  const tokens = tokenize(reqText).slice(0, 6);
-  if (!tokens.length) return reqText.slice(0, 40).replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  const tokens = distinctiveReqTokens(reqText).slice(0, 6);
+  if (!tokens.length) {
+    const fallback = tokenize(reqText).slice(0, 4);
+    if (!fallback.length) {
+      return reqText.slice(0, 40).replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+    }
+    return fallback.map((t) => t.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")).join("|");
+  }
   return tokens.map((t) => t.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")).join("|");
 }
 
-/** Search file bodies for a REQ; requires 2+ distinctive tokens (or one strong token). */
+/** Search file bodies for a REQ; requires distinctive token hits (IDF-aware). */
 export function searchCodeForReq(
   fileBodies: Map<string, string>,
-  reqText: string
-): { paths: string[]; hitCount: number } {
-  const tokens = tokenize(reqText);
-  if (!tokens.length) return { paths: [], hitCount: 0 };
-  const paths: string[] = [];
+  reqText: string,
+  df?: Map<string, number>,
+  docCount?: number
+): { paths: string[]; hitCount: number; pathScores: Map<string, number> } {
+  const { df: builtDf, docCount: builtN } =
+    df && typeof docCount === "number"
+      ? { df, docCount }
+      : buildAppTokenDocFreq(fileBodies);
+  const tokens = distinctiveReqTokens(reqText, builtDf, builtN);
+  const pathScores = new Map<string, number>();
+  if (!tokens.length) return { paths: [], hitCount: 0, pathScores };
+  const scored: Array<{ rel: string; score: number; hits: number }> = [];
   let hitCount = 0;
   for (const [rel, body] of fileBodies) {
     if (isJunkEvidencePath(rel)) continue;
     const lower = body.toLowerCase();
-    const matched = tokens.filter((t) => lower.includes(t));
+    const matched = tokens.filter((t) => bodyHasToken(lower, t));
+    if (!matched.length) continue;
     const strong = matched.some((t) => t.length >= 6);
+    // Require 2+ distinctive tokens, or one strong (≥6) feature-specific token
     if (matched.length >= 2 || (matched.length >= 1 && strong)) {
-      paths.push(rel);
+      const base = rel.split("/").pop() || "";
+      const nameBonus = matched.some((t) =>
+        tokenVariants(t).some((v) => base.toLowerCase().includes(v))
+      )
+        ? 2
+        : 0;
+      const score = matched.length * 2 + nameBonus + (strong ? 1 : 0);
+      scored.push({ rel, score, hits: matched.length });
       hitCount += matched.length;
+      pathScores.set(rel, score);
     }
   }
-  return { paths: paths.slice(0, 12), hitCount };
+  scored.sort((a, b) => b.score - a.score || a.rel.localeCompare(b.rel));
+  return {
+    paths: scored.slice(0, 12).map((s) => s.rel),
+    hitCount,
+    pathScores,
+  };
+}
+
+/** Prefer paths whose basename shares distinctive tokens with the REQ. */
+function rankEvidencePaths(
+  paths: string[],
+  tokens: string[],
+  pathScores: Map<string, number>
+): string[] {
+  const scored = [...new Set(paths)].map((p) => {
+    const base = (p.split("/").pop() || "").toLowerCase();
+    const nameHits = tokens.filter((t) =>
+      tokenVariants(t).some((v) => base.includes(v))
+    ).length;
+    const depthPenalty = p.split("/").length;
+    const idfScore = pathScores.get(p) || 0;
+    return {
+      p,
+      score: idfScore * 3 + nameHits * 5 - depthPenalty,
+    };
+  });
+  scored.sort((a, b) => b.score - a.score || a.p.localeCompare(b.p));
+  return scored.slice(0, MAX_EVIDENCE_PATHS_PER_REQ).map((x) => x.p);
 }
 
 function scoreAgainstRepo(
@@ -162,12 +367,15 @@ function scoreAgainstRepo(
   index: RepoIndexResult,
   fileBodies: Map<string, string>
 ): Omit<ReqTraceRow, "id" | "text" | "sourceFile" | "section"> {
-  const tokens = tokenize(req.text);
+  const { df, docCount } = buildAppTokenDocFreq(fileBodies);
+  const tokens = distinctiveReqTokens(req.text, df, docCount);
+  const allTokens = tokenize(req.text);
   const appPaths: string[] = [];
   const docPaths: string[] = [];
   const evidenceNotes: string[] = [];
   let symbolHits = 0;
   let keywordHits = 0;
+  let distinctiveBodyHits = 0;
 
   const considerPath = (rel: string, body?: string) => {
     if (!rel || isJunkEvidencePath(rel)) return;
@@ -183,15 +391,22 @@ function scoreAgainstRepo(
       return;
     }
     if (isAppSourcePath(rel)) {
-      if (hasSymbolOrHandlerEvidence(src, tokens, req.text, rel)) {
+      const lower = src.toLowerCase();
+      const distHits = tokens.filter((t) => bodyHasToken(lower, t)).length;
+      if (distHits > 0) distinctiveBodyHits += distHits;
+      // Symbol/handler evidence must use distinctive tokens when available
+      const evidenceToks = tokens.length ? tokens : allTokens;
+      if (hasSymbolOrHandlerEvidence(src, evidenceToks, req.text, rel)) {
         appPaths.push(rel);
         symbolHits += 1;
         evidenceNotes.push(`symbol/handler evidence in ${rel}`);
-      } else {
+      } else if (distHits > 0) {
         appPaths.push(rel);
         keywordHits += 1;
-        evidenceNotes.push(`keyword hit in app source ${rel}`);
+        evidenceNotes.push(`distinctive-token hit in app source ${rel}`);
       }
+      // Generic-only keyword hits (no distinctive tokens) are ignored —
+      // HomeScreen matching "expense"/"amount" must not mint partial.
       return;
     }
     // Non-app but non-junk (e.g. deeper markdown) - doc-only
@@ -200,7 +415,7 @@ function scoreAgainstRepo(
   };
 
   // Mandatory: search_code-style scan per REQ before scoring
-  const searched = searchCodeForReq(fileBodies, req.text);
+  const searched = searchCodeForReq(fileBodies, req.text, df, docCount);
   for (const p of searched.paths) {
     considerPath(p, fileBodies.get(p));
   }
@@ -208,30 +423,32 @@ function scoreAgainstRepo(
   for (const h of index.hits) {
     if (isJunkEvidencePath(h.path)) continue;
     const hay = `${h.path} ${h.note}`.toLowerCase();
-    const tokHit = tokens.filter((t) => hay.includes(t)).length;
+    const tokHit = tokens.filter((t) =>
+      tokenVariants(t).some((v) => hay.includes(v))
+    ).length;
     if (tokHit >= 1) {
       considerPath(h.path, fileBodies.get(h.path));
     }
   }
 
-  // Content search on sampled bodies (token overlap)
+  // Content search on sampled bodies (distinctive token overlap only)
   for (const [rel, body] of fileBodies) {
     if (isJunkEvidencePath(rel)) continue;
     const lower = body.toLowerCase();
-    const tokHit = tokens.filter((t) => lower.includes(t)).length;
-    if (tokHit >= 2) {
+    const tokHit = tokens.filter((t) => bodyHasToken(lower, t)).length;
+    if (tokHit >= 1 && (tokHit >= 2 || tokens.some((t) => t.length >= 6))) {
       considerPath(rel, body);
     }
   }
 
-  const uniqApp = [...new Set(appPaths)].slice(0, 8);
-  const uniqDoc = [...new Set(docPaths)].slice(0, 8);
+  const uniqApp = rankEvidencePaths(appPaths, tokens, searched.pathScores);
+  const uniqDoc = [...new Set(docPaths)].slice(0, MAX_EVIDENCE_PATHS_PER_REQ);
   const assessedMeta = {
     assessed: true as const,
     searchHitCount: searched.hitCount,
   };
   evidenceNotes.unshift(
-    `search_trace: scanned=${fileBodies.size} files, hits=${searched.hitCount}, paths=${searched.paths.slice(0, 4).join(",") || "none"}`
+    `search_trace: scanned=${fileBodies.size} files, distinctive=${tokens.slice(0, 4).join("|") || "none"}, hits=${searched.hitCount}, paths=${searched.paths.slice(0, 3).join(",") || "none"}`
   );
 
   // Feature-family REQs (OCR/voice): without family APIs -> missing.
@@ -269,7 +486,7 @@ function scoreAgainstRepo(
     };
   }
 
-  // No app source at all (nav-only / mock-only hits never populate uniqApp)
+  // No app source at all (nav-only / mock-only / generic-only hits never populate uniqApp)
   if (uniqApp.length === 0) {
     if (uniqDoc.length > 0) {
       return {
@@ -287,37 +504,41 @@ function scoreAgainstRepo(
       codePaths: [],
       evidenceNotes: [
         ...evidenceNotes.slice(0, 5),
-        "no app-source evidence found",
+        distinctiveBodyHits === 0 && allTokens.length
+          ? "no distinctive-token evidence in app source (generic matches ignored)"
+          : "no app-source evidence found",
       ],
       ...assessedMeta,
     };
   }
 
   // Real UI screen/component + handlers for the feature (even with mock data) ->
-  // at least partial. Mock-backed implementations are not "implemented".
+  // at least partial. Requires distinctive token affinity — not bare "expense"/"amount".
   const hasUiFeature =
-    symbolHits >= 1 ||
+    (symbolHits >= 1 && (tokens.length === 0 || distinctiveBodyHits > 0 || uniqApp.some((p) => {
+      const base = (p.split("/").pop() || "").toLowerCase();
+      return tokens.some((t) =>
+        tokenVariants(t).some((v) => base.includes(v))
+      );
+    }))) ||
     uniqApp.some((p) => {
       const body = fileBodies.get(p) || "";
       const base = p.split("/").pop() || "";
-      const nameHit = tokens.some(
-        (t) => t.length >= 4 && base.toLowerCase().includes(t.toLowerCase())
+      const nameHit = tokens.some((t) =>
+        tokenVariants(t).some((v) => base.toLowerCase().includes(v))
       );
       const handler =
         /\bonPress\s*=|\bonClick\s*=|\bPressable\b|\bTouchable/i.test(body);
       const screen =
         /\b(Screen|Component|ViewModel)\b/.test(body) ||
         /Screen\.(m?[jt]sx?|jsx?)$/i.test(p);
-      // Require path/name affinity OR in-body token hit — not bare keywordHits
-      // from unrelated files — so nav-adjacent noise cannot mint partial.
-      const bodyTok = tokens.some(
-        (t) => t.length >= 4 && body.toLowerCase().includes(t.toLowerCase())
-      );
+      const bodyTok = tokens.some((t) => bodyHasToken(body.toLowerCase(), t));
+      // Distinctive path/name or body token required — generic HomeScreen hits fail
       return (nameHit || bodyTok) && (handler || screen);
     });
 
   // Implemented requires app source + symbol/handler evidence and no mock-only layer
-  if (symbolHits >= 1 && uniqApp.length >= 1 && !index.usesMockData) {
+  if (symbolHits >= 1 && uniqApp.length >= 1 && !index.usesMockData && hasUiFeature) {
     return {
       status: "implemented",
       codePaths: uniqApp,
@@ -326,7 +547,7 @@ function scoreAgainstRepo(
     };
   }
 
-  // UI feature present (handlers/screens) -> partial (mock data ok)
+  // UI feature present (handlers/screens) with distinctive evidence -> partial
   if (hasUiFeature) {
     return {
       status: "partial",
@@ -342,7 +563,6 @@ function scoreAgainstRepo(
   }
 
   // App path keyword hit without feature UI/handlers -> missing
-  // (e.g. string mention with no Screen/component/handlers)
   return {
     status: "missing",
     codePaths: [],
@@ -492,25 +712,91 @@ export function buildReqTraceMatrix(
 ): ReqTraceMatrix {
   const bodies = loadSampleBodies(index.targetRepo);
   let rows: ReqTraceRow[] = requirements.map((req) => {
-    if (isSpecHeadingNotRequirement(req.text)) {
+    const reqText = ensureUtf8ReqText(req.text);
+    const kind: SpecReqKind =
+      req.kind ||
+      classifyReqKind(reqText) ||
+      (isSpecHeadingNotRequirement(reqText) || isDocumentOnlyRequirement(reqText)
+        ? "document_only"
+        : "feature");
+    const sources =
+      req.sources && req.sources.length
+        ? req.sources
+        : [{ sourceFile: req.sourceFile, section: req.section }];
+    const reqForScore = { ...req, text: reqText };
+
+    // Document-only (roadmap, costs, guidelines, overview, bare section titles) → n/a
+    if (
+      kind === "document_only" ||
+      isSpecHeadingNotRequirement(reqText) ||
+      isDocumentOnlyRequirement(reqText)
+    ) {
       return {
         id: req.id,
-        text: req.text,
+        text: reqText,
         sourceFile: req.sourceFile,
         section: req.section,
+        kind: "document_only" as const,
+        sources,
         status: "n/a" as const,
         codePaths: [],
-        evidenceNotes: ["spec heading / section title - excluded from coverage"],
+        evidenceNotes: [
+          "document-only / section title - excluded from coverage",
+        ],
         assessed: false,
         searchHitCount: 0,
       };
     }
-    const scored = scoreAgainstRepo(req, index, bodies);
+
+    const scored = scoreAgainstRepo(reqForScore, index, bodies);
+
+    // Non-functional: keep best evidence, else unverified (never inflate missing as code gap)
+    if (kind === "non_functional") {
+      if (
+        scored.status === "implemented" ||
+        scored.status === "partial" ||
+        scored.status === "contradicts"
+      ) {
+        return {
+          id: req.id,
+          text: reqText,
+          sourceFile: req.sourceFile,
+          section: req.section,
+          kind,
+          sources,
+          ...scored,
+          assessed: scored.assessed !== false,
+          evidenceNotes: [
+            ...scored.evidenceNotes.slice(0, 5),
+            "non-functional REQ assessed with best available evidence",
+          ],
+        };
+      }
+      return {
+        id: req.id,
+        text: reqText,
+        sourceFile: req.sourceFile,
+        section: req.section,
+        kind,
+        sources,
+        status: "unverified" as const,
+        codePaths: scored.codePaths || [],
+        evidenceNotes: [
+          ...(scored.evidenceNotes || []).slice(0, 4),
+          "non-functional REQ - unverified without strong code evidence",
+        ],
+        assessed: true,
+        searchHitCount: scored.searchHitCount ?? 0,
+      };
+    }
+
     return {
       id: req.id,
-      text: req.text,
+      text: reqText,
       sourceFile: req.sourceFile,
       section: req.section,
+      kind,
+      sources,
       ...scored,
       assessed: scored.assessed !== false,
     };
@@ -529,21 +815,11 @@ export function buildReqTraceMatrix(
     eligibleCount: counts.eligibleCount,
   });
 
-  const markdown = [
-    `# Requirements traceability matrix`,
-    ``,
+  const markdown = formatReqTraceMarkdown(rows, {
     coverageLine,
     assessedLine,
-    `implemented=${counts.implementedCount} partial=${counts.partialCount} missing=${counts.missingCount} contradicts=${counts.contradictsCount} unverified=${counts.unverifiedCount} n/a=${counts.naCount}`,
-    ``,
-    `| ID | Status | Code paths | Requirement |`,
-    `| --- | --- | --- | --- |`,
-    ...rows.map(
-      (r) =>
-        `| ${r.id} | ${r.status} | ${r.codePaths.map((p) => `\`${p}\``).join("<br>") || "-"} | ${r.text.replace(/\|/g, "/").slice(0, 120)} |`
-    ),
-    ``,
-  ].join("\n");
+    counts,
+  });
 
   return {
     rows,
@@ -574,4 +850,87 @@ export function buildReqTraceMatrix(
       rows,
     },
   };
+}
+
+/** Soft cap for detailed RTM table rows (group summary still lists all modules). */
+export const MAX_RTM_TABLE_ROWS = 60;
+
+/**
+ * Render RTM markdown grouped by module/section, with a capped detail table.
+ * Preserves Unicode (Arabic) REQ titles — never latin1-roundtrip.
+ */
+export function formatReqTraceMarkdown(
+  rows: ReqTraceRow[],
+  meta: {
+    coverageLine: string;
+    assessedLine: string;
+    counts: ReturnType<typeof recomputeCounts>;
+  }
+): string {
+  const byModule = new Map<string, ReqTraceRow[]>();
+  for (const r of rows) {
+    const mod = String(r.section || r.sourceFile || "General")
+      .replace(/\s+/g, " ")
+      .trim()
+      .slice(0, 60) || "General";
+    if (!byModule.has(mod)) byModule.set(mod, []);
+    byModule.get(mod)!.push(r);
+  }
+
+  const moduleSummary = [...byModule.entries()]
+    .map(([mod, rs]) => {
+      const impl = rs.filter((x) => x.status === "implemented").length;
+      const part = rs.filter((x) => x.status === "partial").length;
+      const miss = rs.filter((x) => x.status === "missing").length;
+      const na = rs.filter((x) => x.status === "n/a").length;
+      return `- **${mod}**: ${rs.length} REQs (implemented=${impl} partial=${part} missing=${miss} n/a=${na})`;
+    })
+    .join("\n");
+
+  // Prefer features in the detail table; keep document_only out of the cap budget
+  const featureRows = rows.filter((r) => r.kind !== "document_only");
+  const docRows = rows.filter((r) => r.kind === "document_only");
+  const detailRows = [
+    ...featureRows.slice(0, MAX_RTM_TABLE_ROWS),
+    ...docRows.slice(0, 8),
+  ];
+  const omitted =
+    featureRows.length > MAX_RTM_TABLE_ROWS
+      ? featureRows.length - MAX_RTM_TABLE_ROWS
+      : 0;
+
+  const tableLines = detailRows.map((r) => {
+    const text = String(r.text || "")
+      .replace(/\|/g, "/")
+      .replace(/\s+/g, " ")
+      .trim()
+      .slice(0, 120);
+    const paths =
+      r.codePaths
+        .slice(0, MAX_EVIDENCE_PATHS_PER_REQ)
+        .map((p) => `\`${p}\``)
+        .join("<br>") || "-";
+    return `| ${r.id} | ${r.status}${r.kind ? ` (${r.kind})` : ""} | ${paths} | ${text} |`;
+  });
+
+  return [
+    `# Requirements traceability matrix`,
+    ``,
+    meta.coverageLine,
+    meta.assessedLine,
+    `implemented=${meta.counts.implementedCount} partial=${meta.counts.partialCount} missing=${meta.counts.missingCount} contradicts=${meta.counts.contradictsCount} unverified=${meta.counts.unverifiedCount} n/a=${meta.counts.naCount}`,
+    ``,
+    `## By module`,
+    moduleSummary || "_No modules._",
+    ``,
+    `## Detail`,
+    omitted
+      ? `_Showing ${detailRows.length} of ${rows.length} rows (${omitted} additional feature REQs summarized in module groups only)._`
+      : `_${rows.length} REQs._`,
+    ``,
+    `| ID | Status | Code paths | Requirement |`,
+    `| --- | --- | --- | --- |`,
+    ...tableLines,
+    ``,
+  ].join("\n");
 }

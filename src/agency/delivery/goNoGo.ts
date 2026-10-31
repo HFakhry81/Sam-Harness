@@ -9,6 +9,7 @@ import {
   writeGoNoGoFile,
 } from "./store.js";
 import type { GoNoGoRecord } from "./types.js";
+import { writePackArtifact } from "../../lib/packWorkspace.js";
 
 export type ImplementAuthResult = {
   allowed: boolean;
@@ -102,20 +103,22 @@ function syncBoardGoNoGo(record: GoNoGoRecord): void {
   saveBoard(board);
 }
 
-export function writeGoNoGoTemplate(cwd = process.cwd()): void {
-  const p = path.join(cwd, "go-nogo.example.json");
-  fs.writeFileSync(
-    p,
-    JSON.stringify(
-      {
-        decision: "GO",
-        by: "owner",
-        at: new Date().toISOString(),
-        reason: "I authorize Level-3 code changes on the target repo for this pack",
-      },
-      null,
-      2
-    ),
-    "utf-8"
+export function writeGoNoGoTemplate(cwd?: string): void {
+  const body = JSON.stringify(
+    {
+      decision: "GO",
+      by: "owner",
+      at: new Date().toISOString(),
+      reason: "I authorize Level-3 code changes on the target repo for this pack",
+    },
+    null,
+    2
   );
+  if (cwd && path.normalize(cwd) !== path.normalize(process.cwd())) {
+    fs.mkdirSync(cwd, { recursive: true });
+    fs.writeFileSync(path.join(cwd, "go-nogo.example.json"), body, "utf-8");
+    return;
+  }
+  // Default: SAM_OUTPUT_HOME pack workspace — never repo cwd
+  writePackArtifact("go-nogo.example.json", body);
 }

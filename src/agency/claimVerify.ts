@@ -9,6 +9,7 @@ import * as path from "path";
 import type { ModelClaimError } from "./gatesStore.js";
 import { normalizeMarkdownStructure } from "./markdownNormalize.js";
 import { clipStrategyForPrompt } from "./finalReport.js";
+import { sanitizeExtractedPath } from "./pathExtract.js";
 
 export type PathCitation = {
   raw: string;
@@ -65,10 +66,13 @@ export type SanitizeDraftResult = {
   rewritePrompt?: string;
 };
 
-const PATH_IN_BACKTICKS = /`([^`]+)`/g;
+const PATH_IN_BACKTICKS = /`([^`\n]+)`/g;
 const PATHISH =
   /(?:^|[\s(])((?:packages|apps|src|docs|lib|scripts|config)\/[A-Za-z0-9_./\-]+)/g;
 const BARE_ROOTS = /\b(packages\/[^\s`'",.]+|apps\/web(?:\/[^\s`'",.]*)?|apps\/mobile(?:\/[^\s`'",.]*)?)\b/gi;
+/** Absolute Windows drive paths (quoted or bare) — never spill into markdown. */
+const WIN_DRIVE_IN_TEXT =
+  /(?:^|[\s("`'])([A-Za-z]:[\\/][^\n`"'|#*]{2,240})/g;
 /** Non-grounded ISO codes commonly hallucinated; matched case-insensitively. */
 export const FORBIDDEN_CURRENCY_ALTERNATES =
   "SAR|USD|AED|QAR|KWD|BHD|OMR|EUR|GBP";
@@ -87,38 +91,63 @@ export function isForbiddenCurrencyToken(
   return new RegExp(`^(?:${FORBIDDEN_CURRENCY_ALTERNATES})$`, "i").test(code);
 }
 
+/** Normalize + sanitize a cited path; null when it is markdown garbage. */
+export function normalizeCitedPath(raw: string): string | null {
+  const cleaned = sanitizeExtractedPath(String(raw || "").trim());
+  if (!cleaned || cleaned.length < 3) return null;
+  if (/#{1,6}|\*\*/.test(cleaned)) return null;
+  if (/\bCoverage Summary\b|\bDeterministic Requirement\b/i.test(cleaned)) {
+    return null;
+  }
+  // Keep native separators for Windows absolute paths; relative → posix-ish
+  if (/^[A-Za-z]:[\\/]/.test(cleaned)) return cleaned;
+  return cleaned.replace(/\\/g, "/");
+}
+
 export function extractCitedPaths(text: string): string[] {
   const out = new Set<string>();
+  const push = (raw: string) => {
+    const n = normalizeCitedPath(raw);
+    if (!n) return;
+    if (
+      !/[\\/]/.test(n) &&
+      !/\.\w+$/.test(n) &&
+      !/^(packages|apps)/i.test(n)
+    ) {
+      return;
+    }
+    out.add(n);
+  };
   let m: RegExpExecArray | null;
   const bt = new RegExp(PATH_IN_BACKTICKS.source, "g");
   while ((m = bt.exec(text))) {
-    const p = m[1].trim();
-    if (/[\\/]/.test(p) || /\.(ts|tsx|js|jsx|md|json|yaml|yml|sql)$/i.test(p)) {
-      out.add(p.replace(/\\/g, "/"));
-    }
+    push(m[1]);
   }
   const ph = new RegExp(PATHISH.source, "g");
   while ((m = ph.exec(text))) {
-    out.add(m[1].replace(/\\/g, "/"));
+    push(m[1]);
   }
   const bare = new RegExp(BARE_ROOTS.source, "gi");
   while ((m = bare.exec(text))) {
-    out.add(m[1].replace(/\\/g, "/"));
+    push(m[1]);
+  }
+  const win = new RegExp(WIN_DRIVE_IN_TEXT.source, "g");
+  while ((m = win.exec(text))) {
+    push(m[1]);
   }
   return [...out].slice(0, 80);
 }
 
 export function verifyCitationsAgainstRepo(
   text: string,
-  targetRepo: string
+  targetRepo: string,
+  opts?: { specRoot?: string }
 ): ClaimVerifyResult {
   const root = path.normalize(targetRepo);
+  const specRoot = opts?.specRoot ? path.normalize(opts.specRoot) : "";
   const citations: PathCitation[] = [];
   for (const raw of extractCitedPaths(text)) {
     if (/^https?:/i.test(raw)) continue;
-    if (!/[\\/]/.test(raw) && !/\.\w+$/.test(raw) && !/^(packages|apps)/i.test(raw)) {
-      continue;
-    }
     // file:line or file:line:col citations resolve to the file
     const fileOnly = raw.replace(/:\d+(?::\d+)?$/, "");
     const resolved = path.isAbsolute(fileOnly)
@@ -130,12 +159,38 @@ export function verifyCitationsAgainstRepo(
     } catch {
       exists = false;
     }
-    // Spec paths outside the target repo (absolute or workspace-relative) are OK
-    // when they exist on disk even if not under targetRepo
-    if (!exists && !path.isAbsolute(fileOnly)) {
+    // Spec paths outside the target repo are OK when they exist on disk
+    if (!exists && path.isAbsolute(fileOnly)) {
       try {
-        const alt = path.normalize(path.join(process.cwd(), fileOnly));
-        if (fs.existsSync(alt)) exists = true;
+        exists = fs.existsSync(path.normalize(fileOnly));
+      } catch {
+        /* ignore */
+      }
+    }
+    if (!exists && !path.isAbsolute(fileOnly)) {
+      const alts = [
+        path.normalize(path.join(process.cwd(), fileOnly)),
+        ...(specRoot ? [path.normalize(path.join(specRoot, fileOnly))] : []),
+      ];
+      for (const alt of alts) {
+        try {
+          if (fs.existsSync(alt)) {
+            exists = true;
+            break;
+          }
+        } catch {
+          /* ignore */
+        }
+      }
+    }
+    // Absolute Windows/spec paths that exist under the known spec root count
+    if (!exists && specRoot && path.isAbsolute(fileOnly)) {
+      try {
+        const norm = path.normalize(fileOnly).toLowerCase();
+        const specNorm = specRoot.toLowerCase();
+        if (norm === specNorm || norm.startsWith(specNorm + path.sep.toLowerCase())) {
+          exists = fs.existsSync(path.normalize(fileOnly));
+        }
       } catch {
         /* ignore */
       }
