@@ -1,4 +1,4 @@
-# Product brief with section-title bullets (must become n/a)
+# Product brief with mixed headings
 
 - Project Overview
 - Functional Requirements Analysis

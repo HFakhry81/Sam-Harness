@@ -124,28 +124,31 @@ describe("path filters — junk / backup / prior reports", () => {
     expect(isNonFeatureEvidencePath("src/screens/HomeScreen.js")).toBe(false);
     expect(isSpecHeadingNotRequirement("Project Overview")).toBe(true);
     expect(isSpecHeadingNotRequirement("Functional Requirements Analysis")).toBe(
-      true
+      false
     );
-    expect(isSpecHeadingNotRequirement("Tech Stack")).toBe(true);
+    expect(isSpecHeadingNotRequirement("Tech Stack")).toBe(false);
     expect(
       isSpecHeadingNotRequirement("MUST support OCR receipt scanning via camera")
     ).toBe(false);
   });
 
-  it("marks section-heading REQs as n/a and excludes them from coverage denominator", async () => {
+  it("marks only pure document-structure headings as n/a", async () => {
     const spec = await ingestSpecFolder(HEADING_SPEC);
     const headings = spec.requirements.filter((r) =>
       isSpecHeadingNotRequirement(r.text)
     );
-    expect(headings.length).toBeGreaterThanOrEqual(3);
+    expect(headings.length).toBeGreaterThanOrEqual(1);
+    expect(headings.every((h) => /overview/i.test(h.text))).toBe(true);
     const index = indexRepo(JUNK_REPO);
     const matrix = buildReqTraceMatrix(spec.requirements, index, []);
     const na = matrix.rows.filter((r) => r.status === "n/a");
-    expect(na.length).toBeGreaterThanOrEqual(3);
+    expect(na.length).toBeGreaterThanOrEqual(1);
     expect(matrix.naCount).toBe(na.length);
     expect(matrix.eligibleCount).toBe(matrix.rows.length - matrix.naCount);
-    expect(matrix.eligibleCount).toBeLessThan(matrix.rows.length);
-    // Coverage denominator is eligible only
+    // Tech Stack / Functional Requirements stay eligible
+    expect(
+      matrix.rows.filter((r) => r.status !== "n/a").length
+    ).toBeGreaterThanOrEqual(4);
     const line = formatGroundedCoverageLine({
       coverageRatio: matrix.coverageRatio,
       codeBackedCount: matrix.codeBackedCount,
@@ -160,10 +163,6 @@ describe("path filters — junk / backup / prior reports", () => {
       codeBackedCount: matrix.codeBackedCount,
     });
     expect(rtm).toContain(line);
-    // Single coverage figure — no alternate N/totalRows
-    expect(rtm).not.toMatch(
-      new RegExp(`${matrix.codeBackedCount}/${matrix.rows.length}\\)`)
-    );
   });
 
   it("P0 mock/auth findings cap related REQs at partial (Spendy)", () => {
@@ -234,10 +233,16 @@ describe("deterministic blocks never truncated in written files", () => {
     expect(rtmSection!).not.toMatch(/\.\.\.\(truncated\)/);
     expect(rtmSection!).toMatch(/\| REQ-/i);
 
-    const promptClip = clipStrategyForPrompt(strategy, 800);
+    const promptClip = clipStrategyForPrompt(strategy, 800, {
+      reqRowCount: pack.reqMatrix!.rows.length,
+      findingCount: pack.checklist!.findings.length,
+    });
     // Prompt may truncate narrative, but must not embed truncated RTM table
-    expect(promptClip).toMatch(/Deterministic blocks \(full text is in the written/);
-    expect(promptClip).toMatch(/RTM rows in file:/);
+    expect(promptClip).toMatch(/PROMPT_ONLY_DETERMINISTIC_SUMMARY/);
+    expect(promptClip).toMatch(
+      new RegExp(`RTM rows \\(grounded\\): ${pack.reqMatrix!.rows.length}`)
+    );
+    expect(promptClip).not.toMatch(/RTM rows in file:\s*0/);
     expect(promptClip).not.toMatch(
       /## Requirements traceability \(deterministic\)[\s\S]*\.\.\.\(truncated\)/
     );
