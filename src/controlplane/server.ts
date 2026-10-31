@@ -940,7 +940,12 @@ async function handleRun(req: http.IncomingMessage, res: http.ServerResponse) {
     }
   }
 
-  const { cmd, args, env } = runArgsForMode(mode);
+  const { cmd, args: baseArgs, env } = runArgsForMode(mode);
+  // Pass --force-agency on argv so index.ts parseForceRouteFlags honors UI checkbox
+  // (FORCE_AGENCY env alone used to only skip quick-path, not override task.ts).
+  const args = forceAgency
+    ? [...baseArgs, "--force-agency"]
+    : baseArgs;
   broadcast("run", {
     type: "start",
     ...lastRun,

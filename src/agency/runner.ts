@@ -176,6 +176,25 @@ export async function runAgencyArchitecture(task: string): Promise<AgencyRunResu
       (specRoot ? ` spec=${specRoot}` : "")
   );
 
+  // Tool-layer write policy: prompt paths are READ-ONLY; shell off for analysis
+  try {
+    const { registerSourceRoots, registerWriteRoots, setDisableShell, setStrictWriteRoots } =
+      await import("../lib/writePolicy.js");
+    const { getOutputHome } = await import("../lib/outputHome.js");
+    registerSourceRoots([
+      engagement.targetRepo,
+      ...(specRoot ? [specRoot] : []),
+      ...(engagement.goalPaths?.targetRepos || []),
+      ...(engagement.goalPaths?.specRoots || []),
+    ]);
+    // Pack/docs under client tree may equal specRoot — never treat spec as writable.
+    registerWriteRoots([getOutputHome()]);
+    setStrictWriteRoots(true);
+    setDisableShell(true);
+  } catch {
+    /* ignore */
+  }
+
   // Evidence scout v2 (local) — repo index + spec REQs + locale/currency
   live("Evidence Scout", "Indexing repo + ingesting spec (grounded v2)...");
   let evidence = await scanRepoEvidenceAsync(engagement.targetRepo, {

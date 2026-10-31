@@ -9,6 +9,12 @@ import {
   isDriveRoot,
   resolveUserPath,
 } from "../lib/paths.js";
+import {
+  assertWriteAllowed,
+  isShellDisabled,
+  gateWritePath,
+} from "../lib/writePolicy.js";
+import { agentDocumentPath } from "../lib/outputHome.js";
 
 const execFileAsync = promisify(execFile);
 
@@ -47,18 +53,42 @@ async function readFileTool(params: Record<string, unknown>): Promise<ToolResult
   if (!fs.existsSync(abs)) {
     return { ok: false, tool: "read_file", message: `File not found: ${abs}` };
   }
-  const content = fs.readFileSync(abs, "utf-8");
-  const preview = content.length > 4000 ? content.slice(0, 4000) + "\n...(truncated)" : content;
+  const maxBytes = Math.min(
+    256_000,
+    Math.max(1024, Number(params.maxBytes ?? params.max_bytes ?? 48_000) || 48_000)
+  );
+  const maxLines = Math.min(
+    2000,
+    Math.max(1, Number(params.maxLines ?? params.max_lines ?? 400) || 400)
+  );
+  const buf = fs.readFileSync(abs);
+  const truncatedBytes = buf.length > maxBytes;
+  const text = buf.slice(0, maxBytes).toString("utf-8");
+  const lines = text.split(/\r?\n/);
+  const truncatedLines = lines.length > maxLines;
+  const preview = lines.slice(0, maxLines).join("\n");
+  const note =
+    truncatedBytes || truncatedLines
+      ? `\n...(truncated bytes=${truncatedBytes} lines=${truncatedLines})`
+      : "";
   return {
     ok: true,
     tool: "read_file",
-    message: `Read ${abs} (${content.length} chars)`,
-    data: { path: abs, content: preview },
+    message: `Read ${abs} (${buf.length} bytes, showing <=${maxLines} lines)`,
+    data: {
+      path: abs,
+      content: preview + note,
+      bytes: buf.length,
+      truncated: truncatedBytes || truncatedLines,
+    },
   };
 }
 
 async function writeFileTool(params: Record<string, unknown>): Promise<ToolResult> {
-  const abs = resolveUserPath(asString(params.path, "path"));
+  const { abs, gate } = gateWritePath(asString(params.path, "path"), "write");
+  if (!gate.ok) {
+    return { ok: false, tool: "write_file", message: gate.reason };
+  }
   assertAllowedPath(abs);
   const content = asString(params.content, "content");
   ensureParentDir(abs);
@@ -72,8 +102,104 @@ async function writeFileTool(params: Record<string, unknown>): Promise<ToolResul
   };
 }
 
+async function writeReportTool(params: Record<string, unknown>): Promise<ToolResult> {
+  const name = String(params.name || params.filename || "report.md").replace(
+    /[<>:"|?*]/g,
+    "_"
+  );
+  const content = asString(params.content, "content");
+  const preferred =
+    typeof params.path === "string" && params.path.trim()
+      ? resolveUserPath(params.path)
+      : agentDocumentPath(name);
+  const gate = assertWriteAllowed(preferred, "write");
+  if (!gate.ok) {
+    // Force under output home documents/
+    const fallback = agentDocumentPath(path.basename(name));
+    const g2 = assertWriteAllowed(fallback, "write");
+    if (!g2.ok) {
+      return { ok: false, tool: "write_report", message: gate.reason };
+    }
+    ensureParentDir(fallback);
+    fs.writeFileSync(fallback, content, "utf-8");
+    return {
+      ok: true,
+      tool: "write_report",
+      message: `Report written under output home: ${fallback}`,
+      data: { path: fallback, redirected: true },
+    };
+  }
+  assertAllowedPath(preferred);
+  ensureParentDir(preferred);
+  fs.writeFileSync(preferred, content, "utf-8");
+  return {
+    ok: true,
+    tool: "write_report",
+    message: `Report written: ${preferred}`,
+    data: { path: preferred },
+  };
+}
+
+async function searchCodeTool(params: Record<string, unknown>): Promise<ToolResult> {
+  const root = resolveUserPath(asString(params.path || params.root || ".", "path"));
+  assertAllowedPath(root);
+  const pattern = asString(params.pattern || params.query, "pattern");
+  let re: RegExp;
+  try {
+    re = new RegExp(pattern, params.caseInsensitive === false ? "" : "i");
+  } catch {
+    return { ok: false, tool: "search_code", message: `Invalid pattern: ${pattern}` };
+  }
+  const maxFiles = Math.min(200, Number(params.maxFiles ?? 80) || 80);
+  const maxHits = Math.min(200, Number(params.maxHits ?? 40) || 40);
+  const hits: { file: string; line: number; text: string }[] = [];
+  const stack = [root];
+  let filesScanned = 0;
+  while (stack.length && filesScanned < maxFiles && hits.length < maxHits) {
+    const cur = stack.pop()!;
+    let entries: fs.Dirent[];
+    try {
+      entries = fs.readdirSync(cur, { withFileTypes: true });
+    } catch {
+      continue;
+    }
+    for (const e of entries) {
+      if (e.name === "node_modules" || e.name === ".git" || e.name === "dist") continue;
+      const full = path.join(cur, e.name);
+      if (e.isDirectory()) {
+        stack.push(full);
+        continue;
+      }
+      if (!/\.(ts|tsx|js|jsx|md|json|yaml|yml|txt|css|html)$/i.test(e.name)) continue;
+      filesScanned += 1;
+      let text = "";
+      try {
+        text = fs.readFileSync(full, "utf-8").slice(0, 200_000);
+      } catch {
+        continue;
+      }
+      const lines = text.split(/\r?\n/);
+      for (let i = 0; i < lines.length && hits.length < maxHits; i++) {
+        if (re.test(lines[i])) {
+          hits.push({ file: full, line: i + 1, text: lines[i].slice(0, 200) });
+        }
+      }
+      if (filesScanned >= maxFiles) break;
+    }
+  }
+  return {
+    ok: true,
+    tool: "search_code",
+    message: `search_code: ${hits.length} hit(s) in ${filesScanned} file(s) under ${root}`,
+    data: { root, pattern, hits, filesScanned },
+  };
+}
+
 async function mkdirTool(params: Record<string, unknown>): Promise<ToolResult> {
-  const abs = resolveUserPath(asString(params.path, "path"));
+  const { abs, gate } = gateWritePath(asString(params.path, "path"), "mkdir");
+  if (!gate.ok) {
+    return { ok: false, tool: "mkdir", message: gate.reason };
+  }
   assertAllowedPath(abs);
   if (isDriveRoot(abs)) {
     return { ok: false, tool: "mkdir", message: `Refusing to mkdir drive/root: ${abs}` };
@@ -101,6 +227,10 @@ async function deletePathTool(params: Record<string, unknown>): Promise<ToolResu
     };
   }
   const abs = resolveUserPath(asString(params.path, "path"));
+  const writeGate = assertWriteAllowed(abs, "delete");
+  if (!writeGate.ok) {
+    return { ok: false, tool: "delete_path", message: writeGate.reason };
+  }
   assertAllowedPath(abs);
   // Phase 6 — HITL when deleting outside agent output home / cwd
   {
@@ -179,6 +309,14 @@ async function moveFileTool(params: Record<string, unknown>): Promise<ToolResult
   if (/^[A-Za-z]:\\?$/.test(destination.replace(/\\+$/, "") + "\\") || /^[A-Za-z]:\\$/.test(destination)) {
     destination = path.join(destination.endsWith("\\") ? destination : destination + "\\", path.basename(source));
   }
+  const srcGate = assertWriteAllowed(source, "move");
+  if (!srcGate.ok) {
+    return { ok: false, tool: "move_file", message: srcGate.reason };
+  }
+  const dstGate = assertWriteAllowed(destination, "move");
+  if (!dstGate.ok) {
+    return { ok: false, tool: "move_file", message: dstGate.reason };
+  }
   assertAllowedPath(source);
   assertAllowedPath(destination);
   // Phase 6 — moving a source out of / deleting from outside home is destructive
@@ -232,6 +370,10 @@ async function copyFileTool(params: Record<string, unknown>): Promise<ToolResult
   let destination = resolveUserPath(asString(params.destination, "destination"));
   if (/^[A-Za-z]:\\$/.test(destination)) {
     destination = path.join(destination, path.basename(source));
+  }
+  const dstGate = assertWriteAllowed(destination, "copy");
+  if (!dstGate.ok) {
+    return { ok: false, tool: "copy_file", message: dstGate.reason };
   }
   assertAllowedPath(source);
   assertAllowedPath(destination);
@@ -372,6 +514,10 @@ async function writeExcelTool(params: Record<string, unknown>): Promise<ToolResu
   if (!/\.(xls|xlsx|csv)$/i.test(abs)) {
     abs = `${abs}.xls`;
   }
+  const gate = assertWriteAllowed(abs, "write");
+  if (!gate.ok) {
+    return { ok: false, tool: "write_excel", message: gate.reason };
+  }
   assertAllowedPath(abs);
   const a1 = String(
     params.a1 ?? params.content ?? params.value ?? new Date().toLocaleString()
@@ -468,68 +614,130 @@ export function isShellCommandAllowed(
   });
 }
 
-async function runShellTool(params: Record<string, unknown>): Promise<ToolResult> {
-  const command = asString(params.command, "command").trim();
-  if (!isShellCommandAllowed(command)) {
-    const hint =
-      process.platform === "win32"
-        ? "Allowed shell: dir, type, echo, where, powershell Get-* only."
-        : "Allowed shell: ls, echo, pwd, which, cat, head, tail, file, find (no pipes/redirs), uname, df, du, wc.";
-    return {
-      ok: false,
-      tool: "run_shell",
-      message: `Shell blocked. For screenshots use tool screenshot. ${hint}`,
-    };
+/**
+ * Quote a path for embedding inside a single PowerShell -Command string when unavoidable.
+ * Prefer argv arrays so paths with spaces are never string-concatenated.
+ */
+export function quoteShellPath(p: string): string {
+  const s = String(p || "");
+  if (!/[\s&<>|^%]/.test(s)) return s;
+  return `"${s.replace(/"/g, '\\"')}"`;
+}
+
+/**
+ * Build a safe argv for allowlisted shell ops.
+ * Prefer params.argv (string[]) over params.command (legacy free-form string).
+ */
+export function resolveShellArgv(params: Record<string, unknown>): {
+  ok: true;
+  argv: string[];
+  display: string;
+} | { ok: false; message: string } {
+  if (Array.isArray(params.argv) && params.argv.length) {
+    const argv = params.argv.map((a) => String(a));
+    // Gate every path-like arg for allowlist + write policy on redirects is N/A (no redirs in argv mode)
+    for (const a of argv) {
+      if (/^[A-Za-z]:[\\/]/.test(a) || a.startsWith("/") || /^(desktop|documents)/i.test(a)) {
+        try {
+          assertAllowedPath(resolveUserPath(a));
+        } catch (e: any) {
+          return { ok: false, message: e?.message || String(e) };
+        }
+        // Block argv that clearly target writing into source roots via Out-File/Export-Csv style
+        // (analysis routes already disable shell entirely).
+      }
+    }
+    return { ok: true, argv, display: argv.map(quoteShellPath).join(" ") };
   }
 
-  // Sandbox: every filesystem path referenced by the command must be under workspace roots
-  try {
-    assertShellCommandPathsAllowed(command);
-  } catch (e: any) {
-    return {
-      ok: false,
-      tool: "run_shell",
-      message: e?.message || String(e),
-    };
-  }
-
-  let stdout = "";
-  let stderr = "";
-  try {
+  if (typeof params.command === "string" && params.command.trim()) {
+    const command = params.command.trim();
+    // Reject unquoted paths-with-spaces followed by operators (Spendy failure mode)
+    if (
+      /[A-Za-z]:\\[^\n"']*\s+[^\n"']*[\\/][^\n"']*\s*(-Path|-LiteralPath|>|\|)/i.test(
+        command
+      ) &&
+      !/"[^"]*\s[^"]*"/.test(command)
+    ) {
+      return {
+        ok: false,
+        message:
+          "Shell blocked: path with spaces must be quoted, or pass params.argv as a string array (never concatenate paths into a command string).",
+      };
+    }
+    if (!isShellCommandAllowed(command)) {
+      const hint =
+        process.platform === "win32"
+          ? "Allowed shell: dir, type, echo, where, powershell Get-* only."
+          : "Allowed shell: ls, echo, pwd, which, cat, head, tail, file, find (no pipes/redirs), uname, df, du, wc.";
+      return {
+        ok: false,
+        message: `Shell blocked. Prefer list_dir / read_file / search_code. ${hint}`,
+      };
+    }
+    try {
+      assertShellCommandPathsAllowed(command);
+    } catch (e: any) {
+      return { ok: false, message: e?.message || String(e) };
+    }
+    // Block Export-Csv / Out-File / > redirects into likely source folders
+    if (
+      /Export-Csv|Out-File|Set-Content|Add-Content|Redirect|>>?/i.test(command)
+    ) {
+      return {
+        ok: false,
+        message:
+          "Shell blocked: write redirects (Export-Csv/Out-File/>) are not allowed via run_shell. Use write_report / write_file under the output home.",
+      };
+    }
     if (process.platform === "win32") {
-      // Never pipe PowerShell through cmd.exe — `|` breaks (Select-Object runs in cmd).
       if (/^powershell(\.exe)?\b/i.test(command)) {
         const m = command.match(/-Command\s+([\s\S]+)$/i);
         const psBody = (m?.[1] || command.replace(/^powershell(\.exe)?\s+/i, "")).trim();
-        const r = await execFileAsync(
-          "powershell.exe",
-          ["-NoProfile", "-Command", psBody],
-          {
-            windowsHide: true,
-            timeout: 60000,
-            maxBuffer: 1024 * 512,
-          }
-        );
-        stdout = r.stdout;
-        stderr = r.stderr;
-      } else {
-        const r = await execFileAsync("cmd", ["/c", command], {
-          windowsHide: true,
-          timeout: 20000,
-          maxBuffer: 1024 * 256,
-        });
-        stdout = r.stdout;
-        stderr = r.stderr;
+        return {
+          ok: true,
+          argv: ["powershell.exe", "-NoProfile", "-Command", psBody],
+          display: command,
+        };
       }
-    } else {
-      // bash on Linux/macOS — allowlist already applied
-      const r = await execFileAsync("bash", ["-lc", command], {
-        timeout: 20000,
-        maxBuffer: 1024 * 256,
-      });
-      stdout = r.stdout;
-      stderr = r.stderr;
+      return { ok: true, argv: ["cmd.exe", "/c", command], display: command };
     }
+    return { ok: true, argv: ["bash", "-lc", command], display: command };
+  }
+
+  return {
+    ok: false,
+    message:
+      "run_shell requires params.argv (preferred) or params.command. Example argv: [\"powershell.exe\",\"-NoProfile\",\"-Command\",\"Get-ChildItem -LiteralPath 'D:\\\\My Documents\\\\Spendy'\"]",
+  };
+}
+
+async function runShellTool(params: Record<string, unknown>): Promise<ToolResult> {
+  if (isShellDisabled()) {
+    return {
+      ok: false,
+      tool: "run_shell",
+      message:
+        "run_shell disabled for analysis/audit routes. Use list_dir, read_file, search_code, write_report instead.",
+    };
+  }
+
+  const resolved = resolveShellArgv(params);
+  if (!resolved.ok) {
+    return { ok: false, tool: "run_shell", message: resolved.message };
+  }
+
+  const [file, ...args] = resolved.argv;
+  let stdout = "";
+  let stderr = "";
+  try {
+    const r = await execFileAsync(file, args, {
+      windowsHide: true,
+      timeout: 60000,
+      maxBuffer: 1024 * 512,
+    });
+    stdout = r.stdout;
+    stderr = r.stderr;
   } catch (e: any) {
     return {
       ok: false,
@@ -538,6 +746,7 @@ async function runShellTool(params: Record<string, unknown>): Promise<ToolResult
       data: {
         stdout: String(e?.stdout || "").slice(0, 4000),
         stderr: String(e?.stderr || "").slice(0, 1000),
+        argv: resolved.argv,
       },
     };
   }
@@ -546,44 +755,48 @@ async function runShellTool(params: Record<string, unknown>): Promise<ToolResult
     ok: true,
     tool: "run_shell",
     message: "Shell command finished",
-    data: { stdout: stdout.slice(0, 6000), stderr: stderr.slice(0, 1000) },
+    data: {
+      stdout: stdout.slice(0, 6000),
+      stderr: stderr.slice(0, 1000),
+      argv: resolved.argv,
+    },
   };
 }
 
 export const TOOL_CATALOG = `
 Available tools (ONE JSON — follow USER GOAL verbs; paths work on Windows/macOS/Linux user environment):
-1) move_file    { "source":"Desktop/file.xls", "destination":"D:/file.xls" }
-2) copy_file    { "source":"...", "destination":"..." }
-3) write_file   { "path":"Desktop/note.txt", "content":"..." }   // create or update
-4) mkdir        { "path":"Desktop/NewFolder" }
-5) delete_path  { "path":"Desktop/old.txt", "confirm":true }  // dirs need recursive:true if not empty
-6) write_excel  { "path":"Desktop/report.xls", "a1":"..." }  // ONLY create new sheet — not for "report ABOUT excel files"
-7) open_path / list_dir / read_file
-8) run_shell    Windows: { "command":"powershell -NoProfile -Command Get-ChildItem …" }
-                Linux/macOS: { "command":"ls Documents" } / cat / find (allowlisted; no pipes)
-9) screenshot   { "filename":"capture.png" }  // Windows GDI · Linux grim/scrot/gnome-screenshot · macOS screencapture
-10) run_node_sandbox { "code":"console.log(1+1)" }  // isolated Node REPL (timeout/memory; optional Docker)
-11) mcp_call    { "server":"name", "tool":"toolName", "arguments":{...} }  // from mcp.json
-12) Desktop operator (Windows UIA; Linux xdotool/wmctrl/ydotool; macOS osascript):
-    desktop_list_windows / desktop_focus_window / desktop_launch_app / desktop_close_window
-    desktop_uia_tree / desktop_uia_find / desktop_uia_invoke / desktop_uia_set_value
-    desktop_type_text / desktop_key / desktop_click / desktop_move_mouse
-    desktop_clipboard_get / desktop_clipboard_set / desktop_file_dialog
-    desktop_screenshot / desktop_verify
-    open_media { "path":"Videos/clip.mp4" }  // play with default app
-    ffmpeg { "args":["-i","in.mp4","-t","10","out.mp4"] }  // requires ffmpeg on PATH; approval if destructive
-13) finish       { "summary":"...", "success":true|false }
+PREFER structured tools first; shell last (and disabled on analysis/audit routes):
+1) list_dir     { "path":"E:/UpNexa.com/spendy" }
+2) read_file    { "path":"...", "maxLines":200, "maxBytes":48000 }
+3) search_code  { "path":"...", "pattern":"supabase|EGP" }   // alias: grep
+4) write_report { "name":"gap-report.md", "content":"..." }  // ONLY under Documents/Sam-Harness
+5) write_file   { "path":"<output-home>/documents/note.txt", "content":"..." }
+6) move_file / copy_file / mkdir / delete_path(confirm:true) / write_excel
+7) open_path / screenshot
+8) run_shell    PREFER argv array (paths with spaces safe):
+                { "argv":["powershell.exe","-NoProfile","-Command","Get-ChildItem -LiteralPath 'D:\\\\My Documents\\\\Spendy'"] }
+                Legacy string command is allowlisted read-only; Export-Csv/Out-File/> blocked.
+9) run_node_sandbox / mcp_call / desktop_* / ffmpeg / open_media
+10) finish       { "summary":"...", "success":true|false }
 
-Rules:
-- انقل/move → move_file. اعمل مجلد → mkdir. احذف → delete_path with confirm:true (role matrix + confirm; required outside agent workspace).
-- Agent-generated reports/docs default under Documents/Sam-Harness (SAM_OUTPUT_HOME): reports/, documents/, runs/.
-- تقرير/جرد ملفات Excel على محرك → run_shell Get-ChildItem (Windows) أو ls/find (Unix) ثم write_file تقرير نصي (.txt) — لا تستخدم write_excel.
-- Prefer desktop_uia_* over blind clicks when automating GUI apps; verify with desktop_verify.
-- Destructive/financial/sending desktop actions need approval (approved:true or APPROVE_DESKTOP=1). Sensitive apps still gated (Phase 6).
-- Dry-run: dryRun:true or SAM_DESKTOP_DRY_RUN=1. Kill/pause: SAM_DESKTOP_PAUSED=1 or kill flag file.
-- Never delete without confirm:true. Never touch OS system folders, .ssh, browser profiles, or harness secrets.
-- MCP tools require mcp.json; sandboxed code never receives secret env vars.
+Rules (English/ASCII):
+- Prompt project + spec folders are READ-ONLY sources. Never write/delete/move into them.
+- Agent reports go under Documents/Sam-Harness (SAM_OUTPUT_HOME): reports/, documents/, runs/.
+- Analysis/audit routes: run_shell is disabled — use list_dir/read_file/search_code/write_report.
+- After 2 identical tool failures, switch approach; do not retry the same broken command.
+- Never delete without confirm:true. Never touch OS system folders or secrets.
 - Use real names from the Goal — do not copy catalog examples blindly.
+`;
+
+/** Analysis-safe catalog (no shell / no desktop mutation emphasis). */
+export const ANALYSIS_TOOL_CATALOG = `
+Analysis tools only (run_shell DISABLED):
+1) list_dir { "path":"..." }
+2) read_file { "path":"...", "maxLines":200 }
+3) search_code { "path":"...", "pattern":"..." }
+4) write_report { "name":"report.md", "content":"..." }  // output home only
+5) finish { "summary":"...", "success":true|false }
+Source project/spec paths are READ-ONLY. Write only under Documents/Sam-Harness.
 `;
 
 type ToolFn = (params: Record<string, unknown>) => Promise<ToolResult>;
@@ -592,6 +805,7 @@ const TOOLS: Record<string, ToolFn> = {
   list_dir: listDir,
   read_file: readFileTool,
   write_file: writeFileTool,
+  write_report: writeReportTool,
   write_excel: writeExcelTool,
   mkdir: mkdirTool,
   delete_path: deletePathTool,
@@ -600,6 +814,8 @@ const TOOLS: Record<string, ToolFn> = {
   open_path: openPathTool,
   screenshot: screenshotTool,
   run_shell: runShellTool,
+  search_code: searchCodeTool,
+  grep: searchCodeTool,
 };
 
 export async function executeTool(

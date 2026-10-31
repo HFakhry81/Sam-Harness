@@ -21,6 +21,8 @@ export type ToolName =
   | "finish"
   | "scan_evidence"
   | "write_report"
+  | "search_code"
+  | "grep"
   | "desktop_list_windows"
   | "desktop_focus_window"
   | "desktop_launch_app"
@@ -51,7 +53,14 @@ export type RoleCapabilities = {
   limits: string[];
 };
 
-const READ_TOOLS: ToolName[] = ["list_dir", "read_file", "finish", "scan_evidence"];
+const READ_TOOLS: ToolName[] = [
+  "list_dir",
+  "read_file",
+  "finish",
+  "scan_evidence",
+  "search_code",
+  "grep",
+];
 const REPORT_TOOLS: ToolName[] = [...READ_TOOLS, "write_report"];
 /** Phase 4 desktop operator tools (UIA / input / media) — still gated by approval matrix. */
 const DESKTOP_TOOLS: ToolName[] = [
