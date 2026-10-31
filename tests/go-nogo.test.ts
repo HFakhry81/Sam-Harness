@@ -3,6 +3,10 @@ import * as os from "os";
 import * as path from "path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { resolveImplementAuthorization } from "../src/agency/delivery/goNoGo.js";
+import {
+  __setPackWriteRootForTests,
+  packArtifactPath,
+} from "../src/lib/packWorkspace.js";
 
 const originalCwd = process.cwd();
 let tmp: string;
@@ -15,10 +19,12 @@ function wipeEnvGo() {
 beforeEach(() => {
   tmp = fs.mkdtempSync(path.join(os.tmpdir(), "sam-gng-"));
   process.chdir(tmp);
+  __setPackWriteRootForTests(tmp);
   wipeEnvGo();
 });
 
 afterEach(() => {
+  __setPackWriteRootForTests(null);
   process.chdir(originalCwd);
   fs.rmSync(tmp, { recursive: true, force: true });
   if (prevImplementGo === undefined) delete process.env.IMPLEMENT_GO;
@@ -30,7 +36,7 @@ describe("Go/No-Go gate", () => {
     const r = resolveImplementAuthorization([]);
     expect(r.allowed).toBe(false);
     expect(r.record.decision).toBe("PENDING");
-    expect(fs.existsSync(path.join(tmp, "go-nogo.json"))).toBe(true);
+    expect(fs.existsSync(packArtifactPath("go-nogo.json"))).toBe(true);
   });
 
   it("authorizes via --go CLI flag", () => {
