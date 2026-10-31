@@ -42,6 +42,11 @@ import {
 } from "./markdownNormalize.js";
 import type { ChecklistFinding } from "./auditChecklist.js";
 import {
+  repairStrategyDeterministically,
+  runStrategyConsistencyChecks,
+  type ConsistencyGrounding,
+} from "./strategyConsistency.js";
+import {
   appendGateEntry,
   currentRunId,
   ensureGatesForRun,
@@ -653,12 +658,52 @@ ${clip(state.evidenceMarkdown, 3000)}`;
     const targetRepo = state.targetRepo || process.cwd();
     const currency = state.groundedCurrency || "EGP";
 
+    const consistencyGrounding: ConsistencyGrounding = {
+      reqRows: (state.reqRows || []).map((r) => ({
+        id: r.id,
+        text: r.text,
+        status: r.status,
+        codePaths: r.codePaths,
+      })),
+      checklistFindings: findingsAsChecklist(state.findings || []),
+      coverageRatio: state.reqCoverage,
+      eligibleCount: state.eligibleCount,
+      codeBackedCount: state.codeBackedCount,
+      groundedCurrency: currency,
+      targetRepo,
+    };
+
+    // —— Deterministic pre-check BEFORE any LLM auditor call ——
+    let strategyForAudit = state.strategy || "";
+    let pre = runStrategyConsistencyChecks(strategyForAudit, consistencyGrounding);
+    if (!pre.ok) {
+      warn(
+        "Auditor",
+        `Deterministic consistency FAIL (${pre.issues.length}) — repairing without LLM loop`
+      );
+      strategyForAudit = repairStrategyDeterministically(
+        strategyForAudit,
+        consistencyGrounding
+      );
+      try {
+        fs.writeFileSync("ceo-draft.md", strategyForAudit, "utf-8");
+        fs.writeFileSync(
+          path.join(state.loopDir, `strategy-v${loopNo}-consistency-repair.md`),
+          strategyForAudit,
+          "utf-8"
+        );
+      } catch {
+        /* ignore */
+      }
+      pre = runStrategyConsistencyChecks(strategyForAudit, consistencyGrounding);
+    }
+
     // Keyword hits are informational only — gate uses task rubric
-    const keywordInfo = keywordHitInfo(userGoal, state.strategy || "");
-    const keywordFidelity = scoreGoalFidelity(userGoal, state.strategy || "");
+    const keywordInfo = keywordHitInfo(userGoal, strategyForAudit);
+    const keywordFidelity = scoreGoalFidelity(userGoal, strategyForAudit);
 
     const rubricCtx: RubricContext = {
-      strategy: state.strategy || "",
+      strategy: strategyForAudit,
       evidenceMarkdown: state.evidenceMarkdown,
       specsReadCount: state.specsReadCount || 0,
       reqRows: state.reqRows || [],
@@ -667,23 +712,52 @@ ${clip(state.evidenceMarkdown, 3000)}`;
     };
     const rubricPre = scoreGroundedAuditRubric(rubricCtx);
 
-    const bookingRules = bookingMode
-      ? `REJECT clinic-only framing, missing BookingTypes, missing token lifecycle, missing QR→invoice,
+    const clipOpts = {
+      reqRowCount: (state.reqRows || []).length,
+      findingCount: (state.findings || []).filter((f) => {
+        if (!f) return false;
+        if (/^CUR-OK$/i.test(String(f.id || ""))) return false;
+        return true;
+      }).length,
+    };
+
+    let auditReport = "";
+    let llmApproved = false;
+    const rejectReasons: string[] = [];
+
+    if (!pre.ok) {
+      // Still inconsistent after deterministic repair — reject without spending LLM
+      auditReport = [
+        `[REJECTED]`,
+        `### Issue 1`,
+        `- Rejection reason: Deterministic consistency checks failed after repair`,
+        `- Severity: Critical`,
+        `- How to fix: Align narrative with reqTrace RTM; remove invented statuses/coverage/deps; keep deterministic blocks intact`,
+        ...pre.issues.slice(0, 8).map((i, n) => `FIX ${n + 1}: [${i.kind}] ${i.detail}`),
+      ].join("\n");
+      rejectReasons.push(
+        ...pre.issues.slice(0, 6).map((i) => `${i.kind}: ${i.detail}`)
+      );
+      warn("Auditor", "Skipped LLM auditor — deterministic consistency still failing");
+    } else {
+      const bookingRules = bookingMode
+        ? `REJECT clinic-only framing, missing BookingTypes, missing token lifecycle, missing QR→invoice,
 or "will include later" language.`
-      : `REJECT topic drift away from ORIGINAL USER GOAL (e.g. BookingType/clinic blueprints when the goal was memory/Daily Ops/Control Plane UI).
+        : `REJECT topic drift away from ORIGINAL USER GOAL (e.g. BookingType/clinic blueprints when the goal was memory/Daily Ops/Control Plane UI).
 REJECT strategies that ignore the stated goal.`;
 
-    let auditReport = await invokeWithCloudFallback(
-      auditor,
-      auditorOpts,
-      `You are Agency Auditor (evidence-grounded + goal-fidelity).
+      auditReport = await invokeWithCloudFallback(
+        auditor,
+        auditorOpts,
+        `You are Agency Auditor (evidence-grounded + goal-fidelity).
 REJECT rubber-stamp checklists. Prefer citing EVIDENCE paths.
 REJECT invented files not in evidence.
 REJECT drafts that contain erasure placeholders or invent wrong currencies / nonexistent monorepo roots.
+Do NOT invent per-REQ statuses, coverage percentages, counts, or dependency lists — those are deterministic from reqTrace.
 ${bookingRules}
 
 APPROVE only if strategy is concrete, consistent with evidence (or honestly marks gaps),
-AND clearly answers ORIGINAL USER GOAL (specs cited, REQ statuses, stack conflict, P0/P1 findings, recommendations).
+AND clearly answers ORIGINAL USER GOAL (specs cited, REQ statuses from RTM, stack conflict, P0/P1 findings, recommendations).
 
 ORIGINAL USER GOAL:
 ${clip(userGoal, 2000)}
@@ -695,21 +769,20 @@ EVIDENCE PACK:
 ${clip(state.evidenceMarkdown, 5000)}
 
 STRATEGY-v${loopNo} (deterministic RTM/Key Findings summarized here; full blocks are in ceo-draft.md / written strategy — never reject solely for prompt truncation):
-${clipStrategyForPrompt(state.strategy || "", 5500)}
+${clipStrategyForPrompt(strategyForAudit, 5500, clipOpts)}
 
 Line 1: [APPROVED] or [REJECTED]
 ${REJECTION_FORMAT}`
-    );
+      );
+      llmApproved = parseApproved(auditReport);
+    }
 
-    let llmApproved = parseApproved(auditReport);
-
-    // Re-score rubric against current strategy (may have been cleaned in strategize)
+    // Re-score rubric against repaired strategy
     const rubric = scoreGroundedAuditRubric({
       ...rubricCtx,
-      strategy: state.strategy || "",
+      strategy: strategyForAudit,
     });
     let goalPassed = rubric.passed;
-    const rejectReasons: string[] = [];
 
     // Hard gate: grounded-audit rubric (NOT keyword count)
     if (llmApproved && !goalPassed) {
@@ -732,8 +805,8 @@ ${REJECTION_FORMAT}`
       goalPassed = false;
     }
 
-    // Detect residual invalid claims (strategize should have rewritten/deleted)
-    let strategyText = state.strategy || "";
+    // Detect residual invalid claims (strategize / consistency repair should have cleaned)
+    let strategyText = strategyForAudit;
     const groundedReqRows = (state.reqRows || []).map((r) => ({
       id: r.id,
       status: r.status,

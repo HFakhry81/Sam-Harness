@@ -271,9 +271,10 @@ export function runAuditChecklist(input: {
       id: `DEP-${specifier.replace(/[^\w]+/g, "_").slice(0, 40)}`,
       category: "dependency",
       severity: "P0",
-      summary: `Imported '${specifier}' is not listed in package.json dependencies`,
-      paths: files.slice(0, 4),
-      detail: "Install the dependency or remove the import before claiming the integration works.",
+      summary: `Missing dependency '${specifier}' in package.json (imported from ${files[0] || "source"})`,
+      // Always cite package.json so Key Findings carry a durable file citation
+      paths: ["package.json", ...files.slice(0, 3)],
+      detail: `Add '${specifier}' to package.json dependencies (or remove the import) before claiming the integration works.`,
     });
   }
 

@@ -119,14 +119,26 @@ export function verifyCitationsAgainstRepo(
     if (!/[\\/]/.test(raw) && !/\.\w+$/.test(raw) && !/^(packages|apps)/i.test(raw)) {
       continue;
     }
-    const resolved = path.isAbsolute(raw)
-      ? path.normalize(raw)
-      : path.normalize(path.join(root, raw));
+    // file:line or file:line:col citations resolve to the file
+    const fileOnly = raw.replace(/:\d+(?::\d+)?$/, "");
+    const resolved = path.isAbsolute(fileOnly)
+      ? path.normalize(fileOnly)
+      : path.normalize(path.join(root, fileOnly));
     let exists = false;
     try {
       exists = fs.existsSync(resolved);
     } catch {
       exists = false;
+    }
+    // Spec paths outside the target repo (absolute or workspace-relative) are OK
+    // when they exist on disk even if not under targetRepo
+    if (!exists && !path.isAbsolute(fileOnly)) {
+      try {
+        const alt = path.normalize(path.join(process.cwd(), fileOnly));
+        if (fs.existsSync(alt)) exists = true;
+      } catch {
+        /* ignore */
+      }
     }
     citations.push({ raw, resolved, exists });
   }
@@ -176,9 +188,13 @@ function extractInlineCitations(chunk: string): string[] {
   return out;
 }
 
+const REQ_STATUS_WORDS =
+  "implemented|partial|missing|contradicts|unverified|complete|done";
+
 /**
- * Reject "Implemented" claims whose only citations are spec files, or that
- * contradict the grounded RTM status for that REQ.
+ * Reject any narrative pairing of a REQ id (or feature name) with a status
+ * word that differs from the grounded RTM. Also reject Implemented claims
+ * that cite only spec files.
  */
 export function detectHallucinatedImplementedStatus(
   text: string,
@@ -189,11 +205,32 @@ export function detectHallucinatedImplementedStatus(
     groundedRows.map((r) => [r.id.toUpperCase(), r] as const)
   );
   const lines = String(text || "").split(/\r?\n/);
-  const implRe =
-    /\b(REQ[-_]?\d+)\b[\s\S]{0,120}?\b(implemented|complete|done)\b|\b(implemented|complete|done)\b[\s\S]{0,80}?\b(REQ[-_]?\d+)\b/i;
+  const statusRe = new RegExp(
+    `\\b(REQ[-_]?\\d+)\\b[\\s\\S]{0,120}?\\b(${REQ_STATUS_WORDS})\\b|\\b(${REQ_STATUS_WORDS})\\b[\\s\\S]{0,80}?\\b(REQ[-_]?\\d+)\\b`,
+    "i"
+  );
+  let inRtm = false;
+  let inStatusIndex = false;
 
   for (const line of lines) {
-    // Skip the deterministic RTM block we inject (authoritative)
+    if (/##\s*Requirements traceability/i.test(line)) {
+      inRtm = true;
+      inStatusIndex = false;
+      continue;
+    }
+    if (/##\s*REQ status index \(deterministic/i.test(line)) {
+      inStatusIndex = true;
+      inRtm = false;
+      continue;
+    }
+    if (/^##\s+/.test(line)) {
+      inRtm = false;
+      inStatusIndex = false;
+    }
+    if (inRtm || inStatusIndex) continue;
+    // Skip deterministic Key Findings bullets that echo RTM
+    if (/^\s*-\s*\[P[012]\]\s+REQ-\d+/i.test(line)) continue;
+    // Skip RTM table rows
     if (
       /^\|\s*REQ/i.test(line) &&
       /\|\s*(missing|partial|implemented|contradicts|unverified|n\/a)\s*\|/i.test(
@@ -202,50 +239,53 @@ export function detectHallucinatedImplementedStatus(
     ) {
       continue;
     }
-    const m = line.match(implRe);
-    if (!m) continue;
-    const reqId = (m[1] || m[4] || "").toUpperCase().replace(/_/g, "-");
-    if (!/^REQ-\d+/i.test(reqId) && !/^REQ\d+/i.test(reqId)) continue;
-    const normalized = reqId.includes("-")
-      ? reqId
-      : reqId.replace(/^REQ/i, "REQ-");
-    const statusWord = (m[2] || m[3] || "").toLowerCase();
-    if (!/implemented|complete|done/i.test(statusWord)) continue;
 
-    const grounded = byId.get(normalized) || byId.get(reqId);
-    if (grounded && !/^implemented$/i.test(grounded.status)) {
-      invalid.push({
-        kind: "invalid_req_status",
-        claim: `${normalized}=Implemented`,
-        detail: `REQ ${normalized} marked Implemented but grounded RTM status is ${grounded.status}`,
-        sentence: line.trim(),
-      });
-      continue;
-    }
+    const m = line.match(statusRe);
+    if (m) {
+      const reqId = (m[1] || m[4] || "").toUpperCase().replace(/_/g, "-");
+      if (!/^REQ-\d+/i.test(reqId) && !/^REQ\d+/i.test(reqId)) continue;
+      const normalized = reqId.includes("-")
+        ? reqId
+        : reqId.replace(/^REQ/i, "REQ-");
+      let statusWord = (m[2] || m[3] || "").toLowerCase();
+      if (/complete|done/i.test(statusWord)) statusWord = "implemented";
 
-    const cites = extractInlineCitations(line);
-    const codeCites = cites.filter((c) => !isSpecOnlyCitation(c));
-    if (cites.length > 0 && codeCites.length === 0) {
-      invalid.push({
-        kind: "invalid_req_status",
-        claim: `${normalized}=Implemented(spec-only)`,
-        detail: `Implemented status for ${normalized} cites only spec files (${cites.join(", ")}); require code evidence paths`,
-        sentence: line.trim(),
-      });
-      continue;
-    }
-    // "Implemented" with zero citations while grounded says missing/partial
-    if (
-      cites.length === 0 &&
-      grounded &&
-      /^(missing|partial|contradicts)$/i.test(grounded.status)
-    ) {
-      invalid.push({
-        kind: "invalid_req_status",
-        claim: `${normalized}=Implemented`,
-        detail: `Implemented claim for ${normalized} has no code citation; grounded status=${grounded.status}`,
-        sentence: line.trim(),
-      });
+      const grounded = byId.get(normalized) || byId.get(reqId);
+      if (grounded && statusWord !== grounded.status.toLowerCase()) {
+        invalid.push({
+          kind: "invalid_req_status",
+          claim: `${normalized}=${statusWord}`,
+          detail: `REQ ${normalized} marked ${statusWord} but grounded RTM status is ${grounded.status}`,
+          sentence: line.trim(),
+        });
+        continue;
+      }
+
+      if (/^implemented$/i.test(statusWord)) {
+        const cites = extractInlineCitations(line);
+        const codeCites = cites.filter((c) => !isSpecOnlyCitation(c));
+        if (cites.length > 0 && codeCites.length === 0) {
+          invalid.push({
+            kind: "invalid_req_status",
+            claim: `${normalized}=Implemented(spec-only)`,
+            detail: `Implemented status for ${normalized} cites only spec files (${cites.join(", ")}); require code evidence paths`,
+            sentence: line.trim(),
+          });
+          continue;
+        }
+        if (
+          cites.length === 0 &&
+          grounded &&
+          /^(missing|partial|contradicts)$/i.test(grounded.status)
+        ) {
+          invalid.push({
+            kind: "invalid_req_status",
+            claim: `${normalized}=Implemented`,
+            detail: `Implemented claim for ${normalized} has no code citation; grounded status=${grounded.status}`,
+            sentence: line.trim(),
+          });
+        }
+      }
     }
   }
   return invalid;

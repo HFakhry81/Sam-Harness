@@ -8,6 +8,7 @@ import type { SpecRequirement } from "./specIngest.js";
 import type { RepoIndexResult } from "./repoIndex.js";
 import type { ChecklistFinding } from "./auditChecklist.js";
 import {
+  featureFamilySymbols,
   hasSymbolOrHandlerEvidence,
   isAppSourcePath,
   isJunkDirName,
@@ -153,7 +154,7 @@ function scoreAgainstRepo(
       if (isAppSourcePath(rel)) {
         keywordHits += 1;
         evidenceNotes.push(
-          `non-feature path ${rel} (nav/mock/constants) — at most partial`
+          `non-feature path ${rel} (nav/mock/constants) — not implementation evidence`
         );
       }
       return;
@@ -235,6 +236,20 @@ function scoreAgainstRepo(
       evidenceNotes: [
         ...evidenceNotes.slice(0, 4),
         "no app-source evidence found",
+      ],
+    };
+  }
+
+  // Feature-family REQs (OCR/voice): without family APIs → missing.
+  // Screen names / keyword-only registration never elevate to partial.
+  const family = featureFamilySymbols(req.text);
+  if (family && symbolHits === 0) {
+    return {
+      status: "missing",
+      codePaths: [],
+      evidenceNotes: [
+        ...evidenceNotes.slice(0, 4),
+        "feature-family REQ without camera/ocr/speech APIs — missing (screen names do not count)",
       ],
     };
   }

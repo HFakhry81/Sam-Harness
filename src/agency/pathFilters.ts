@@ -103,24 +103,18 @@ export function isAppSourcePath(relPath: string): boolean {
   return true;
 }
 
-/** Spec section headings that are not actionable requirements. */
+/**
+ * Pure document-structure headings only (not feature/architecture/database/tech-stack).
+ * Those remain real REQs eligible for coverage.
+ */
 export function isSpecHeadingNotRequirement(text: string): boolean {
   const t = String(text || "").replace(/\s+/g, " ").trim();
   if (!t) return true;
+  // ONLY pure document-structure headings — never tech/architecture/feature sections
   if (
-    /^(project\s+overview|functional\s+requirements(\s+analysis)?|tech(nical)?\s+stack|introduction|overview|scope|glossary|appendix|table\s+of\s+contents|executive\s+summary|background|architecture\s+overview|system\s+overview|document\s+control|references|assumptions|constraints|non-?functional\s+requirements|requirements\s+analysis)$/i.test(
+    /^(project\s+overview|introduction|overview|scope|glossary|appendix|table\s+of\s+contents|executive\s+summary|background|document\s+control|references|assumptions|document\s+history|revision\s+history|about\s+this\s+document|preface|acknowledgements?)$/i.test(
       t
     )
-  ) {
-    return true;
-  }
-  // Title-case short label without obligation verbs
-  if (
-    t.length <= 60 &&
-    !/\b(must|should|shall|will|need to|required|support|provide|implement|wire|integrate)\b/i.test(
-      t
-    ) &&
-    /^[A-Z][\w\s/&-]{2,58}$/.test(t)
   ) {
     return true;
   }
@@ -133,11 +127,12 @@ export function isSpecHeadingNotRequirement(text: string): boolean {
  */
 export function featureFamilySymbols(reqText: string): RegExp | null {
   const t = String(reqText || "").toLowerCase();
+  // Require real APIs — bare "ocr"/"voice"/"receipt" screen labels do NOT count
   if (/\bocr\b|receipt|document\s*scan|scan\s+receipt|camera\s+scan/.test(t)) {
-    return /\b(ocr|tesseract|mlkit|vision|receipt|document.?scan|scan(?:ner|ning)?|expo-camera|barcode|image.?pick|launchCamera|takePicture)\b/i;
+    return /\b(tesseract|mlkit|vision|expo-camera|barcode|image.?pick|launchCamera|takePicture|DocumentScanner|recognizeText|TextRecognition|CameraView|expo-image-picker)\b/i;
   }
   if (/\bvoice\b|speech|audio\s+record|microphone|dictation/.test(t)) {
-    return /\b(voice|speech|stt|tts|recognition|microphone|audio.?record|expo-av|Speech|startRecording|dictation)\b/i;
+    return /\b(stt|tts|expo-av|Speech\.|startRecording|Audio\.Recording|speech.?recognition|dictation|MediaRecorder|expo-speech|@react-native-voice)\b/i;
   }
   return null;
 }

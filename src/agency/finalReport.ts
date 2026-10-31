@@ -6,6 +6,127 @@ import type { AgencyVerdict } from "./agencyVerdict.js";
 import type { ChecklistFinding } from "./auditChecklist.js";
 import { formatGroundedCoverageLine } from "./reqTrace.js";
 
+const STATUS_WORDS =
+  "implemented|partial|missing|contradicts|unverified|complete|done|n\\/a";
+
+/** Strip model-authored per-REQ / feature status, coverage, counts, dependency lists. */
+export function stripModelOwnedClaims(text: string): string {
+  let body = stripTruncationMarkers(stripModelCoverageClaims(text));
+  body = body.replace(
+    /##\s*Deterministic blocks\b[\s\S]*?(?=\n##\s|\n#\s|$)/gi,
+    ""
+  );
+  body = body.replace(/^\s*-\s*RTM rows in file:\s*\d+\s*$/gim, "");
+  body = body.replace(/^\s*-\s*Key Findings bullets in file:\s*\d+\s*$/gim, "");
+  body = body.replace(
+    /<!--\s*PROMPT_ONLY_DETERMINISTIC_SUMMARY[\s\S]*?(?=\n##\s|\n#\s|$)/gi,
+    ""
+  );
+
+  const lines = body.split(/\r?\n/);
+  const out: string[] = [];
+  let inRtm = false;
+  let inStatusIndex = false;
+  let inKeyFindings = false;
+
+  for (const line of lines) {
+    if (/##\s*Requirements traceability/i.test(line)) {
+      inRtm = true;
+      inStatusIndex = false;
+      inKeyFindings = false;
+      out.push(line);
+      continue;
+    }
+    if (/##\s*REQ status index \(deterministic/i.test(line)) {
+      inStatusIndex = true;
+      inRtm = false;
+      inKeyFindings = false;
+      continue;
+    }
+    if (/##\s*Key Findings\b/i.test(line)) {
+      inKeyFindings = true;
+      inRtm = false;
+      inStatusIndex = false;
+      continue;
+    }
+    if (/^##\s+/.test(line)) {
+      inRtm = false;
+      inStatusIndex = false;
+      inKeyFindings = false;
+      out.push(line);
+      continue;
+    }
+    if (inRtm) {
+      out.push(line);
+      continue;
+    }
+    if (inStatusIndex || inKeyFindings) continue;
+
+    if (
+      new RegExp(
+        `\\bREQ[-_]?\\d+\\b[\\s\\S]{0,100}?\\b(${STATUS_WORDS})\\b`,
+        "i"
+      ).test(line) ||
+      new RegExp(
+        `\\b(${STATUS_WORDS})\\b[\\s\\S]{0,80}?\\bREQ[-_]?\\d+\\b`,
+        "i"
+      ).test(line)
+    ) {
+      continue;
+    }
+    if (
+      /\b(ocr|voice|speech|receipt\s*scan)\b/i.test(line) &&
+      new RegExp(`\\b(${STATUS_WORDS})\\b`, "i").test(line)
+    ) {
+      continue;
+    }
+    if (
+      /deterministic\s+coverage|coverage\s*[:=]|implemented\s*=\s*\d+|missing\s*=\s*\d+/i.test(
+        line
+      )
+    ) {
+      continue;
+    }
+    if (
+      /^\s*[-*]\s*(missing\s+)?(dependencies?|deps?)\s*:/i.test(line) ||
+      /^\s*[-*]\s*@[\w.-]+\/[\w.-]+\s+(missing|not\s+in|absent)/i.test(line)
+    ) {
+      continue;
+    }
+    out.push(line);
+  }
+  return out.join("\n").replace(/\n{3,}/g, "\n\n").trim() + "\n";
+}
+
+/** Deterministic REQ status index generated from reqTrace (not the model). */
+export function buildDeterministicReqStatusIndex(
+  reqRows: FinalReportEvidence["reqRows"]
+): string {
+  const rows = reqRows || [];
+  if (!rows.length) {
+    return [
+      `## REQ status index (deterministic — from reqTrace)`,
+      ``,
+      `_No REQs ingested._`,
+      ``,
+    ].join("\n");
+  }
+  return [
+    `## REQ status index (deterministic — from reqTrace)`,
+    ``,
+    `Do NOT invent per-REQ statuses, coverage percentages, counts, or dependency lists in narrative.`,
+    `Authoritative statuses are below and in the RTM table.`,
+    ``,
+    ...rows.map((r) => {
+      const text = String(r.text || "")
+        .replace(/\s+/g, " ")
+        .slice(0, 80);
+      return `- ${r.id}: **${r.status}** — ${text}`;
+    }),
+    ``,
+  ].join("\n");
+}
+
 export type FinalReportEvidence = {
   verdict: AgencyVerdict;
   checklistFindings: ChecklistFinding[];
@@ -308,11 +429,27 @@ export function buildDeterministicKeyFindingsBlock(input: {
   groundedCurrency?: string;
 }): string {
   const issues = selectFailedChecklistFindings(input.checklistFindings || []);
+  // P0 dependencies first so missing package.json deps are never buried
+  const ordered = [...issues].sort((a, b) => {
+    const aDep =
+      a.category === "dependency" || /^DEP-/i.test(a.id) ? 0 : a.severity === "P0" ? 1 : 2;
+    const bDep =
+      b.category === "dependency" || /^DEP-/i.test(b.id) ? 0 : b.severity === "P0" ? 1 : 2;
+    if (aDep !== bDep) return aDep - bDep;
+    return String(a.id).localeCompare(String(b.id));
+  });
   const reqs = selectUnmetReqRows(input.reqRows || []);
   const findingLines: string[] = [];
-  for (const f of issues) {
+  for (const f of ordered) {
+    const paths = [...(f.paths || [])];
+    if (
+      (f.category === "dependency" || /^DEP-/i.test(f.id)) &&
+      !paths.some((p) => /package\.json/i.test(p))
+    ) {
+      paths.unshift("package.json");
+    }
     findingLines.push(
-      `- [${f.severity}] ${f.id} (${f.category}): ${f.summary} — ${citePaths(f.paths || [])}`
+      `- [${f.severity}] ${f.id} (${f.category}): ${f.summary} — ${citePaths(paths)}`
     );
   }
   for (const r of reqs) {
@@ -338,7 +475,7 @@ export function buildDeterministicKeyFindingsBlock(input: {
 
 /** Detect start of a deterministic injected block. */
 export function isDeterministicStrategySection(headingLine: string): boolean {
-  return /##\s*(Requirements traceability \(deterministic\)|Key Findings)\b/i.test(
+  return /##\s*(Requirements traceability \(deterministic\)|Key Findings)/i.test(
     headingLine
   );
 }
@@ -347,11 +484,18 @@ export function isDeterministicStrategySection(headingLine: string): boolean {
  * Clip strategy for LLM prompts without truncating deterministic RTM / Key Findings.
  * Those blocks are replaced by a short count summary in the prompt; written files
  * must always keep the full blocks (never append "...(truncated)" into them).
+ *
+ * Prefer `opts.reqRowCount` / `opts.findingCount` from the final rendered evidence
+ * so the prompt footer never says "0" while the written table has rows.
  */
-export function clipStrategyForPrompt(strategy: string, max = 6000): string {
+export function clipStrategyForPrompt(
+  strategy: string,
+  max = 6000,
+  opts?: { reqRowCount?: number; findingCount?: number }
+): string {
   const text = String(strategy || "");
   const rtm = text.match(
-    /##\s*Requirements traceability \(deterministic\)\b[\s\S]*?(?=\n##\s(?!Requirements traceability)|\n#\s|$)/i
+    /##\s*Requirements traceability \(deterministic\)[\s\S]*?(?=\n##\s(?!Requirements traceability)|\n#\s|$)/i
   )?.[0];
   const findings = text.match(
     /##\s*Key Findings\b[\s\S]*?(?=\n##\s(?!Key Findings)|\n#\s|$)/i
@@ -359,24 +503,37 @@ export function clipStrategyForPrompt(strategy: string, max = 6000): string {
 
   let narrative = text
     .replace(
-      /##\s*Requirements traceability \(deterministic\)\b[\s\S]*?(?=\n##\s(?!Requirements traceability)|\n#\s|$)/gi,
+      /##\s*REQ status index \(deterministic[\s\S]*?(?=\n##\s|\n#\s|$)/gi,
+      ""
+    )
+    .replace(
+      /##\s*Requirements traceability \(deterministic\)[\s\S]*?(?=\n##\s(?!Requirements traceability)|\n#\s|$)/gi,
       ""
     )
     .replace(/##\s*Key Findings\b[\s\S]*?(?=\n##\s(?!Key Findings)|\n#\s|$)/gi, "")
+    .replace(/##\s*Deterministic blocks\b[\s\S]*?(?=\n##\s|\n#\s|$)/gi, "")
     .replace(/\n{3,}/g, "\n\n")
     .trim();
 
-  const reqRows = (rtm || "").match(/^\|\s*REQ/gim)?.length || 0;
-  const findingBullets = (findings || "").match(/^\s*-\s+\[/gm)?.length || 0;
+  const parsedRows = (rtm || "").match(/\|\s*REQ[-_]?\d+/gi)?.length || 0;
+  const reqRows =
+    typeof opts?.reqRowCount === "number" && opts.reqRowCount >= 0
+      ? opts.reqRowCount
+      : parsedRows;
+  const parsedFindings = (findings || "").match(/^\s*-\s+\[/gm)?.length || 0;
+  const findingBullets =
+    typeof opts?.findingCount === "number" && opts.findingCount >= 0
+      ? opts.findingCount
+      : parsedFindings;
+  // Prompt-only summary — never copy into written pack files
   const summary = [
-    `## Deterministic blocks (full text is in the written strategy file — do not invent statuses)`,
-    `- RTM rows in file: ${reqRows}`,
-    `- Key Findings bullets in file: ${findingBullets}`,
-    `- Coverage line: ${(rtm || "").match(/Coverage[^\n]*/)?.[0] || "(see written file)"}`,
+    `<!-- PROMPT_ONLY_DETERMINISTIC_SUMMARY: do not copy into written strategy -->`,
+    `Deterministic RTM/Key Findings live in the written strategy file — do not invent statuses, coverage, counts, or dependency lists.`,
+    `RTM rows (grounded): ${reqRows}; Key Findings bullets (grounded): ${findingBullets}`,
+    `Coverage line: ${(rtm || "").match(/Coverage[^\n]*/)?.[0] || "(see written file)"}`,
   ].join("\n");
 
   if (narrative.length > max) {
-    // Prompt-only marker — must never be copied into written pack files
     narrative =
       narrative.slice(0, max) +
       "\n<!-- PROMPT_NARRATIVE_CLIPPED: full text remains in written strategy file -->";
@@ -399,10 +556,14 @@ export function injectGroundedStrategyBlocks(
     groundedCurrency?: string;
   }
 ): string {
-  let body = String(strategy || "");
-  body = stripTruncationMarkers(body);
-  // Strip model-authored RTM / Key Findings so deterministic blocks win
+  // Model must not own per-REQ status, coverage, counts, or dependency lists
+  let body = stripModelOwnedClaims(String(strategy || ""));
+  // Strip any leftover model RTM / Key Findings / status index / prompt footers
   body = body
+    .replace(
+      /##\s*REQ status index \(deterministic[\s\S]*?(?=\n##\s|\n#\s|$)/gi,
+      ""
+    )
     .replace(
       /##\s*Requirements traceability\b[\s\S]*?(?=\n##\s|\n#\s|$)/gi,
       ""
@@ -412,10 +573,12 @@ export function injectGroundedStrategyBlocks(
       /##\s*REQ(?:uirements)?\s+traceability\b[\s\S]*?(?=\n##\s|\n#\s|$)/gi,
       ""
     )
+    .replace(/##\s*Deterministic blocks\b[\s\S]*?(?=\n##\s|\n#\s|$)/gi, "")
     .replace(/\n{3,}/g, "\n\n")
     .trim();
   body = stripModelCoverageClaims(body);
 
+  const statusIndex = buildDeterministicReqStatusIndex(input.reqRows || []);
   const rtm = buildDeterministicRtmBlock({
     reqRows: input.reqRows || [],
     coverageRatio: input.coverageRatio,
@@ -428,7 +591,16 @@ export function injectGroundedStrategyBlocks(
     groundedCurrency: input.groundedCurrency,
   });
 
-  const parts = [body, ``, rtm.trim(), ``, findings.trim(), ``];
+  const parts = [
+    body,
+    ``,
+    statusIndex.trim(),
+    ``,
+    rtm.trim(),
+    ``,
+    findings.trim(),
+    ``,
+  ];
   return stripTruncationMarkers(
     parts.join("\n").replace(/\n{3,}/g, "\n\n").trim() + "\n"
   );
