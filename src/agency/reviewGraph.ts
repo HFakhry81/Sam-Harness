@@ -19,11 +19,18 @@ import {
   scoreGoalFidelity,
   GROUNDED_FIDELITY_THRESHOLD,
 } from "./goalFidelity.js";
-import { verifyCitationsAgainstRepo } from "./claimVerify.js";
+import {
+  sanitizeDraftClaims,
+  verifyCitationsAgainstRepo,
+} from "./claimVerify.js";
 import {
   chooseNonDegenerateDraft,
   detectRepetition,
 } from "./repetitionGuard.js";
+import {
+  detectStall,
+  MAX_CONSECUTIVE_STALLS,
+} from "./stallDetect.js";
 import { learningContextBlock } from "../controlplane/projectMemory.js";
 import { getCheckpointer } from "../lib/db/checkpointer.js";
 import { getPersistence } from "../lib/db/index.js";
@@ -56,12 +63,14 @@ export function parseApproved(report: string): boolean {
   return false;
 }
 
-/** LangGraph conditional edge after audit — caps remediations at MAX_LOOPS. */
+/** LangGraph conditional edge after audit — caps remediations at MAX_LOOPS / stall. */
 export function routeAfterAudit(state: {
   auditPassed?: boolean;
   loop?: number;
+  stallCount?: number;
 }): "approved" | "failed" | "remediate" {
   if (state.auditPassed) return "approved";
+  if ((state.stallCount || 0) >= MAX_CONSECUTIVE_STALLS) return "failed";
   if ((state.loop || 0) >= MAX_LOOPS) return "failed";
   return "remediate";
 }
@@ -123,12 +132,15 @@ export const ReviewState = Annotation.Root({
   targetRepo: Annotation<string>,
   /** 0..1 from evidence REQ matrix; 1 when no REQs extracted. */
   reqCoverage: Annotation<number>,
+  groundedCurrency: Annotation<string>,
   strategy: Annotation<string>,
   auditReport: Annotation<string>,
   loop: Annotation<number>,
   auditPassed: Annotation<boolean>,
   goalPassed: Annotation<boolean>,
   goalFidelityScore: Annotation<number>,
+  /** Consecutive no-progress (identical/near-identical) strategy drafts. */
+  stallCount: Annotation<number>,
   history: Annotation<string[]>({
     reducer: (a, b) => a.concat(b),
     default: () => [],
@@ -162,7 +174,28 @@ function buildGraph() {
     const userGoal = state.userGoal || extractUserGoal(state.brief);
     const bookingMode = goalWantsBookingBlueprint(userGoal);
     const learned = learningContextBlock(process.cwd(), 10, 5);
+    const currency = state.groundedCurrency || "EGP";
+    const targetRepo = state.targetRepo || process.cwd();
+    let stallCount = state.stallCount || 0;
     let strategy: string;
+
+    // Stall-aware model opts: raise temperature / force cloud on prior stall
+    const stalledBefore = stallCount > 0;
+    const activeOpts = {
+      ...strategistOpts,
+      temperature: stalledBefore ? 0.45 : strategistOpts.temperature,
+      prefersCloud: true as boolean | undefined,
+      explicitComplexity: stalledBefore || undefined,
+    };
+    const activeModel = stalledBefore
+      ? makeSpecialistModel({
+          ...activeOpts,
+          prefersCloud: true,
+          explicitComplexity: true,
+          forceLocal: false,
+        })
+      : strategist;
+
     if (loopNo === 1) {
       const sections = bookingMode
         ? `Required sections for THIS booking/clinic product goal:
@@ -174,17 +207,18 @@ function buildGraph() {
 ## Delivery phases (handoff; do not claim already shipped)`
         : `Required sections for THIS user goal (do NOT invent BookingType/clinic content unless the goal asks for it):
 ## Direct answer to ORIGINAL USER GOAL (must be the main body)
-## Current state vs gaps (cite evidence paths)
-## Concrete recommendations / next actions
+## Current state vs gaps (cite ONLY real evidence paths — never packages/ or apps/web unless they exist)
+## Currency/locale MUST use ${currency} (never invent SAR)
+## Concrete recommendations / next actions for failing checklist items
 ## Risks & verification
 ## Delivery / handoff notes`;
 
       strategy = await invokeWithCloudFallback(
-        strategist,
-        strategistOpts,
+        activeModel,
+        activeOpts,
         `You are Agency Strategist. Write a COMPLETE concrete strategy (max 1400 words) that ANSWERS the ORIGINAL USER GOAL.
 Not intentions — deliverables that match the goal.
-If the goal asks for a status report on memory/Daily Ops/UI artifacts, write THAT report — do not pivot to unrelated product blueprints.
+Cite ONLY paths that appear in EVIDENCE. Currency=${currency}.
 Obey PROJECT MEMORY lessons when they apply (do not repeat known failures).
 
 ${sections}
@@ -200,23 +234,33 @@ ${clip(state.brief, 8000)}`
       );
     } else {
       const fixes = extractFixes(state.auditReport || "");
+      const checklistItems = [
+        `You MUST address EVERY item below. Mark each as DONE or GAP with a real path citation.`,
+        `1. Remove/replace any SAR or non-${currency} currency claims with ${currency}.`,
+        `2. Remove citations to nonexistent paths (packages/, apps/web, etc.).`,
+        `3. Cover failing REQs / checklist items from the rejection (auth wiring, mock data, missing deps, stack conflict, UI handlers without onPress).`,
+        `4. Do NOT copy the prior strategy verbatim — change structure and fill the gaps.`,
+        ...fixes.map((f, i) => `FIX ${i + 1}: ${f}`),
+      ];
       const briefRem = [
-        `Merge strategy-v${loopNo - 1} with ALL rejection fixes into FULL strategy-v${loopNo}.`,
-        `Add section "Merged fixes from rejection-v${loopNo - 1}".`,
-        `ORIGINAL USER GOAL (must remain the primary subject — do not pivot to BookingType unless goal asks):`,
+        `REMEDIATION CHECKLIST for strategy-v${loopNo} (item-by-item — do not skip):`,
+        ...checklistItems,
+        ``,
+        `ORIGINAL USER GOAL:`,
         clip(userGoal, 2000),
         learned ? `PROJECT MEMORY / LESSONS:\n${clip(learned, 2000)}` : "",
-        `MUST-FIX:`,
-        ...fixes.map((f, i) => `${i + 1}. ${f}`),
         ``,
-        `PRIOR STRATEGY:`,
-        clip(state.strategy, 7000),
+        `FULL REJECTION REPORT:`,
+        clip(state.auditReport, 4000),
         ``,
-        `REJECTION:`,
-        clip(state.auditReport, 3500),
+        `PRIOR STRATEGY (do not reproduce unchanged):`,
+        clip(state.strategy, 5000),
         ``,
-        `EVIDENCE:`,
-        clip(state.evidenceMarkdown, 3000),
+        `EVIDENCE (cite only these real paths):`,
+        clip(state.evidenceMarkdown, 4000),
+        stalledBefore
+          ? `\nSTALL DETECTED on prior loop — you MUST produce a materially different draft targeting only failing REQs and missing citations.\n`
+          : "",
       ]
         .filter(Boolean)
         .join("\n");
@@ -225,10 +269,59 @@ ${clip(state.brief, 8000)}`
         briefRem,
         "utf-8"
       );
-      strategy = await invokeWithCloudFallback(strategist, strategistOpts, briefRem);
+      strategy = await invokeWithCloudFallback(activeModel, activeOpts, briefRem);
     }
 
-    // Repetition guard: regenerate once with stronger (cloud) model, else keep prior good draft
+    // Stall detector vs previous draft
+    const stall = detectStall(state.strategy, strategy);
+    if (stall.stalled && loopNo > 1) {
+      stallCount += 1;
+      warn(
+        "Strategist",
+        `Stall detected (${stall.reason}) — consecutive=${stallCount}/${MAX_CONSECUTIVE_STALLS}`
+      );
+      // One forced rewrite with higher temperature / cloud
+      try {
+        const antiStall = makeSpecialistModel({
+          ...strategistOpts,
+          temperature: 0.55,
+          prefersCloud: true,
+          explicitComplexity: true,
+          forceLocal: false,
+        });
+        const rewrite = await invokeWithCloudFallback(
+          antiStall,
+          { ...strategistOpts, temperature: 0.55 },
+          `STALL BREAKER: Prior draft was ${stall.reason}. Rewrite from scratch.
+Address ONLY failing items from this rejection checklist:
+${clip(state.auditReport || "", 3500)}
+
+Use currency=${currency}. Cite only real paths from evidence.
+EVIDENCE:
+${clip(state.evidenceMarkdown, 3500)}
+GOAL:
+${clip(userGoal, 1500)}`
+        );
+        const stall2 = detectStall(strategy, rewrite);
+        if (!stall2.stalled) {
+          strategy = rewrite;
+          // Recovered this loop — do not count as consecutive stall if rewrite succeeded
+          stallCount = Math.max(0, stallCount - 1);
+          ok("Strategist", "Stall broken with alternate draft");
+        } else {
+          strategy =
+            rewrite +
+            `\n\n<!-- STALL_FLAG: ${stall.reason}; consecutive=${stallCount} -->\n`;
+        }
+      } catch (e) {
+        strategy +=
+          `\n\n<!-- STALL_FLAG: ${stall.reason}; rewrite failed: ${String((e as Error)?.message || e).slice(0, 100)} -->\n`;
+      }
+    } else if (loopNo > 1) {
+      stallCount = 0;
+    }
+
+    // Repetition guard
     const priorGood =
       loopNo > 1 && state.strategy && detectRepetition(state.strategy).ok
         ? state.strategy
@@ -244,15 +337,13 @@ ${clip(state.brief, 8000)}`
           prefersCloud: true,
           explicitComplexity: true,
           forceLocal: false,
-          temperature: 0.1,
+          temperature: 0.2,
         });
-        const retryPrompt = `Rewrite the strategy WITHOUT repeated lines or copied paragraphs. Keep all substance; vary wording.
-PRIOR DRAFT (degenerate — do not copy loops):
+        const retryPrompt = `Rewrite the strategy WITHOUT repeated lines. Keep substance; vary wording. Currency=${currency}.
+PRIOR DRAFT (degenerate):
 ${clip(strategy, 4000)}
-
-ORIGINAL USER GOAL:
+GOAL:
 ${clip(userGoal, 2000)}
-
 EVIDENCE:
 ${clip(state.evidenceMarkdown, 3000)}`;
         const regenerated = await invokeWithCloudFallback(
@@ -262,37 +353,38 @@ ${clip(state.evidenceMarkdown, 3000)}`;
         );
         const chosen = chooseNonDegenerateDraft(regenerated, priorGood || strategy);
         strategy = chosen.text;
-        if (chosen.usedFallback) {
-          warn(
-            "Strategist",
-            `Regenerate still degenerate — fell back to prior good draft and flagged`
-          );
-          strategy =
-            strategy +
-            `\n\n<!-- REPETITION_FLAG: regenerate failed; used prior non-degenerate draft -->\n`;
-        } else if (!detectRepetition(strategy).ok && priorGood) {
-          strategy =
-            priorGood +
-            `\n\n<!-- REPETITION_FLAG: both drafts degenerate; kept prior -->\n`;
-        } else if (!detectRepetition(strategy).ok) {
-          strategy =
-            strategy +
-            `\n\n<!-- REPETITION_FLAG: degenerate output kept after one regenerate -->\n`;
+        if (chosen.usedFallback || !detectRepetition(strategy).ok) {
+          strategy +=
+            `\n\n<!-- REPETITION_FLAG: regenerate incomplete -->\n`;
         }
       } catch (e) {
         const chosen = chooseNonDegenerateDraft(strategy, priorGood);
         strategy = chosen.text;
-        if (chosen.usedFallback || !detectRepetition(strategy).ok) {
-          strategy +=
-            `\n\n<!-- REPETITION_FLAG: ${String((e as Error)?.message || e).slice(0, 120)} -->\n`;
-        }
+        strategy +=
+          `\n\n<!-- REPETITION_FLAG: ${String((e as Error)?.message || e).slice(0, 120)} -->\n`;
       }
+    }
+
+    // Claim sanitizer: strip nonexistent paths + wrong currency
+    const sanitized = sanitizeDraftClaims(strategy, targetRepo, currency);
+    strategy = sanitized.text;
+    if (sanitized.flags.length) {
+      warn("Strategist", `Claim sanitizer: ${sanitized.flags.join("; ")}`);
+    }
+
+    if (stallCount >= MAX_CONSECUTIVE_STALLS) {
+      strategy +=
+        `\n\n<!-- STRUCTURED_STALL_FAILURE: ${MAX_CONSECUTIVE_STALLS} consecutive no-progress loops — stopping remediation early -->\n`;
+      warn(
+        "Strategist",
+        `Early stop: ${MAX_CONSECUTIVE_STALLS} consecutive stalls — structured failure`
+      );
     }
 
     fs.writeFileSync(path.join(state.loopDir, `strategy-v${loopNo}.md`), strategy, "utf-8");
     fs.writeFileSync("ceo-draft.md", strategy, "utf-8");
-    ok("Strategist", `strategy-v${loopNo}.md`);
-    return { strategy, loop: loopNo };
+    ok("Strategist", `strategy-v${loopNo}.md (stallCount=${stallCount})`);
+    return { strategy, loop: loopNo, stallCount };
   };
 
   const audit = async (state: ReviewStateType) => {
@@ -368,19 +460,52 @@ ${REJECTION_FORMAT}`
       goalPassed = false;
     }
 
-    // Hard gate: cited paths must exist
+    // Hard gate: cited paths must exist (after sanitizer still)
     const targetRepo = state.targetRepo || process.cwd();
-    const cites = verifyCitationsAgainstRepo(state.strategy || "", targetRepo);
+    const currency = state.groundedCurrency || "EGP";
+    const sanitized = sanitizeDraftClaims(state.strategy || "", targetRepo, currency);
+    if (sanitized.removedPaths.length || sanitized.removedCurrencies.length) {
+      // Persist sanitized draft for pack/downstream
+      try {
+        fs.writeFileSync("ceo-draft.md", sanitized.text, "utf-8");
+        fs.writeFileSync(
+          path.join(state.loopDir, `strategy-v${loopNo}-sanitized.md`),
+          sanitized.text,
+          "utf-8"
+        );
+      } catch {
+        /* ignore */
+      }
+    }
+    const cites = verifyCitationsAgainstRepo(sanitized.text, targetRepo);
     if (llmApproved && !cites.ok) {
       rejectReasons.push(cites.reason);
       llmApproved = false;
       goalPassed = false;
     }
+    if (llmApproved && sanitized.removedCurrencies.length) {
+      rejectReasons.push(
+        `Wrong currency claims sanitized (${sanitized.removedCurrencies
+          .slice(0, 4)
+          .join(",")}) — must use ${currency}`
+      );
+      llmApproved = false;
+      goalPassed = false;
+    }
 
     // Repetition / degeneration on strategy
-    const rep = detectRepetition(state.strategy || "");
+    const rep = detectRepetition(sanitized.text);
     if (llmApproved && !rep.ok) {
       rejectReasons.push(`Strategy degeneration: ${rep.reason}`);
+      llmApproved = false;
+      goalPassed = false;
+    }
+
+    // Stall early-stop note in audit
+    if ((state.stallCount || 0) >= MAX_CONSECUTIVE_STALLS) {
+      rejectReasons.push(
+        `Remediation stalled (${state.stallCount} consecutive identical/near-identical drafts)`
+      );
       llmApproved = false;
       goalPassed = false;
     }
@@ -504,6 +629,7 @@ export async function runReviewGraph(input: {
   targetRepo?: string;
   /** 0..1 REQ coverage from evidence matrix; default 1 when unknown. */
   reqCoverage?: number;
+  groundedCurrency?: string;
   /** LangGraph thread id — stable across resume after crash/restart */
   threadId?: string;
   /** When true, resume from last checkpoint instead of fresh state */
@@ -518,6 +644,7 @@ export async function runReviewGraph(input: {
   loop: number;
   history: string[];
   threadId: string;
+  stallCount?: number;
 }> {
   fs.mkdirSync(input.loopDir, { recursive: true });
   getPersistence();
@@ -577,12 +704,14 @@ export async function runReviewGraph(input: {
           targetRepo: input.targetRepo || process.cwd(),
           reqCoverage:
             typeof input.reqCoverage === "number" ? input.reqCoverage : 1,
+          groundedCurrency: input.groundedCurrency || "EGP",
           strategy: "",
           auditReport: "",
           loop: 0,
           auditPassed: false,
           goalPassed: false,
           goalFidelityScore: 0,
+          stallCount: 0,
           history: [],
         },
         config
@@ -608,6 +737,7 @@ export async function runReviewGraph(input: {
     loop: out.loop || 0,
     history: out.history || [],
     threadId,
+    stallCount: Number(out.stallCount) || 0,
   };
 }
 

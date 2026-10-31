@@ -25,6 +25,10 @@ import {
   localeCurrencyMarkdown,
   type LocaleCurrencyProfile,
 } from "./localeCurrency.js";
+import {
+  runAuditChecklist,
+  type AuditChecklistResult,
+} from "./auditChecklist.js";
 
 const require = createRequire(import.meta.url);
 
@@ -36,6 +40,7 @@ export type EvidencePackV2 = EvidencePack & {
   repoIndex?: RepoIndexResult;
   reqMatrix?: ReqTraceMatrix;
   localeCurrency?: LocaleCurrencyProfile;
+  checklist?: AuditChecklistResult;
   json: object;
 };
 
@@ -207,6 +212,7 @@ function buildMarkdown(input: {
   repoIndex: RepoIndexResult;
   reqMatrix?: ReqTraceMatrix;
   localeCurrency: LocaleCurrencyProfile;
+  checklist?: AuditChecklistResult;
 }): string {
   const {
     root,
@@ -218,6 +224,7 @@ function buildMarkdown(input: {
     repoIndex,
     reqMatrix,
     localeCurrency,
+    checklist,
   } = input;
   return [
     `# Evidence pack v2 (grounded scout)`,
@@ -247,6 +254,7 @@ function buildMarkdown(input: {
       .slice(0, 12)
       .map((m) => `  - \`${m.file}\` imports \`${m.specifier}\` (not in package.json deps)`),
     ``,
+    checklist ? checklist.markdown : "",
     `## Spec requirements`,
     spec ? requirementsMarkdown(spec.requirements) : "_No spec folder ingested._",
     ``,
@@ -254,6 +262,7 @@ function buildMarkdown(input: {
     ``,
     `## Citable file hits (real paths only)`,
     `Auditor MUST cite these paths (or mark "not found") — do not invent frameworks or folders.`,
+    `Currency MUST be ${localeCurrency.currency} (do not invent SAR).`,
     ``,
     ...hits.slice(0, 80).map((h) => `- \`${h.path}\` — ${h.note}`),
     ``,
@@ -274,6 +283,22 @@ function assemblePack(
       ? buildReqTraceMatrix(spec.requirements, repoIndex)
       : undefined;
 
+  const specTextBlob = spec
+    ? [
+        ...spec.requirements.map((r) => r.text),
+        ...spec.rawChunks.map((c) => c.text),
+        ...spec.filesRead.map((f) => String(f)),
+      ].join("\n")
+    : "";
+
+  const checklist = runAuditChecklist({
+    targetRepo: root,
+    index: repoIndex,
+    spec,
+    localeCurrency,
+    specTextBlob,
+  });
+
   const hitsMap = new Map<string, EvidenceHit>();
   for (const h of toEvidenceHits(repoIndex)) {
     if (!hitsMap.has(h.path)) hitsMap.set(h.path, h);
@@ -281,10 +306,29 @@ function assemblePack(
   for (const h of legacyKeywordHits(root)) {
     if (!hitsMap.has(h.path)) hitsMap.set(h.path, h);
   }
+  // Promote checklist findings into citable hits
+  for (const f of checklist.findings) {
+    for (const p of f.paths) {
+      if (!p || p.startsWith("(")) continue;
+      if (!hitsMap.has(p)) {
+        hitsMap.set(p, {
+          path: p,
+          kind: "file",
+          note: `[checklist:${f.category}] ${f.summary}`,
+        });
+      }
+    }
+  }
   const hits: EvidenceHit[] = [];
   for (const h of hitsMap.values()) {
     const full = path.join(root, h.path);
-    if (fs.existsSync(full) || h.note.startsWith("[import_gap]")) hits.push(h);
+    if (
+      fs.existsSync(full) ||
+      h.note.startsWith("[import_gap]") ||
+      h.note.startsWith("[checklist:")
+    ) {
+      hits.push(h);
+    }
   }
 
   const summaryMarkdown = buildMarkdown({
@@ -297,6 +341,7 @@ function assemblePack(
     repoIndex,
     reqMatrix,
     localeCurrency,
+    checklist,
   });
 
   const json = {
@@ -308,6 +353,8 @@ function assemblePack(
     requirements: spec?.requirements || [],
     reqMatrix: reqMatrix?.json || null,
     localeCurrency,
+    checklist: checklist.json,
+    findings: checklist.findings,
     hits,
     missingImports: repoIndex.missingImports,
     usesMockData: repoIndex.usesMockData,
@@ -327,6 +374,7 @@ function assemblePack(
     repoIndex,
     reqMatrix,
     localeCurrency,
+    checklist,
     json,
   };
 }

@@ -237,6 +237,19 @@ export async function runAgencyArchitecture(task: string): Promise<AgencyRunResu
   }
   fs.mkdirSync(loopDir, { recursive: true });
 
+  // Always persist checklist markdown for the pack (including on rejection)
+  if (evidence.checklist) {
+    try {
+      fs.writeFileSync(
+        "AUDIT_CHECKLIST.md",
+        evidence.checklist.markdown,
+        "utf-8"
+      );
+    } catch {
+      /* ignore */
+    }
+  }
+
   const review = await runReviewGraph({
     brief,
     evidenceMarkdown: evidence.summaryMarkdown,
@@ -244,6 +257,7 @@ export async function runAgencyArchitecture(task: string): Promise<AgencyRunResu
     userGoal,
     targetRepo: engagement.targetRepo,
     reqCoverage: evidence.reqMatrix?.coverageRatio ?? 1,
+    groundedCurrency: evidence.localeCurrency?.currency || "EGP",
   });
 
   fs.writeFileSync(
@@ -492,9 +506,14 @@ ${clip(layeredBlueprint, 3000)}`
       });
     }
 
+    // Always archive grounding artifacts — including on FAILED_AUDIT_GATE rejection
     const packFiles = [
       "engagement.json",
       "evidence-pack.md",
+      "evidence.json",
+      "REQ_TRACEABILITY.md",
+      "AUDIT_CHECKLIST.md",
+      "gates.json",
       "ceo-draft.md",
       "audit-report.md",
       "audit-history.md",
@@ -514,6 +533,28 @@ ${clip(layeredBlueprint, 3000)}`
     ];
     for (const name of packFiles) {
       if (fs.existsSync(name)) fs.copyFileSync(name, path.join(dir, name));
+    }
+    // Ensure gates.json exists in pack even if empty snapshot was never refreshed
+    const packGates = path.join(dir, "gates.json");
+    if (!fs.existsSync(packGates) && fs.existsSync("gates.json")) {
+      fs.copyFileSync("gates.json", packGates);
+    } else if (!fs.existsSync(packGates)) {
+      fs.writeFileSync(
+        packGates,
+        JSON.stringify(
+          {
+            gates: [],
+            latest: {
+              gate: review.auditPassed ? "OPEN" : "CLOSED",
+              auditPassed: review.auditPassed,
+              at: new Date().toISOString(),
+            },
+          },
+          null,
+          2
+        ),
+        "utf-8"
+      );
     }
     const loopArchive = path.join(dir, "review-loop");
     fs.mkdirSync(loopArchive, { recursive: true });

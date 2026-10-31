@@ -39,6 +39,41 @@ function tokenize(text: string): string[] {
     .slice(0, 12);
 }
 
+/**
+ * Build a search_code-style pattern from a REQ (distinctive tokens OR'd).
+ * Used before scoring so every REQ is actively searched in the tree.
+ */
+export function reqSearchPattern(reqText: string): string {
+  const tokens = tokenize(reqText)
+    .filter((t) => !/^(must|should|shall|with|from|that|this|have|been)$/i.test(t))
+    .slice(0, 6);
+  if (!tokens.length) return reqText.slice(0, 40).replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  return tokens.map((t) => t.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")).join("|");
+}
+
+/** Search file bodies for a REQ pattern; returns relative paths that hit. */
+export function searchCodeForReq(
+  fileBodies: Map<string, string>,
+  reqText: string
+): { paths: string[]; hitCount: number } {
+  const pattern = reqSearchPattern(reqText);
+  let re: RegExp;
+  try {
+    re = new RegExp(pattern, "i");
+  } catch {
+    return { paths: [], hitCount: 0 };
+  }
+  const paths: string[] = [];
+  let hitCount = 0;
+  for (const [rel, body] of fileBodies) {
+    if (re.test(body)) {
+      paths.push(rel);
+      hitCount += 1;
+    }
+  }
+  return { paths: paths.slice(0, 12), hitCount };
+}
+
 function scoreAgainstRepo(
   req: SpecRequirement,
   index: RepoIndexResult,
@@ -48,6 +83,14 @@ function scoreAgainstRepo(
   const codePaths: string[] = [];
   const evidenceNotes: string[] = [];
   let hits = 0;
+
+  // Mandatory: search_code-style scan per REQ before scoring
+  const searched = searchCodeForReq(fileBodies, req.text);
+  for (const p of searched.paths) {
+    codePaths.push(p);
+    evidenceNotes.push(`search_code hit for REQ pattern`);
+    hits += 2;
+  }
 
   for (const h of index.hits) {
     const hay = `${h.path} ${h.note}`.toLowerCase();
@@ -59,7 +102,7 @@ function scoreAgainstRepo(
     }
   }
 
-  // Content search on a sample of source files
+  // Content search on a sample of source files (token overlap)
   for (const [rel, body] of fileBodies) {
     const lower = body.toLowerCase();
     const tokHit = tokens.filter((t) => lower.includes(t)).length;
@@ -94,9 +137,8 @@ function scoreAgainstRepo(
   return { status: "partial", codePaths: uniqPaths, evidenceNotes: evidenceNotes.slice(0, 6) };
 }
 
-function loadSampleBodies(root: string, maxFiles = 40): Map<string, string> {
-  const out = mapPaths(root, maxFiles);
-  return out;
+function loadSampleBodies(root: string, maxFiles = 80): Map<string, string> {
+  return mapPaths(root, maxFiles);
 }
 
 function mapPaths(root: string, maxFiles: number): Map<string, string> {
@@ -118,10 +160,10 @@ function mapPaths(root: string, maxFiles: number): Map<string, string> {
         stack.push(full);
         continue;
       }
-      if (!/\.(m?[jt]sx?|md)$/i.test(e.name)) continue;
+      if (!/\.(m?[jt]sx?|jsx?|md|json)$/i.test(e.name)) continue;
       try {
         const rel = path.relative(root, full).replace(/\\/g, "/");
-        map.set(rel, fs.readFileSync(full, "utf-8").slice(0, 20_000));
+        map.set(rel, fs.readFileSync(full, "utf-8").slice(0, 40_000));
       } catch {
         /* ignore */
       }
