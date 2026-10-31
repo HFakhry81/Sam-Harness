@@ -36,10 +36,7 @@ import {
   assertCleanPackClaims,
   assertCleanPackFiles,
 } from "./fidelityRubric.js";
-import {
-  currentRunId,
-  resetGatesForRun,
-} from "./gatesStore.js";
+import { resetGatesForRun } from "./gatesStore.js";
 import {
   extractGoalPaths,
   primarySpecRoot,
@@ -124,7 +121,10 @@ export async function runAgencyArchitecture(task: string): Promise<AgencyRunResu
   sys(`Agency roster: ${AGENCY_ROLES.map((r) => r.id).join(", ")}`);
 
   // Fresh gates.json for this pack/run — never append prior-run loops
-  const packRunId = currentRunId(process.env.SAM_HARNESS_RUN_ID || undefined);
+  const packRunId =
+    process.env.SAM_HARNESS_RUN_ID ||
+    process.env.SAM_RUN_ID ||
+    `run-${Date.now().toString(36)}`;
   resetGatesForRun(packRunId);
 
   const userGoalEarly = extractUserGoal(

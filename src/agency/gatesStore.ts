@@ -39,14 +39,18 @@ function gatesPath(cwd: string = process.cwd()): string {
   return path.join(cwd, "gates.json");
 }
 
-/** Resolve current run id from env or explicit arg. */
-export function currentRunId(explicit?: string): string {
-  return (
-    explicit ||
-    process.env.SAM_HARNESS_RUN_ID ||
-    process.env.SAM_RUN_ID ||
-    `run-${Date.now().toString(36)}`
-  );
+/**
+ * Resolve current run id from explicit arg, env, or existing gates.json.
+ * Prefer a stable id — never mint a fresh Date.now() id when a gates doc
+ * for this pack already exists (avoids mid-append resets on slow clocks).
+ */
+export function currentRunId(explicit?: string, cwd: string = process.cwd()): string {
+  if (explicit) return explicit;
+  if (process.env.SAM_HARNESS_RUN_ID) return process.env.SAM_HARNESS_RUN_ID;
+  if (process.env.SAM_RUN_ID) return process.env.SAM_RUN_ID;
+  const existing = readGates(cwd);
+  if (existing?.runId && existing.runId !== "(legacy)") return existing.runId;
+  return `run-${Date.now().toString(36)}`;
 }
 
 /** Reset gates.json for a new run (call at agency start / pack begin). */
@@ -54,7 +58,12 @@ export function resetGatesForRun(
   runId?: string,
   cwd: string = process.cwd()
 ): GatesDocument {
-  const id = currentRunId(runId);
+  // When explicitly resetting, do not reuse the prior doc id
+  const id =
+    runId ||
+    process.env.SAM_HARNESS_RUN_ID ||
+    process.env.SAM_RUN_ID ||
+    `run-${Date.now().toString(36)}`;
   const doc: GatesDocument = {
     runId: id,
     startedAt: new Date().toISOString(),
@@ -112,7 +121,7 @@ export function appendGateEntry(
   runId?: string,
   cwd: string = process.cwd()
 ): GatesDocument {
-  const id = currentRunId(runId);
+  const id = currentRunId(runId, cwd);
   let doc = readGates(cwd);
   if (!doc || doc.runId !== id) {
     doc = resetGatesForRun(id, cwd);
@@ -128,7 +137,7 @@ export function appendModelClaimError(
   runId?: string,
   cwd: string = process.cwd()
 ): GatesDocument {
-  const id = currentRunId(runId);
+  const id = currentRunId(runId, cwd);
   let doc = readGates(cwd);
   if (!doc || doc.runId !== id) {
     doc = resetGatesForRun(id, cwd);
@@ -143,7 +152,7 @@ export function ensureGatesForRun(
   runId?: string,
   cwd: string = process.cwd()
 ): GatesDocument {
-  const id = currentRunId(runId);
+  const id = currentRunId(runId, cwd);
   const existing = readGates(cwd);
   if (existing && existing.runId === id) return existing;
   return resetGatesForRun(id, cwd);
@@ -177,8 +186,10 @@ export function logModelClaimErrors(
   cwd: string = process.cwd()
 ): void {
   if (!errors.length) return;
+  // Resolve once so a Date.now() tick mid-loop cannot reset gates.json
+  const id = currentRunId(runId, cwd);
   for (const err of errors) {
-    appendModelClaimError(err, runId, cwd);
+    appendModelClaimError(err, id, cwd);
   }
   appendModelErrorsToEvidence(errors, cwd);
 }

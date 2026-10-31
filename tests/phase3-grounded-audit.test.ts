@@ -319,23 +319,27 @@ describe("per-run gates.json isolation", () => {
   it("logs model claim errors into gates.json and evidence.json", () => {
     resetGatesForRun("run-err");
     fs.writeFileSync("evidence.json", JSON.stringify({ version: 2, hits: [] }), "utf-8");
-    logModelClaimErrors([
-      {
-        at: new Date().toISOString(),
-        kind: "invalid_currency",
-        claim: "SAR",
-        detail: "conflicts with EGP",
-        loop: 1,
-      },
-      {
-        at: new Date().toISOString(),
-        kind: "invalid_path",
-        claim: "packages/core",
-        detail: "path does not exist",
-        loop: 1,
-      },
-    ]);
+    logModelClaimErrors(
+      [
+        {
+          at: new Date().toISOString(),
+          kind: "invalid_currency",
+          claim: "SAR",
+          detail: "conflicts with EGP",
+          loop: 1,
+        },
+        {
+          at: new Date().toISOString(),
+          kind: "invalid_path",
+          claim: "packages/core",
+          detail: "path does not exist",
+          loop: 1,
+        },
+      ],
+      "run-err"
+    );
     const gates = readGates();
+    expect(gates?.runId).toBe("run-err");
     expect(gates?.modelErrors.length).toBe(2);
     expect(gates?.modelErrors.some((e) => e.claim === "SAR")).toBe(true);
     const evidence = JSON.parse(fs.readFileSync("evidence.json", "utf-8"));
@@ -350,5 +354,33 @@ describe("per-run gates.json isolation", () => {
     ]);
     const evidence2 = JSON.parse(fs.readFileSync("evidence.json", "utf-8"));
     expect(evidence2.modelErrors.length).toBe(3);
+  });
+
+  it("keeps a stable runId across batched model-error appends without explicit id", () => {
+    resetGatesForRun("run-stable");
+    // No explicit runId — must reuse gates.json runId, not mint a new Date.now() id
+    logModelClaimErrors([
+      {
+        at: new Date().toISOString(),
+        kind: "invalid_currency",
+        claim: "SAR",
+        detail: "a",
+      },
+      {
+        at: new Date().toISOString(),
+        kind: "invalid_path",
+        claim: "packages/x",
+        detail: "b",
+      },
+      {
+        at: new Date().toISOString(),
+        kind: "other",
+        claim: "apps/web",
+        detail: "c",
+      },
+    ]);
+    const gates = readGates();
+    expect(gates?.runId).toBe("run-stable");
+    expect(gates?.modelErrors.length).toBe(3);
   });
 });
