@@ -1,7 +1,6 @@
 import "./src/lib/loadEnv.js";
 import * as fs from "fs";
 import * as readline from "readline";
-import { ChatOllama } from "@langchain/ollama";
 import { colors, live, ok, sys, warn } from "./src/lib/colors.js";
 import { runOperationalCeoLoop, verifyAgainstTask } from "./src/agent/ceoLoop.js";
 import { runArchitectureSwarm } from "./src/agent/level2Swarm.js";
@@ -28,6 +27,19 @@ import {
   formatHelpAnswerForCli,
 } from "./src/lib/help/index.js";
 import { loadLocaleConfig } from "./src/lib/i18n/index.js";
+import {
+  parseForceRouteFlags,
+  resolveAppRoute,
+} from "./src/agency/routeIntent.js";
+import { extractGoalPaths } from "./src/agency/pathExtract.js";
+import {
+  registerSourceRoots,
+  registerWriteRoots,
+  setDisableShell,
+  setStrictWriteRoots,
+  resetWritePolicy,
+} from "./src/lib/writePolicy.js";
+import { isTinyModel } from "./src/agency/modelPolicy.js";
 
 /** Default ON — LangGraph agency runtime. Set AGENCY_MODE=0 for legacy linear swarm. */
 function useAgencyRuntime(): boolean {
@@ -35,58 +47,50 @@ function useAgencyRuntime(): boolean {
   return v !== "0" && v.toLowerCase() !== "false";
 }
 
-const router = new ChatOllama({
-  baseUrl: "http://localhost:11434",
-  model: process.env.CEO_MODEL || "qwen2.5-coder:1.5b",
-  temperature: 0,
-  think: false,
-  numPredict: 80,
-  numCtx: 2048,
-});
-
 type Route = "operational" | "architecture";
 
-function heuristicRoute(task: string): Route | null {
-  if (
-    /saas|architecture|blueprint|N-tier|database schema|multi-tenant|Fanni|Maw3ed|موعد|فني|مواصفات|توصيف|product spec|help system|marketing campaign|استكمل|implement/i.test(
-      task
-    )
-  ) {
-    return "architecture";
+/**
+ * Planner/analysis must not run on <7B locals.
+ * Prefer cloud when OLLAMA_API_KEY exists; fail clearly otherwise.
+ */
+function assertAnalysisModelPolicy(): void {
+  if (useOllamaCloudNow()) {
+    sys("Analysis model policy OK — OLLAMA_API_KEY present (prefer gemma4:cloud)");
+    return;
   }
-  if (
-    /create|write|move|copy|open|play|file|Desktop|سطح|انقل|شيل|ملف|شغل|screen\s*shot|screenshot|لقطة/i.test(
-      task
-    )
-  ) {
-    return "operational";
+  const local =
+    process.env.SAM_ROLE_STRATEGIST_MODEL ||
+    process.env.CEO_MODEL ||
+    process.env.SAM_LOCAL_MODEL ||
+    "";
+  if (local && !isTinyModel(local)) {
+    sys(`Analysis model policy OK — local model ${local} is >=7B`);
+    return;
   }
-  return null;
+  throw new Error(
+    "Analysis/audit route refused: planner must not run on <7B local models. Set OLLAMA_API_KEY for gemma4:cloud, or set SAM_ROLE_STRATEGIST_MODEL to a >=7B local model."
+  );
 }
 
-async function classifyTask(task: string): Promise<Route> {
-  live("CEO Router", "Classifying task intent...");
-  const quick = heuristicRoute(task);
-  if (quick) {
-    ok("Router", `Fast route -> ${quick}`);
-    return quick;
+/** Apply path write policy from prompt-extracted sources + output home. */
+function applyPathPolicyFromTask(task: string, analysisMode: boolean): void {
+  resetWritePolicy();
+  const paths = extractGoalPaths(task);
+  const sources = [
+    ...paths.targetRepos.map((p) => p.normalized),
+    ...paths.specRoots.map((p) => p.normalized),
+    ...paths.other.map((p) => p.normalized),
+  ];
+  registerSourceRoots(sources);
+  registerWriteRoots([]);
+  setStrictWriteRoots(analysisMode);
+  setDisableShell(analysisMode);
+  if (sources.length) {
+    sys(
+      `Write policy: ${sources.length} source root(s) READ-ONLY; writes -> ${getOutputHome()}` +
+        (analysisMode ? "; run_shell DISABLED" : "")
+    );
   }
-
-  const prompt = `Classify this user task as ONE word only: operational OR architecture.
-
-operational = file move/copy/edit/open, play media, screenshot, shell/desktop actions on this PC
-architecture = design SaaS/products (Fanni, Maw3ed), blueprints, specs, help/marketing packs, multi-layer planning, continue implementation
-
-Task:
-${task}
-
-Reply with exactly: operational
-or exactly: architecture`;
-
-  const res = await router.invoke(prompt);
-  const text = String(res.content || "").toLowerCase();
-  if (text.includes("architecture")) return "architecture";
-  return "operational";
 }
 
 function isCliNoise(a: string): boolean {
@@ -198,10 +202,25 @@ async function main() {
     return;
   }
 
-  // Lightweight quick / web path before the full agency pipeline (unless forced).
-  const forceAgency =
-    String(process.env.FORCE_AGENCY || "").trim() === "1" || argv.includes("--force-agency");
-  if (!implementOnly && !forceAgency) {
+  // Explicit force flags win over task.ts / quick path / heuristics.
+  const forceFlags = parseForceRouteFlags(argv);
+  const earlyDecision = resolveAppRoute({
+    task,
+    argv,
+    configuredRoute:
+      taskConfig.route === "architecture" || taskConfig.route === "operational"
+        ? taskConfig.route
+        : null,
+  });
+
+  // Quick path: only when not forced to agency/ops, and not an audit intent.
+  const skipQuick =
+    implementOnly ||
+    forceFlags.forceAgency ||
+    forceFlags.forceOperational ||
+    earlyDecision.route === "architecture" ||
+    earlyDecision.kind === "audit";
+  if (!skipQuick && !forceFlags.forceQuick) {
     const { tryRunQuickPath } = await import("./src/lib/quickPath/index.js");
     const quick = await tryRunQuickPath({
       prompt: task,
@@ -220,6 +239,20 @@ async function main() {
     if (quick && !quick.result.ok) {
       warn("Quick path", quick.result.error || "failed — continuing to agency");
     }
+  } else if (forceFlags.forceQuick) {
+    const { tryRunQuickPath } = await import("./src/lib/quickPath/index.js");
+    const quick = await tryRunQuickPath({
+      prompt: task,
+      cwd: process.cwd(),
+      forceAgency: false,
+    });
+    if (quick?.result.ok) {
+      console.log(`\n${quick.result.reply}\n`);
+      return;
+    }
+    warn("Quick path", quick?.result.error || "forced quick failed — stopping");
+    process.exitCode = 1;
+    return;
   }
 
   const layout = ensureOutputHome();
@@ -258,15 +291,18 @@ async function main() {
       console.log(`${colors.cyan}Pack folder:${colors.reset} ${l3.outDir}`);
     }
   } else {
-    // Prefer explicit route from task.ts when present (owner-controlled).
-    const configured =
-      taskConfig.route === "architecture" || taskConfig.route === "operational"
-        ? taskConfig.route
-        : null;
-    const route = configured ?? (await classifyTask(task));
-    ok("Router", `Route selected -> ${route}${configured ? " (task.ts)" : ""}`);
+    const decision = earlyDecision;
+    const route: Route =
+      decision.route === "operational" ? "operational" : "architecture";
+    ok(
+      "Router",
+      `Route selected -> ${route} (reason: ${decision.reason}; confidence=${decision.confidence.toFixed(2)}; forced=${decision.forced})`
+    );
+
+    applyPathPolicyFromTask(task, route === "architecture");
 
     if (route === "architecture") {
+      assertAnalysisModelPolicy();
       const agency = useAgencyRuntime();
       sys(
         agency
@@ -285,13 +321,21 @@ async function main() {
           ? Number((result as { goalFidelityScore?: number }).goalFidelityScore || 0)
           : null;
 
+      const verdictObj =
+        "verdict" in result
+          ? (result as { verdict?: { reason?: string } }).verdict
+          : undefined;
+      const verdictReason =
+        verdictObj && typeof verdictObj.reason === "string" ? verdictObj.reason : null;
+
       if (!result.auditPassed) {
         warn(
           "Gate",
-          `Audit/goal not approved after ${result.revisionCount} loops — downstream previews skipped.` +
-            (goalPassed != null
-              ? ` goalPassed=${goalPassed} score=${(goalScore ?? 0).toFixed(2)}`
-              : "")
+          verdictReason ||
+            `REJECTED after ${result.revisionCount} loops — downstream previews skipped.` +
+              (goalPassed != null
+                ? ` goalPassed=${goalPassed} score=${(goalScore ?? 0).toFixed(2)}`
+                : "")
         );
         console.log(`\n${colors.yellow}--- Final (FAILED_AUDIT_GATE) ---${colors.reset}`);
         console.log(result.finalReport.slice(0, 500) + "\n...");
@@ -300,6 +344,9 @@ async function main() {
         if (goalPassed === false) {
           warn("Gate", "auditPassed without goalPassed — treating as failure");
           process.exitCode = 1;
+        }
+        if (verdictReason) {
+          ok("Gate", verdictReason);
         }
         console.log(`\n${colors.cyan}--- Architectural Summary (preview) ---${colors.reset}`);
         console.log(result.layeredBlueprint.slice(0, 400) + "\n...");

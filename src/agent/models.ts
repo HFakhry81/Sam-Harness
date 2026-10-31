@@ -27,6 +27,12 @@ import {
   loadTeamConfig,
 } from "../agency/teamConfig.js";
 import { AGENCY_ROLES } from "../agency/roles.js";
+import {
+  LONG_FORM_ROLES,
+  isTinyModel,
+  resolveLongFormModel,
+} from "../agency/modelPolicy.js";
+import { LONG_FORM_REPEAT_PENALTY } from "../agency/repetitionGuard.js";
 
 export { CostCapExceededError };
 export type { ModelRoute };
@@ -94,7 +100,12 @@ export function routeForTask(input: RouteInput = {}): ModelRoute {
 
 function chatFromRoute(
   route: ModelRoute,
-  opts: { temperature: number; numPredict?: number; numCtx?: number }
+  opts: {
+    temperature: number;
+    numPredict?: number;
+    numCtx?: number;
+    repeatPenalty?: number;
+  }
 ): ChatOllama {
   return new ChatOllama({
     baseUrl: route.baseUrl,
@@ -104,6 +115,9 @@ function chatFromRoute(
     think: false,
     numPredict: opts.numPredict ?? 1200,
     numCtx: opts.numCtx ?? 8192,
+    ...(opts.repeatPenalty != null
+      ? { repeatPenalty: opts.repeatPenalty }
+      : {}),
   });
 }
 
@@ -173,6 +187,34 @@ export function makeSpecialistModel(opts: {
     freeModel: opts.freeModel,
   });
   const roleCfg = getRoleConfig(role, cwd);
+
+  // Grounded-audit: long-form roles refuse tiny locals — escalate to cloud when allowed
+  let forceLocal = opts.forceLocal;
+  let cloudModel = resolved.cloudModel;
+  let localModel = resolved.localModel;
+  let prefersCloud =
+    typeof opts.prefersCloud === "boolean"
+      ? opts.prefersCloud
+      : rolePrefersCloud(role, cwd);
+  if (LONG_FORM_ROLES.has(role) && !forceLocal) {
+    const policy = resolveLongFormModel(role, cwd);
+    if (policy.warn) {
+      try {
+        // eslint-disable-next-line no-console
+        console.warn(`[model-policy] ${policy.warn}`);
+      } catch {
+        /* ignore */
+      }
+    }
+    if (policy.escalated && policy.useCloud) {
+      prefersCloud = true;
+      cloudModel = policy.model;
+    } else if (isTinyModel(localModel) && policy.useCloud) {
+      prefersCloud = true;
+      cloudModel = policy.requestedCloud;
+    }
+  }
+
   const route = routeForTask({
     cwd,
     role,
@@ -180,15 +222,12 @@ export function makeSpecialistModel(opts: {
     confidence: opts.confidence,
     verificationFailed: opts.verificationFailed,
     explicitComplexity: opts.explicitComplexity,
-    cloudModel: resolved.cloudModel,
-    localModel: resolved.localModel,
+    cloudModel,
+    localModel,
     freeModel: resolved.freeModel,
-    forceLocal: opts.forceLocal,
-    forcePremium: Boolean(opts.explicitComplexity),
-    prefersCloud:
-      typeof opts.prefersCloud === "boolean"
-        ? opts.prefersCloud
-        : rolePrefersCloud(role, cwd),
+    forceLocal,
+    forcePremium: Boolean(opts.explicitComplexity) || LONG_FORM_ROLES.has(role),
+    prefersCloud,
   });
 
   if (route.cloud) {
@@ -210,6 +249,7 @@ export function makeSpecialistModel(opts: {
     temperature: opts.temperature ?? roleCfg?.temperature ?? 0.2,
     numPredict: opts.numPredict ?? roleCfg?.numPredict ?? 1200,
     numCtx: 8192,
+    repeatPenalty: LONG_FORM_ROLES.has(role) ? LONG_FORM_REPEAT_PENALTY : undefined,
   });
 }
 

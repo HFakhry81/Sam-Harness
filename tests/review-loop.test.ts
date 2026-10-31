@@ -30,6 +30,12 @@ describe("LangGraph review loop quality gate", () => {
     );
   });
 
+  it("fails early after 2 consecutive stalls even under MAX_LOOPS", () => {
+    expect(
+      routeAfterAudit({ auditPassed: false, loop: 3, stallCount: 2 })
+    ).toBe("failed");
+  });
+
   it("parseApproved recognizes gate markers", () => {
     expect(parseApproved("[APPROVED]\nLooks good")).toBe(true);
     expect(parseApproved("[REJECTED]\nMissing evidence")).toBe(false);

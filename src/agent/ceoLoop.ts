@@ -1,7 +1,11 @@
 import { ChatOllama } from "@langchain/ollama";
 import * as fs from "fs";
 import { live, ok, warn, err } from "../lib/colors.js";
-import { TOOL_CATALOG, type ToolResult } from "../tools/registry.js";
+import {
+  ANALYSIS_TOOL_CATALOG,
+  TOOL_CATALOG,
+  type ToolResult,
+} from "../tools/registry.js";
 import { executeToolAsRole } from "../agency/safeExecute.js";
 import { learningContextBlock } from "../controlplane/projectMemory.js";
 import {
@@ -11,6 +15,16 @@ import {
   isHighConfidencePlan,
   type CeoDecision,
 } from "./heuristic.js";
+import { extractGoalPaths } from "../agency/pathExtract.js";
+import {
+  isShellDisabled,
+  registerSourceRoots,
+  registerWriteRoots,
+} from "../lib/writePolicy.js";
+import {
+  RepeatGuard,
+  formatStructuredFailureMarkdown,
+} from "../lib/repeatGuard.js";
 
 /** Prefer ## Goal for ops; strip architecture boilerplate that confused older task files. */
 function focusTask(task: string): string {
@@ -96,8 +110,9 @@ function transcript(lines: string[]): string {
 
 async function runDecision(
   decision: CeoDecision,
-  toolLog: ToolResult[]
-): Promise<"continue" | "done"> {
+  toolLog: ToolResult[],
+  guard?: RepeatGuard
+): Promise<"continue" | "done" | "structured_fail"> {
   if (decision.action === "finish") {
     ok("CEO", `Finished: ${decision.summary}`);
     return "done";
@@ -108,8 +123,43 @@ async function runDecision(
   );
   const result = await executeToolAsRole("operator", decision.tool, decision.params);
   toolLog.push(result);
-  if (result.ok) ok(result.tool, result.message);
-  else err(result.tool, result.message);
+  if (result.ok) {
+    ok(result.tool, result.message);
+    guard?.recordSuccess(result.tool, result.message);
+    return "continue";
+  }
+  err(result.tool, result.message);
+  if (guard) {
+    const sig = guard.recordFailure(result.tool, result.message);
+    if (guard.shouldStopRetry(sig)) {
+      if (!guard.hasSwitched(sig)) {
+        guard.markSwitched(sig);
+        warn(
+          "CEO",
+          `Repeat guard: identical failure x${sig.count} — switching strategy (avoid ${result.tool})`
+        );
+        return "continue";
+      }
+      const failure = guard.buildStructuredFailure({
+        stage: `tool:${result.tool}`,
+        sig,
+        neededToContinue:
+          "Switch to list_dir/read_file/search_code/write_report; quote paths with spaces; never write into prompt source/spec folders.",
+      });
+      fs.writeFileSync(
+        "final-report.md",
+        formatStructuredFailureMarkdown(failure),
+        "utf-8"
+      );
+      fs.writeFileSync(
+        "execution-result.md",
+        failure.summary,
+        "utf-8"
+      );
+      err("CEO", failure.summary);
+      return "structured_fail";
+    }
+  }
   return "continue";
 }
 
@@ -243,9 +293,23 @@ export async function runOperationalCeoLoop(task: string, maxSteps = 8) {
 
   live("CEO Supervisor", `Operational tool loop starting (model: ${CEO_MODEL})...`);
   const focused = focusTask(task);
+  // Register prompt paths as read-only sources (tool-layer policy)
+  try {
+    const gp = extractGoalPaths(focused);
+    registerSourceRoots([
+      ...gp.targetRepos.map((p) => p.normalized),
+      ...gp.specRoots.map((p) => p.normalized),
+    ]);
+    registerWriteRoots([]);
+  } catch {
+    /* ignore */
+  }
   const history: string[] = [`USER TASK:\n${focused}`];
   const toolLog: ToolResult[] = [];
   let parseFails = 0;
+  const guard = new RepeatGuard();
+  const catalog = isShellDisabled() ? ANALYSIS_TOOL_CATALOG : TOOL_CATALOG;
+  const blockedTools = new Set<string>();
 
   // Prefer Task Spec plan (entities / planSteps) — never invent paths like Desktop/old.txt
   let earlyPlan = heuristicPlan(focused);
@@ -301,7 +365,14 @@ export async function runOperationalCeoLoop(task: string, maxSteps = 8) {
         writeReports(report);
         return report;
       }
-      await runDecision(d, toolLog);
+      const st = await runDecision(d, toolLog, guard);
+      if (st === "structured_fail") {
+        return {
+          success: false,
+          summary: toolLog[toolLog.length - 1]?.message || "Structured failure",
+          tools: toolLog,
+        };
+      }
       const last = toolLog[toolLog.length - 1];
       if (last && !last.ok) {
         const report = {
@@ -320,19 +391,23 @@ export async function runOperationalCeoLoop(task: string, maxSteps = 8) {
     live("CEO Supervisor", `Planning next action (step ${step}/${maxSteps})...`);
 
     const intent = detectOpsIntent(extractGoalFocus(focused));
+    const blockedHint = blockedTools.size
+      ? `\nDo NOT retry these tools (repeat guard): ${[...blockedTools].join(", ")}. Use list_dir/read_file/search_code/write_report instead.\n`
+      : "";
     const prompt = `You are the Sam-Harness Desktop Operator on Windows.
 Complete ONLY the USER GOAL. Detected intent=${intent}.
 If intent=move → use move_file. If intent=create_excel → write_excel. Do not switch intents.
 Never take a screen capture unless intent=screenshot.
 Never invent marketing/architecture work.
 Do not copy example filenames — use the real name from the Goal.
-
-${TOOL_CATALOG}
+${blockedHint}
+${catalog}
 
 Respond with ONLY one JSON object.
 Examples by intent:
 move: {"tool":"move_file","params":{"source":"Desktop\\\\Sam-Harness team test.xls","destination":"D:\\\\Sam-Harness team test.xls"}}
 create_excel: {"tool":"write_excel","params":{"path":"Desktop\\\\report.xls","a1":"${new Date().toLocaleString()}"}}
+list: {"tool":"list_dir","params":{"path":"E:\\\\UpNexa.com\\\\spendy"}}
 finish: {"tool":"finish","params":{"summary":"Done","success":true}}
 
 Conversation so far:
@@ -352,7 +427,14 @@ ${transcript(history)}
         if (plan.length) {
           warn("CEO", "Switching to deterministic heuristic plan...");
           for (const d of plan) {
-            const status = await runDecision(d, toolLog);
+            const status = await runDecision(d, toolLog, guard);
+            if (status === "structured_fail") {
+              return {
+                success: false,
+                summary: "Structured failure after heuristic switch",
+                tools: toolLog,
+              };
+            }
             if (status === "done") {
               const report = {
                 success: d.action === "finish" ? d.success : true,
@@ -371,12 +453,35 @@ ${transcript(history)}
     }
 
     parseFails = 0;
-    const status = await runDecision(decision, toolLog);
+    if (decision.action === "tool" && blockedTools.has(decision.tool)) {
+      history.push(
+        `SYSTEM: Tool ${decision.tool} is blocked by repeat guard. Use list_dir/read_file/search_code/write_report or finish with success=false.`
+      );
+      continue;
+    }
+    const status = await runDecision(decision, toolLog, guard);
+    if (status === "structured_fail") {
+      return {
+        success: false,
+        summary: "Structured failure — see final-report.md",
+        tools: toolLog,
+      };
+    }
     if (decision.action === "tool") {
       const last = toolLog[toolLog.length - 1];
       history.push(
         `TOOL RESULT (${last.tool}):\n${last.message}\nDATA:${JSON.stringify(last.data || {}).slice(0, 1200)}`
       );
+      if (last && !last.ok && blockedTools.has(last.tool) === false) {
+        // runDecision already recorded; if switched once, block further use of this tool
+        const keyHint = `${last.tool}`;
+        if (toolLog.filter((t) => t.tool === last.tool && !t.ok).length >= 2) {
+          blockedTools.add(last.tool);
+          history.push(
+            `SYSTEM: Repeat guard blocked further retries of ${keyHint}. Switch tool or finish with a structured failure summary.`
+          );
+        }
+      }
     }
     if (status === "done" || decision.action === "finish") {
       if (decision.action === "finish" && isExcelInventoryGoal(focused)) {

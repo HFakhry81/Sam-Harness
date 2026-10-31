@@ -31,6 +31,15 @@ export type Engagement = {
   goal: string;
   route: AgencyRoute;
   createdAt: string;
+  /** Grounded-audit: all parsed filesystem paths from the owner prompt. */
+  goalPaths?: {
+    targetRepos: string[];
+    specRoots: string[];
+    other: string[];
+  };
+  specRoot?: string;
+  locale?: string;
+  currency?: string;
 };
 
 export type RejectionIssue = {
@@ -50,6 +59,8 @@ export type EvidencePack = {
   scannedAt: string;
   hits: EvidenceHit[];
   summaryMarkdown: string;
+  /** Optional v2 structured payload (also written to evidence.json). */
+  json?: object;
 };
 
 export type AgencyRunResult = {
@@ -58,6 +69,14 @@ export type AgencyRunResult = {
   /** Strategy answers the user goal (deterministic + audit gate). */
   goalPassed?: boolean;
   goalFidelityScore?: number;
+  /** Single-sourced gate verdict used by console / final-report / gates.json. */
+  verdict?: {
+    auditPassed: boolean;
+    goalPassed: boolean;
+    gate: "OPEN" | "CLOSED";
+    reason: string;
+    packClaimsOk: boolean;
+  };
   revisionCount: number;
   strategyPlan: string;
   auditReport: string;

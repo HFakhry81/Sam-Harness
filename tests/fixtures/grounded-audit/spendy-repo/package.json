@@ -1,0 +1,11 @@
+{
+  "name": "spendy",
+  "private": true,
+  "dependencies": {
+    "react": "18.2.0",
+    "react-native": "0.73.0"
+  },
+  "scripts": {
+    "start": "expo start"
+  }
+}

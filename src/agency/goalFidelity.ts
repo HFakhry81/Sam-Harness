@@ -142,10 +142,13 @@ function tokenHitsStrategy(token: string, strategyLower: string): boolean {
   return false;
 }
 
+/** Grounded-audit default fidelity gate (was 0.45). */
+export const GROUNDED_FIDELITY_THRESHOLD = 0.8;
+
 export function scoreGoalFidelity(
   goal: string,
   strategy: string,
-  threshold = 0.45
+  threshold = GROUNDED_FIDELITY_THRESHOLD
 ): GoalFidelityResult {
   const g = (goal || "").trim();
   const s = (strategy || "").trim();
@@ -173,19 +176,17 @@ export function scoreGoalFidelity(
   const strategyLower = s.toLowerCase();
   const goalTokens = tokenize(g);
   const hitTokens = goalTokens.filter((t) => tokenHitsStrategy(t, strategyLower));
-  let score = goalTokens.length
-    ? hitTokens.length / Math.min(goalTokens.length, 12)
-    : 0;
+  // Grounded-audit: score from REAL hit ratio — never inflate via Math.min(n, 12)
+  // (that previously turned 17/32 hits into fidelity 1.0).
+  let score = goalTokens.length ? hitTokens.length / goalTokens.length : 0;
 
   // Distinctive-token score (ignore weak generics) — fixes Arabic false rejects
   const distinctive = goalTokens.filter((t) => t.length >= 4 && !WEAK.has(t));
   const distHits = distinctive.filter((t) => tokenHitsStrategy(t, strategyLower));
   if (distinctive.length >= 2) {
-    score = Math.max(score, distHits.length / distinctive.length);
-  }
-  // Enough absolute distinctive hits → on-topic even if long goal dilutes ratio
-  if (distHits.length >= 3 && !BOOKING_DRIFT.test(g)) {
-    score = Math.max(score, 0.55);
+    // Blend, do not replace — distinctive alone must not mint a fake 1.0
+    const distScore = distHits.length / distinctive.length;
+    score = Math.max(score, distScore * 0.95);
   }
 
   const driftSignals: string[] = [];
@@ -213,20 +214,20 @@ export function scoreGoalFidelity(
     if (hit.test(s)) cueHits += 1;
     else driftSignals.push(`missing-cue:${need.source}`);
   }
-  // Domain cues satisfied → treat as on-topic even if Arabic token overlap is low
+  // Domain cues satisfied → on-topic (must clear grounded 0.8 threshold)
   if (
     cueNeeds >= 2 &&
     cueHits === cueNeeds &&
     !driftSignals.includes("booking-product-drift")
   ) {
-    score = Math.max(score, 0.72);
+    score = Math.max(score, Math.max(threshold, 0.85));
   } else if (
     cueNeeds >= 3 &&
     cueHits >= 2 &&
     !driftSignals.includes("booking-product-drift")
   ) {
     // Majority of CP cues is enough (e.g. strategy names systems without saying "Control Plane")
-    score = Math.max(score, 0.55);
+    score = Math.max(score, Math.max(threshold, 0.82));
   } else if (cueNeeds >= 2 && cueHits === 0) {
     score = Math.min(score, 0.35);
   }
@@ -237,7 +238,16 @@ export function scoreGoalFidelity(
     /sam-?harness/i.test(s) &&
     /إمكان|حدود|capabilities|limits?|وكال|agency|أدوات|tools/i.test(s)
   ) {
-    score = Math.max(score, 0.55);
+    score = Math.max(score, Math.max(threshold, 0.85));
+  }
+
+  // Booking product goals may use English blueprints against Arabic goals
+  if (
+    goalWantsBookingBlueprint(g) &&
+    strategyHasBookingBlueprint(s) &&
+    !driftSignals.includes("booking-product-drift")
+  ) {
+    score = Math.max(score, Math.max(threshold, 0.85));
   }
 
   score = Math.max(0, Math.min(1, score));
@@ -247,7 +257,7 @@ export function scoreGoalFidelity(
     ? `Goal fidelity OK (score=${score.toFixed(2)}, hits=${hitTokens.length}/${goalTokens.length})`
     : `Goal fidelity FAIL (score=${score.toFixed(2)}${
         driftSignals.length ? `; drift=${driftSignals.join(",")}` : ""
-      }; hits=${hitTokens.slice(0, 8).join("|") || "none"})`;
+      }; hits=${hitTokens.length}/${goalTokens.length} ${hitTokens.slice(0, 8).join("|") || "none"})`;
 
   return { score, passed, reason, goalTokens, hitTokens, driftSignals };
 }
