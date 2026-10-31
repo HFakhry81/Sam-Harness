@@ -435,14 +435,16 @@ export function buildDeterministicRtmBlock(input: {
     `| --- | --- | --- | --- |`,
     ...rows.map((r) => {
       const paths = (r.codePaths || [])
-        .slice(0, 4)
+        .slice(0, 3)
         .map((p) => `\`${p}\``)
         .join("<br>");
       const text = String(r.text || "")
         .replace(/\|/g, "/")
         .replace(/\s+/g, " ")
-        .slice(0, 100);
-      return `| ${r.id} | ${r.status} | ${paths || "-"} | ${text} |`;
+        .trim()
+        .slice(0, 100) || "-";
+      const status = String(r.status || "missing").trim() || "-";
+      return `| ${r.id} | ${status} | ${paths || "-"} | ${text} |`;
     }),
     ``,
   ].join("\n");
@@ -510,17 +512,99 @@ export function isDeterministicStrategySection(headingLine: string): boolean {
 }
 
 /**
+ * Compact RTM for LLM prompts: counts + EVERY REQ id/status.
+ * Never truncated — auditors must not invent 41% coverage from a clipped table.
+ */
+export function formatCompactRtmSummary(input: {
+  reqRows?: Array<{ id: string; status: string; kind?: string }>;
+  coverageRatio?: number;
+  assessedCoverageRatio?: number;
+  eligibleCount?: number;
+  codeBackedCount?: number;
+  assessedCount?: number;
+}): string {
+  const rows = input.reqRows || [];
+  const implemented = rows.filter((r) => r.status === "implemented").length;
+  const partial = rows.filter((r) => r.status === "partial").length;
+  const missing = rows.filter((r) => r.status === "missing").length;
+  const contradicts = rows.filter((r) => r.status === "contradicts").length;
+  const unverified = rows.filter((r) => r.status === "unverified").length;
+  const na = rows.filter((r) => r.status === "n/a").length;
+  const eligible =
+    typeof input.eligibleCount === "number"
+      ? input.eligibleCount
+      : Math.max(0, rows.length - na);
+  const codeBacked =
+    typeof input.codeBackedCount === "number"
+      ? input.codeBackedCount
+      : implemented + partial + contradicts;
+  const assessed =
+    typeof input.assessedCount === "number" ? input.assessedCount : eligible;
+  const implLine =
+    typeof input.coverageRatio === "number"
+      ? formatGroundedCoverageLine({
+          coverageRatio: input.coverageRatio,
+          codeBackedCount: codeBacked,
+          eligibleCount: eligible || 1,
+        })
+      : "";
+  const assessedLine =
+    typeof input.assessedCoverageRatio === "number"
+      ? formatAssessedCoverageLine({
+          assessedCoverageRatio: input.assessedCoverageRatio,
+          assessedCount: assessed,
+          eligibleCount: eligible || 1,
+        })
+      : "";
+  const statusLine = rows
+    .map((r) => `${r.id}:${r.status}`)
+    .join(" ");
+  return [
+    `DETERMINISTIC RTM SUMMARY (complete — ${rows.length} REQs; never invent alternate coverage):`,
+    implLine || undefined,
+    assessedLine || undefined,
+    `implemented=${implemented} partial=${partial} missing=${missing} contradicts=${contradicts} unverified=${unverified} n/a=${na}`,
+    statusLine || "(no REQs)",
+  ]
+    .filter(Boolean)
+    .join("\n");
+}
+
+/** Strip full RTM / status-index tables from evidence so clip() cannot cut mid-table. */
+export function stripRtmSectionsForPrompt(text: string): string {
+  return String(text || "")
+    .replace(
+      /##\s*Requirements traceability\b[\s\S]*?(?=\n##\s|\n#\s|$)/gi,
+      "\n## Requirements traceability\n_(full table omitted in prompt — see DETERMINISTIC RTM SUMMARY)_\n"
+    )
+    .replace(
+      /##\s*REQ status index \(deterministic[\s\S]*?(?=\n##\s|\n#\s|$)/gi,
+      ""
+    )
+    .replace(/\n{3,}/g, "\n\n")
+    .trim();
+}
+
+/**
  * Clip strategy for LLM prompts without truncating deterministic RTM / Key Findings.
- * Those blocks are replaced by a short count summary in the prompt; written files
+ * Those blocks are replaced by a compact ALL-REQ id:status summary; written files
  * must always keep the full blocks (never append "...(truncated)" into them).
  *
- * Prefer `opts.reqRowCount` / `opts.findingCount` from the final rendered evidence
- * so the prompt footer never says "0" while the written table has rows.
+ * Prefer `opts.reqRows` (full list) so every REQ id/status reaches the auditor.
  */
 export function clipStrategyForPrompt(
   strategy: string,
   max = 6000,
-  opts?: { reqRowCount?: number; findingCount?: number }
+  opts?: {
+    reqRowCount?: number;
+    findingCount?: number;
+    reqRows?: Array<{ id: string; status: string; kind?: string }>;
+    coverageRatio?: number;
+    assessedCoverageRatio?: number;
+    eligibleCount?: number;
+    codeBackedCount?: number;
+    assessedCount?: number;
+  }
 ): string {
   const text = String(strategy || "");
   const rtm = text.match(
@@ -544,7 +628,25 @@ export function clipStrategyForPrompt(
     .replace(/\n{3,}/g, "\n\n")
     .trim();
 
-  const parsedRows = (rtm || "").match(/\|\s*REQ[-_]?\d+/gi)?.length || 0;
+  const parsedFromTable = [
+    ...((rtm || "").matchAll(/\|\s*(REQ[-_]?\d+)\s*\|\s*([a-z/]+)/gi) || []),
+  ].map((m) => ({ id: m[1].toUpperCase().replace("_", "-"), status: m[2].toLowerCase() }));
+  // Also parse "REQ-001: missing" status-index style
+  const parsedFromIndex = [
+    ...((text || "").matchAll(/\b(REQ[-_]?\d+)\s*:\s*\*\*([a-z/]+)\*\*/gi) || []),
+  ].map((m) => ({
+    id: m[1].toUpperCase().replace("_", "-"),
+    status: m[2].toLowerCase(),
+  }));
+  const optRows = opts?.reqRows || [];
+  const compactRows =
+    optRows.length > 0
+      ? optRows
+      : parsedFromTable.length
+        ? parsedFromTable
+        : parsedFromIndex;
+
+  const parsedRows = compactRows.length;
   const reqRows =
     typeof opts?.reqRowCount === "number" && opts.reqRowCount >= 0
       ? opts.reqRowCount
@@ -554,12 +656,23 @@ export function clipStrategyForPrompt(
     typeof opts?.findingCount === "number" && opts.findingCount >= 0
       ? opts.findingCount
       : parsedFindings;
+
+  const compact = formatCompactRtmSummary({
+    reqRows: compactRows,
+    coverageRatio: opts?.coverageRatio,
+    assessedCoverageRatio: opts?.assessedCoverageRatio,
+    eligibleCount: opts?.eligibleCount,
+    codeBackedCount: opts?.codeBackedCount,
+    assessedCount: opts?.assessedCount,
+  });
+
   // Prompt-only summary — never copy into written pack files
   const summary = [
     `<!-- PROMPT_ONLY_DETERMINISTIC_SUMMARY: do not copy into written strategy -->`,
     `Deterministic RTM/Key Findings live in the written strategy file — do not invent statuses, coverage, counts, or dependency lists.`,
     `RTM rows (grounded): ${reqRows}; Key Findings bullets (grounded): ${findingBullets}`,
-    `Coverage line: ${(rtm || "").match(/Coverage[^\n]*/)?.[0] || "(see written file)"}`,
+    `Coverage line: ${(rtm || "").match(/Coverage[^\n]*/)?.[0] || "(see compact RTM)"}`,
+    compact,
   ].join("\n");
 
   if (narrative.length > max) {
@@ -567,6 +680,7 @@ export function clipStrategyForPrompt(
       narrative.slice(0, max) +
       "\n<!-- PROMPT_NARRATIVE_CLIPPED: full text remains in written strategy file -->";
   }
+  // Compact RTM is NEVER truncated — append after narrative clip
   return `${narrative}\n\n${summary}\n`;
 }
 

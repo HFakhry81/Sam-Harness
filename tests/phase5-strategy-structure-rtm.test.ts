@@ -69,6 +69,27 @@ describe("markdown structural normalize after deletion", () => {
     expect(fixed).not.toMatch(/^\s*6[.)]/m);
   });
 
+  it("drops empty table rows, trailing empty cells, and header-only tables", () => {
+    const holes = [
+      `## Recommendations`,
+      `| Fix | Owner | |`,
+      `| --- | --- | --- |`,
+      `|  |  |  |`,
+      `| Wire OTP | Eng | |`,
+      ``,
+      `## Empty leftover table`,
+      `| A | B |`,
+      `| --- | --- |`,
+      `|  |  |`,
+    ].join("\n");
+    expect(hasStructuralMarkdownHoles(holes)).toBe(true);
+    const fixed = normalizeMarkdownStructure(holes);
+    expect(fixed).toMatch(/Wire OTP/);
+    expect(fixed).not.toMatch(/\|\s*\|\s*\|\s*$/m);
+    expect(fixed).not.toMatch(/## Empty leftover table/i);
+    expect(hasStructuralMarkdownHoles(fixed)).toBe(false);
+  });
+
   it("normalize runs after claim deletion so auditor never sees holes", () => {
     const draft = [
       `## Gap matrix`,

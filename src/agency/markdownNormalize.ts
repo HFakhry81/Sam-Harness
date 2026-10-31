@@ -85,6 +85,93 @@ function renumberOrderedLists(lines: string[]): string[] {
   return out;
 }
 
+function isTableRow(line: string): boolean {
+  return /^\s*\|.+\|\s*$/.test(line) || /^\s*\|.+\|\s*$/.test(line.trim());
+}
+
+function isTableSeparator(line: string): boolean {
+  return /^\s*\|?\s*:?-{3,}:?\s*(\|\s*:?-{3,}:?\s*)+\|?\s*$/.test(line);
+}
+
+/** True when every cell is empty / placeholder (trailing pipes, blank cells). */
+function isEmptyTableRow(line: string): boolean {
+  if (!isTableRow(line) || isTableSeparator(line)) return false;
+  const cells = line
+    .trim()
+    .replace(/^\|/, "")
+    .replace(/\|$/, "")
+    .split("|")
+    .map((c) => c.trim());
+  if (!cells.length) return true;
+  return cells.every((c) => !c || c === "-" || c === "—" || c === "–");
+}
+
+/**
+ * Drop empty table rows, trailing empty cells, and tables that are only
+ * header + separator (or header + empty body).
+ */
+function normalizeTables(lines: string[]): string[] {
+  const out: string[] = [];
+  let i = 0;
+  while (i < lines.length) {
+    const line = lines[i];
+    if (!isTableRow(line) && !isTableSeparator(line)) {
+      out.push(line);
+      i += 1;
+      continue;
+    }
+    // Collect contiguous table block
+    const block: string[] = [];
+    while (
+      i < lines.length &&
+      (isTableRow(lines[i]) || isTableSeparator(lines[i]) || isBlank(lines[i]))
+    ) {
+      if (isBlank(lines[i])) {
+        // Blank ends the table unless next line continues it
+        if (
+          i + 1 < lines.length &&
+          (isTableRow(lines[i + 1]) || isTableSeparator(lines[i + 1]))
+        ) {
+          i += 1;
+          continue;
+        }
+        break;
+      }
+      block.push(lines[i]);
+      i += 1;
+    }
+    // Strip trailing empty cells: `| a | b |  |` → `| a | b |`
+    const cleaned = block
+      .map((row) => {
+        if (isTableSeparator(row)) return row.replace(/\|\s*$/, "|").replace(/^\s*/, "");
+        const parts = row.trim().split("|");
+        // split("| a | b |") → ["", " a ", " b ", ""]
+        while (parts.length && !String(parts[parts.length - 1]).trim()) {
+          parts.pop();
+        }
+        while (parts.length && !String(parts[0]).trim()) {
+          parts.shift();
+        }
+        if (!parts.length) return "";
+        return `| ${parts.map((p) => p.trim()).join(" | ")} |`;
+      })
+      .filter((row) => row && !isEmptyTableRow(row));
+
+    // Drop table that is only header + separator (no body) or separator alone
+    const bodyRows = cleaned.filter((r) => !isTableSeparator(r));
+    const hasSep = cleaned.some((r) => isTableSeparator(r));
+    if (bodyRows.length === 0) {
+      continue; // empty table — drop entirely
+    }
+    if (bodyRows.length === 1 && hasSep) {
+      // header + sep only, no data rows
+      continue;
+    }
+    out.push(...cleaned);
+  }
+  return out;
+}
+
 /**
  * Normalize markdown after deletions so the auditor never sees structural holes.
  */
@@ -96,6 +183,9 @@ export function normalizeMarkdownStructure(text: string): string {
     (line) =>
       !isEmptyBullet(line) && !isEmptyOrderedItem(line) && !isTrailingColonHole(line)
   );
+
+  // Pass 1b: normalize tables (empty rows / trailing empty cells / empty tables)
+  lines = normalizeTables(lines);
 
   // Pass 2: drop headings whose section body is empty (repeat until stable)
   let changed = true;
@@ -140,6 +230,7 @@ export function hasStructuralMarkdownHoles(text: string): boolean {
     if (isEmptyBullet(line) || isEmptyOrderedItem(line) || isTrailingColonHole(line)) {
       return true;
     }
+    if (isEmptyTableRow(line)) return true;
     if (isHeading(line) && sectionBodyEmpty(lines, i)) return true;
   }
   // Skipped numbers in an ordered list (e.g. 2 then 4)

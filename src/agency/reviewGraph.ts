@@ -34,7 +34,9 @@ import {
 } from "./fidelityRubric.js";
 import {
   clipStrategyForPrompt,
+  formatCompactRtmSummary,
   injectGroundedStrategyBlocks,
+  stripRtmSectionsForPrompt,
 } from "./finalReport.js";
 import {
   hasStructuralMarkdownHoles,
@@ -95,6 +97,65 @@ Also numbered FIX 1..N lines.
 function clip(text: string, max = 6000): string {
   if (!text) return "";
   return text.length <= max ? text : text.slice(0, max) + "\n...(truncated)";
+}
+
+/**
+ * Authoritative target/spec paths for strategist + auditor prompts.
+ * The harness cwd (Sam-Harness) must NEVER be presented as the audited project.
+ */
+export function formatTargetRepoPromptBlock(input: {
+  targetRepo: string;
+  specRoot?: string;
+  harnessCwd?: string;
+}): string {
+  const target = path.normalize(input.targetRepo || "");
+  const spec = input.specRoot ? path.normalize(input.specRoot) : "";
+  const harness = path.normalize(input.harnessCwd || process.cwd());
+  const lines = [
+    `TARGET REPO (authoritative — cite THIS project; never substitute the Sam-Harness harness cwd):`,
+    `\`${target}\``,
+  ];
+  if (spec) {
+    lines.push(`SPEC ROOT (read-only docs/specs):`);
+    lines.push(`\`${spec}\``);
+  }
+  if (
+    harness &&
+    target &&
+    harness.toLowerCase() !== target.toLowerCase()
+  ) {
+    lines.push(
+      `HARNESS CWD (internal only — NOT the audited target): \`${harness}\``
+    );
+  }
+  return lines.join("\n");
+}
+
+/** Drop accidental harness-cwd citations when they are not the target repo. */
+export function scrubHarnessCwdLeak(
+  text: string,
+  targetRepo: string,
+  harnessCwd: string = process.cwd()
+): string {
+  const target = path.normalize(targetRepo || "");
+  const harness = path.normalize(harnessCwd || "");
+  if (!harness || !target) return String(text || "");
+  if (harness.toLowerCase() === target.toLowerCase()) return String(text || "");
+  const variants = [
+    harness,
+    harness.replace(/\\/g, "/"),
+    harness.replace(/\//g, "\\"),
+  ];
+  let out = String(text || "");
+  for (const v of variants) {
+    if (!v || v.length < 4) continue;
+    const re = new RegExp(
+      v.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"),
+      "gi"
+    );
+    out = out.replace(re, target);
+  }
+  return out;
 }
 
 /** Parse auditor report gate marker. Exported for unit tests. */
@@ -230,6 +291,8 @@ export const ReviewState = Annotation.Root({
   loopDir: Annotation<string>,
   userGoal: Annotation<string>,
   targetRepo: Annotation<string>,
+  /** Spec/docs root from the owner goal (read-only; may contain Arabic/spaces). */
+  specRoot: Annotation<string>,
   /**
    * Gate coverage metric (0..1). For audit intent this is assessed
    * traceability; for build/implement it is implementation coverage.
@@ -308,6 +371,12 @@ function buildGraph() {
     const learned = learningContextBlock(process.cwd(), 10, 5);
     const currency = state.groundedCurrency || "EGP";
     const targetRepo = state.targetRepo || process.cwd();
+    const specRoot = state.specRoot || "";
+    const targetBlock = formatTargetRepoPromptBlock({
+      targetRepo,
+      specRoot: specRoot || undefined,
+      harnessCwd: process.cwd(),
+    });
     let stallCount = state.stallCount || 0;
     let strategy: string;
 
@@ -350,20 +419,24 @@ function buildGraph() {
         activeOpts,
         `You are Agency Strategist. Write a COMPLETE concrete strategy (max 1400 words) that ANSWERS the ORIGINAL USER GOAL.
 Not intentions — deliverables that match the goal.
-Cite ONLY paths that appear in EVIDENCE. Currency=${currency}.
+Cite ONLY paths that appear in EVIDENCE under the TARGET REPO below. Currency=${currency}.
+NEVER cite the Sam-Harness harness cwd as the audited project.
 Obey PROJECT MEMORY lessons when they apply (do not repeat known failures).
 
 ${sections}
+
+${targetBlock}
 
 ORIGINAL USER GOAL (authoritative — fail if ignored):
 ${clip(userGoal, 2500)}
 
 ${learned ? `${clip(learned, 2500)}\n` : ""}EVIDENCE:
-${clip(state.evidenceMarkdown, 5000)}
+${clip(stripRtmSectionsForPrompt(state.evidenceMarkdown), 5000)}
 
 BRIEF:
 ${clip(state.brief, 8000)}`
       );
+      strategy = scrubHarnessCwdLeak(strategy, targetRepo);
     } else {
       const fixes = extractFixes(state.auditReport || "");
       const auditorIssues = extractAuditorIssues(state.auditReport || "");
@@ -378,9 +451,33 @@ ${clip(state.brief, 8000)}`
         ...auditorIssues.map((f, i) => `AUDITOR ISSUE ${i + 1}: ${f}`),
         ...fixes.map((f, i) => `FIX ${i + 1}: ${f}`),
       ];
+      const remClipOpts = {
+        reqRows: (state.reqRows || []).map((r) => ({
+          id: r.id,
+          status: r.status,
+        })),
+        reqRowCount: (state.reqRows || []).length,
+        coverageRatio:
+          typeof state.implementationCoverage === "number"
+            ? state.implementationCoverage
+            : undefined,
+        assessedCoverageRatio:
+          typeof state.assessedCoverage === "number"
+            ? state.assessedCoverage
+            : undefined,
+        eligibleCount: state.eligibleCount,
+        codeBackedCount: state.codeBackedCount,
+        assessedCount:
+          typeof state.eligibleCount === "number" &&
+          typeof state.assessedCoverage === "number"
+            ? Math.round(state.assessedCoverage * state.eligibleCount)
+            : undefined,
+      };
       const briefRem = [
         `REMEDIATION CHECKLIST for strategy-v${loopNo} (item-by-item — do not skip):`,
         ...checklistItems,
+        ``,
+        targetBlock,
         ``,
         `ORIGINAL USER GOAL:`,
         clip(userGoal, 2000),
@@ -390,10 +487,10 @@ ${clip(state.brief, 8000)}`
         clip(state.auditReport, 4000),
         ``,
         `PRIOR STRATEGY (do not reproduce unchanged; deterministic RTM/Key Findings are summarized — full blocks stay in the written file):`,
-        clipStrategyForPrompt(state.strategy || "", 4500),
+        clipStrategyForPrompt(state.strategy || "", 4500, remClipOpts),
         ``,
-        `EVIDENCE (cite only these real paths):`,
-        clip(state.evidenceMarkdown, 4000),
+        `EVIDENCE (cite only these real paths under TARGET REPO):`,
+        clip(stripRtmSectionsForPrompt(state.evidenceMarkdown), 4000),
         stalledBefore
           ? `\nSTALL DETECTED on prior loop — you MUST produce a materially different draft targeting only failing REQs and missing citations.\n`
           : "",
@@ -406,6 +503,7 @@ ${clip(state.brief, 8000)}`
         "utf-8"
       );
       strategy = await invokeWithCloudFallback(activeModel, activeOpts, briefRem);
+      strategy = scrubHarnessCwdLeak(strategy, targetRepo);
     }
 
     // Stall detector vs previous draft
@@ -672,6 +770,8 @@ ${clip(state.evidenceMarkdown, 3000)}`;
       );
     }
 
+    strategy = scrubHarnessCwdLeak(strategy, targetRepo);
+    strategy = normalizeMarkdownStructure(strategy);
     fs.writeFileSync(path.join(state.loopDir, `strategy-v${loopNo}.md`), strategy, "utf-8");
     writePackArtifact("ceo-draft.md", strategy, { bom: true });
     ok("Strategist", `strategy-v${loopNo}.md (stallCount=${stallCount})`);
@@ -760,7 +860,39 @@ ${clip(state.evidenceMarkdown, 3000)}`;
         if (/^CUR-OK$/i.test(String(f.id || ""))) return false;
         return true;
       }).length,
+      reqRows: (state.reqRows || []).map((r) => ({
+        id: r.id,
+        status: r.status,
+      })),
+      coverageRatio:
+        typeof state.implementationCoverage === "number"
+          ? state.implementationCoverage
+          : undefined,
+      assessedCoverageRatio:
+        typeof state.assessedCoverage === "number"
+          ? state.assessedCoverage
+          : undefined,
+      eligibleCount: state.eligibleCount,
+      codeBackedCount: state.codeBackedCount,
+      assessedCount:
+        typeof state.eligibleCount === "number" &&
+        typeof state.assessedCoverage === "number"
+          ? Math.round(state.assessedCoverage * state.eligibleCount)
+          : undefined,
     };
+    const compactRtm = formatCompactRtmSummary({
+      reqRows: clipOpts.reqRows,
+      coverageRatio: clipOpts.coverageRatio,
+      assessedCoverageRatio: clipOpts.assessedCoverageRatio,
+      eligibleCount: clipOpts.eligibleCount,
+      codeBackedCount: clipOpts.codeBackedCount,
+      assessedCount: clipOpts.assessedCount,
+    });
+    const auditTargetBlock = formatTargetRepoPromptBlock({
+      targetRepo,
+      specRoot: state.specRoot || undefined,
+      harnessCwd: process.cwd(),
+    });
 
     let auditReport = "";
     let llmApproved = false;
@@ -791,14 +923,18 @@ REJECT strategies that ignore the stated goal.`;
         auditor,
         auditorOpts,
         `You are Agency Auditor (evidence-grounded + goal-fidelity).
-REJECT rubber-stamp checklists. Prefer citing EVIDENCE paths.
+REJECT rubber-stamp checklists. Prefer citing EVIDENCE paths under TARGET REPO.
 REJECT invented files not in evidence.
 REJECT drafts that contain erasure placeholders or invent wrong currencies / nonexistent monorepo roots.
-Do NOT invent per-REQ statuses, coverage percentages, counts, or dependency lists — those are deterministic from reqTrace.
+REJECT citing the Sam-Harness harness cwd as the audited target.
+Do NOT invent per-REQ statuses, coverage percentages, counts, or dependency lists — use the DETERMINISTIC RTM SUMMARY below (complete id:status list).
+Never treat a truncated evidence-pack table as incomplete coverage when the DETERMINISTIC RTM SUMMARY lists all REQs.
 ${bookingRules}
 
 APPROVE only if strategy is concrete, consistent with evidence (or honestly marks gaps),
 AND clearly answers ORIGINAL USER GOAL (specs cited, REQ statuses from RTM, stack conflict, P0/P1 findings, recommendations).
+
+${auditTargetBlock}
 
 ORIGINAL USER GOAL:
 ${clip(userGoal, 2000)}
@@ -806,10 +942,12 @@ ${clip(userGoal, 2000)}
 Rubric hint (gate): ${rubricPre.reason}
 Keyword hits (informational only, not a gate): ${keywordInfo.hit}/${keywordInfo.total} (${keywordFidelity.reason})
 
-EVIDENCE PACK:
-${clip(state.evidenceMarkdown, 5000)}
+${compactRtm}
 
-STRATEGY-v${loopNo} (deterministic RTM/Key Findings summarized here; full blocks are in ceo-draft.md / written strategy — never reject solely for prompt truncation):
+EVIDENCE PACK (RTM table omitted here — use DETERMINISTIC RTM SUMMARY above for all REQ statuses):
+${clip(stripRtmSectionsForPrompt(state.evidenceMarkdown), 5000)}
+
+STRATEGY-v${loopNo} (deterministic RTM/Key Findings summarized here with COMPLETE id:status list; full blocks are in ceo-draft.md — never reject solely for prompt truncation):
 ${clipStrategyForPrompt(strategyForAudit, 5500, clipOpts)}
 
 Line 1: [APPROVED] or [REJECTED]
@@ -945,7 +1083,10 @@ ${REJECTION_FORMAT}`
       strategyText = normalizeMarkdownStructure(strategyText);
     }
 
-    const cites = verifyCitationsAgainstRepo(strategyText, targetRepo);
+    strategyText = scrubHarnessCwdLeak(strategyText, targetRepo);
+    const cites = verifyCitationsAgainstRepo(strategyText, targetRepo, {
+      specRoot: state.specRoot || undefined,
+    });
     if (llmApproved && !cites.ok) {
       rejectReasons.push(cites.reason);
       llmApproved = false;
@@ -1125,6 +1266,8 @@ export async function runReviewGraph(input: {
   loopDir: string;
   userGoal?: string;
   targetRepo?: string;
+  /** Spec/docs root from the owner goal (may include spaces/Arabic). */
+  specRoot?: string;
   /**
    * Gate coverage metric. Prefer assessedCoverage for audit intent;
    * implementationCoverage for build/implement. If only reqCoverage is
@@ -1214,6 +1357,7 @@ export async function runReviewGraph(input: {
           loopDir: input.loopDir,
           userGoal,
           targetRepo: input.targetRepo || process.cwd(),
+          specRoot: input.specRoot || "",
           reqCoverage:
             typeof input.reqCoverage === "number" ? input.reqCoverage : 1,
           implementationCoverage:

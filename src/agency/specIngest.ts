@@ -527,15 +527,29 @@ export function isDocumentOnlyRequirement(text: string): boolean {
 export function classifyReqKind(text: string): SpecReqKind {
   const t = String(text || "").replace(/\s+/g, " ").trim();
   if (isDocumentOnlyRequirement(t)) return "document_only";
-  // Footnoted / catalog-style vendor recommendations → non_functional
-  // (e.g. "Speech-to-Text: Deepgram Nova-3 API [^2^]"). Do NOT classify
-  // product features like "Bank Integration with Plaid import" as NFR.
+  // Tech-stack / vendor catalog choices → non_functional (not code features)
+  // e.g. "Framework: Flutter", "Cache: Redis", "Bank Sync: Plaid", "Storage: S3"
   if (
-    (/\[\^\d+\^\]/.test(t) ||
-      /^(?:speech-to-text|stt|tts|ocr\s*engine|nlp|nlu|llm|provider|vendor)\s*:/i.test(
-        t
-      )) &&
-    /\b(?:deepgram|openai|whisper|nova-?\d|stripe|plaid|firebase|aws|azure|gcp)\b/i.test(
+    /^(?:framework|language|runtime|database|db|cache|queue|storage|monitoring|observability|bank\s*sync|auth(?:entication)?|hosting|cdn|ci\/?cd|backend|frontend|mobile|speech-to-text|stt|tts|ocr\s*engine|nlp|nlu|llm|provider|vendor)\s*:/i.test(
+      t
+    )
+  ) {
+    return "non_functional";
+  }
+  // Footnoted vendor recommendations → non_functional
+  // Do NOT classify product features like "Bank Integration with Plaid import" as NFR.
+  if (
+    /\[\^\d+\^\]/.test(t) &&
+    /\b(?:deepgram|openai|whisper|nova-?\d|stripe|plaid|firebase|aws|azure|gcp|redis|bullmq|flutter|s3)\b/i.test(
+      t
+    )
+  ) {
+    return "non_functional";
+  }
+  // Short "X: VendorName" tech picks without feature modal verbs
+  if (
+    !FEATURE_MODAL_RE.test(t) &&
+    /^(?:[\w/&.\s-]{2,40})\s*:\s*(?:Flutter|React(?:\s*Native)?|Expo|Redis|BullMQ|Plaid|S3|AWS|Azure|GCP|Firebase|Postgres(?:ql)?|MongoDB|Deepgram|OpenAI|Stripe)\b/i.test(
       t
     )
   ) {
@@ -584,7 +598,7 @@ export function isNoiseRequirementLine(text: string): boolean {
   }
   // Intro / blueprint / summary prose
   if (
-    /\b(this document|comprehensive technical|blueprint|provides an? overview|executive summary|the following (?:sections?|chapters?)|feature summary)\b/i.test(
+    /\b(this document|this specification|comprehensive technical|blueprint|provides an? overview|executive summary|the following (?:sections?|chapters?)|feature summary)\b/i.test(
       t
     )
   ) {

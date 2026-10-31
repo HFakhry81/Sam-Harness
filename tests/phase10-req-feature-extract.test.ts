@@ -429,6 +429,49 @@ describe("noise filter + feature cap", () => {
   });
 });
 
+describe("tech-stack choices + intro prose", () => {
+  it("classifies Framework/Cache/Queue/Bank Sync lines as non_functional; drops intro prose", async () => {
+    const { classifyReqKind, isNoiseRequirementLine, extractRequirementsHeuristic } =
+      await import("../src/agency/specIngest.js");
+    expect(classifyReqKind("Framework: Flutter")).toBe("non_functional");
+    expect(classifyReqKind("Cache: Redis")).toBe("non_functional");
+    expect(classifyReqKind("Queue: BullMQ")).toBe("non_functional");
+    expect(classifyReqKind("Bank Sync: Plaid")).toBe("non_functional");
+    expect(classifyReqKind("Storage: S3")).toBe("non_functional");
+    expect(classifyReqKind("Monitoring: Datadog")).toBe("non_functional");
+    expect(
+      isNoiseRequirementLine(
+        "This specification provides a comprehensive overview of Spendy"
+      )
+    ).toBe(true);
+    const extracted = extractRequirementsHeuristic([
+      {
+        file: "stack.md",
+        section: "Tech Stack",
+        text: [
+          "- Framework: Flutter",
+          "- Cache: Redis",
+          "- This specification provides a comprehensive overview",
+          "- MUST support multi-wallet balances across accounts",
+        ].join("\n"),
+      },
+    ]);
+    expect(
+      extracted.some((r) => /multi-?wallet/i.test(r.text) && r.kind === "feature")
+    ).toBe(true);
+    expect(
+      extracted.every(
+        (r) => !/this specification provides/i.test(r.text)
+      )
+    ).toBe(true);
+    for (const r of extracted.filter((x) =>
+      /Flutter|Redis|BullMQ|Plaid|S3/i.test(x.text)
+    )) {
+      expect(r.kind).toBe("non_functional");
+    }
+  });
+});
+
 describe("IDF-style partial scoring (no generic HomeScreen false partials)", () => {
   it("Bank Integration / NLU stay missing; PDF/Excel reports can be partial; paths capped at 3", async () => {
     const spec = await ingestSpecFolder(IDF_SPEC);

@@ -342,6 +342,7 @@ export async function runAgencyArchitecture(task: string): Promise<AgencyRunResu
     loopDir,
     userGoal,
     targetRepo: engagement.targetRepo,
+    specRoot: engagement.specRoot || specRoot || "",
     // Gate metric: audit intent uses assessed traceability; build uses implementation
     reqCoverage:
       (classifyRouteIntent(userGoal).kind === "audit" ||

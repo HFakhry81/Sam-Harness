@@ -183,12 +183,46 @@ describe("clipStrategyForPrompt uses grounded row counts", () => {
     const clip = clipStrategyForPrompt(strategy, 800, {
       reqRowCount: pack.reqMatrix!.rows.length,
       findingCount: 5,
+      reqRows: pack.reqMatrix!.rows,
+      coverageRatio: pack.reqMatrix!.coverageRatio,
+      assessedCoverageRatio: pack.reqMatrix!.assessedCoverageRatio,
+      eligibleCount: pack.reqMatrix!.eligibleCount,
+      codeBackedCount: pack.reqMatrix!.codeBackedCount,
     });
     expect(clip).toMatch(
       new RegExp(`RTM rows \\(grounded\\): ${pack.reqMatrix!.rows.length}`)
     );
     expect(clip).not.toMatch(/RTM rows in file:\s*0/);
     expect(clip).toMatch(/PROMPT_ONLY_DETERMINISTIC_SUMMARY/);
+    // Compact summary lists EVERY REQ id:status — never truncated mid-table
+    expect(clip).toMatch(/DETERMINISTIC RTM SUMMARY/);
+    for (const r of pack.reqMatrix!.rows) {
+      expect(clip).toContain(`${r.id}:${r.status}`);
+    }
+  });
+});
+
+describe("target repo prompt injection", () => {
+  it("formatTargetRepoPromptBlock labels harness cwd as non-target", async () => {
+    const { formatTargetRepoPromptBlock, scrubHarnessCwdLeak } = await import(
+      "../src/agency/reviewGraph.js"
+    );
+    const block = formatTargetRepoPromptBlock({
+      targetRepo: "E:\\UpNexa.com\\spendy",
+      specRoot: "D:\\My Documents\\Spendy",
+      harnessCwd: "E:\\UpNexa.com\\Sam-Harness",
+    });
+    expect(block).toMatch(/TARGET REPO/);
+    expect(block).toContain("E:\\UpNexa.com\\spendy");
+    expect(block).toMatch(/HARNESS CWD \(internal only/);
+    expect(block).toContain("Sam-Harness");
+    const scrubbed = scrubHarnessCwdLeak(
+      "Auditing `E:\\UpNexa.com\\Sam-Harness` next.",
+      "E:\\UpNexa.com\\spendy",
+      "E:\\UpNexa.com\\Sam-Harness"
+    );
+    expect(scrubbed).toContain("spendy");
+    expect(scrubbed).not.toMatch(/Sam-Harness/);
   });
 });
 

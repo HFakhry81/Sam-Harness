@@ -140,6 +140,10 @@ export function featureFamilySymbols(reqText: string): RegExp | null {
   if (/\bvoice\b|speech|audio\s+record|microphone|dictation/.test(t)) {
     return /\b(stt|tts|expo-av|Speech\.|startRecording|Audio\.Recording|speech.?recognition|dictation|MediaRecorder|expo-speech|@react-native-voice)\b/i;
   }
+  // Bank / Plaid / open-banking — generic "bank" comments must not mint partial
+  if (/\bbank\b|plaid|open.?banking|bank.?sync|bank.?integrat/i.test(t)) {
+    return /\b(plaid|linkToken|exchangePublicToken|open.?banking|Plaid\.create|bank.?link|financial.?connections|stripe\.financialConnections)\b/i;
+  }
   return null;
 }
 
