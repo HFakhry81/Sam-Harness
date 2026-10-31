@@ -12,6 +12,7 @@ import {
   classifyReqKind,
   decodeSpecBuffer,
   dedupeRequirements,
+  docxXmlToText,
   extractRequirementsHeuristic,
   ingestSpecFolder,
   isDocumentOnlyRequirement,
@@ -29,6 +30,9 @@ import {
   writePackArtifact,
 } from "../src/lib/packWorkspace.js";
 import { resetGatesForRun } from "../src/agency/gatesStore.js";
+import { writeGoNoGoTemplate } from "../src/agency/delivery/goNoGo.js";
+import { saveBoard } from "../src/agency/delivery/store.js";
+import type { DeliveryBoard } from "../src/agency/delivery/types.js";
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 const FIX = path.join(HERE, "fixtures", "grounded-audit");
@@ -163,6 +167,44 @@ describe("feature-level REQ extraction", () => {
       )
     ).toBe(false);
   });
+
+  it("extracts Word list paragraphs (w:numPr) from .docx and skips module headings", async () => {
+    const docxPath = path.join(FEATURE_SPEC, "word-lists.docx");
+    expect(fs.existsSync(docxPath)).toBe(true);
+    const spec = await ingestSpecFolder(docxPath);
+    const features = spec.requirements.filter((r) => r.kind === "feature");
+    expect(features.some((r) => /add expense/i.test(r.text))).toBe(true);
+    expect(features.some((r) => /multi-?wallet/i.test(r.text))).toBe(true);
+    expect(features.some((r) => /otp/i.test(r.text))).toBe(true);
+    expect(features.some((r) => /voice/i.test(r.text))).toBe(true);
+    expect(features.some((r) => /ocr|receipt/i.test(r.text))).toBe(true);
+    expect(features.some((r) => /EGP/i.test(r.text))).toBe(true);
+    // Section headings must not be feature REQs
+    for (const h of [
+      "Database Architecture (Multi-Wallet & Teams)",
+      "System Architecture & Tech Stack",
+      "OCR & Receipt Scanning Module",
+      "Team & Permissions Module",
+      "Security & Compliance",
+    ]) {
+      expect(isDocumentOnlyRequirement(h)).toBe(true);
+      expect(
+        features.some((r) => normalizeReqText(r.text) === normalizeReqText(h))
+      ).toBe(false);
+    }
+  });
+
+  it("docxXmlToText prefixes w:numPr / ListParagraph with '- '", () => {
+    const xml = `<?xml version="1.0"?><w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"><w:body>
+      <w:p><w:pPr><w:pStyle w:val="Heading1"/></w:pPr><w:r><w:t>Features</w:t></w:r></w:p>
+      <w:p><w:pPr><w:pStyle w:val="ListParagraph"/><w:numPr><w:ilvl w:val="0"/><w:numId w:val="1"/></w:numPr></w:pPr><w:r><w:t>Add expense with amount</w:t></w:r></w:p>
+      <w:p><w:pPr><w:numPr><w:ilvl w:val="0"/><w:numId w:val="1"/></w:numPr></w:pPr><w:r><w:t>OTP login</w:t></w:r></w:p>
+    </w:body></w:document>`;
+    const text = docxXmlToText(xml);
+    expect(text).toContain("# Features");
+    expect(text).toMatch(/^- Add expense with amount$/m);
+    expect(text).toMatch(/^- OTP login$/m);
+  });
 });
 
 describe("Arabic encoding for REQ titles", () => {
@@ -193,7 +235,18 @@ describe("Arabic encoding for REQ titles", () => {
     expect(tFix).not.toMatch(/^Ø|^Ù/);
   });
 
-  it("ingests Arabic REQ titles intact (no mojibake)", async () => {
+  it("never reinterprets valid UTF-8 Arabic as Windows-1256", () => {
+    const utf8Features = fs.readFileSync(
+      path.join(FEATURE_SPEC, "arabic-features-utf8.txt")
+    );
+    const decoded = decodeSpecBuffer(utf8Features);
+    expect(decoded).toContain("يمكن إضافة مصروف");
+    expect(decoded).not.toMatch(/Ø.|Ù./);
+    // Strict UTF-8 must win even though high bytes look CP1256-ish
+    expect(decoded).toMatch(/[\u0600-\u06FF]{4,}/);
+  });
+
+  it("ingests Arabic REQ titles intact from UTF-8 and CP1256 .txt", async () => {
     const spec = await ingestSpecFolder(FEATURE_SPEC);
     const arabic = spec.requirements.filter((r) =>
       /[\u0600-\u06FF]/.test(r.text)
@@ -204,6 +257,8 @@ describe("Arabic encoding for REQ titles", () => {
       expect(r.text).not.toMatch(/Ø.|Ù./);
       expect(classifyReqKind(r.text)).not.toBe("document_only");
     }
+    expect(arabic.some((r) => /مصروف/.test(r.text))).toBe(true);
+    expect(arabic.some((r) => /محافظ/.test(r.text))).toBe(true);
   });
 });
 
@@ -228,13 +283,20 @@ describe("pack artifacts never land in cwd", () => {
   });
 
   it("writePackArtifact + gates write under pack workspace, not cwd", () => {
+    const written = [
+      "REQ_TRACEABILITY.md",
+      "AUDIT_CHECKLIST.md",
+      "agency-verdict.md",
+      "evidence.json",
+      "gates.json",
+    ];
     writePackArtifact("REQ_TRACEABILITY.md", "# matrix\n");
     writePackArtifact("AUDIT_CHECKLIST.md", "# checklist\n");
     writePackArtifact("agency-verdict.md", "# verdict\n");
     writePackArtifact("evidence.json", JSON.stringify({ version: 2 }));
     resetGatesForRun("run-cwd-isolation");
 
-    for (const name of PACK_CWD_FORBIDDEN) {
+    for (const name of written) {
       expect(fs.existsSync(path.join(tmpCwd, name))).toBe(false);
       expect(packArtifactExists(name)).toBe(true);
       expect(fs.existsSync(packArtifactPath(name))).toBe(true);
@@ -248,6 +310,14 @@ describe("pack artifacts never land in cwd", () => {
     const check = assertNoPackFilesInCwd(tmpCwd);
     expect(check.ok).toBe(true);
     expect(check.found).toEqual([]);
+    // Expanded forbidden list includes delivery-board / go-nogo names
+    expect(PACK_CWD_FORBIDDEN).toEqual(
+      expect.arrayContaining([
+        "delivery-board.json",
+        "DELIVERY_BOARD.md",
+        "go-nogo.example.json",
+      ])
+    );
   });
 
   it("extractRequirementsHeuristic does not write any files", () => {
@@ -260,5 +330,33 @@ describe("pack artifacts never land in cwd", () => {
       },
     ]);
     expect(fs.readdirSync(tmpCwd).sort()).toEqual([...before].sort());
+  });
+
+  it("delivery-board / go-nogo.example write to pack workspace, not cwd", () => {
+    writeGoNoGoTemplate();
+    const board: DeliveryBoard = {
+      version: 1,
+      engagementId: "eng-test",
+      targetRepo: tmpCwd,
+      updatedAt: new Date().toISOString(),
+      goNoGo: {
+        decision: "PENDING",
+        by: "system",
+        at: new Date().toISOString(),
+        reason: "test",
+      },
+      tickets: [],
+    };
+    saveBoard(board);
+
+    for (const name of [
+      "delivery-board.json",
+      "DELIVERY_BOARD.md",
+      "go-nogo.example.json",
+    ]) {
+      expect(fs.existsSync(path.join(tmpCwd, name))).toBe(false);
+      expect(packArtifactExists(name)).toBe(true);
+    }
+    expect(assertNoPackFilesInCwd(tmpCwd).ok).toBe(true);
   });
 });

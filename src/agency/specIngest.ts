@@ -47,7 +47,11 @@ const EXT = /\.(md|txt|docx|pdf|json|ya?ml)$/i;
 
 /** Document-structure / planning section titles — not code-checkable features. */
 const DOCUMENT_ONLY_TITLE_RE =
-  /^(?:project\s+overview|introduction|overview|scope|glossary|appendix|table\s+of\s+contents|executive\s+summary|background|document\s+control|references|assumptions|document\s+history|revision\s+history|about\s+this\s+document|preface|acknowledgements?|functional\s+requirements(?:\s+analysis)?|implementation\s+roadmap|roadmap|estimated\s+costs?(?:\s*&\s*|\s+and\s+)?infrastructure|estimated\s+costs?|costs?(?:\s*&\s*|\s+and\s+)?infrastructure|ui\/?ux\s+design\s+guidelines|design\s+guidelines|guidelines|api\s+endpoints?\s+design(?:\s*\(.*\))?|tech\s+stack|technology\s+stack|architecture\s+overview|system\s+architecture|database\s+schema|data\s+model|non[- ]?functional\s+requirements|acceptance\s+criteria|out\s+of\s+scope|milestones?|timeline|budget|infrastructure|voice-to-expense\s+module(?:\s*\(.*\))?)$/i;
+  /^(?:project\s+overview|introduction|overview|scope|glossary|appendix|table\s+of\s+contents|executive\s+summary|background|document\s+control|references|assumptions|document\s+history|revision\s+history|about\s+this\s+document|preface|acknowledgements?|functional\s+requirements(?:\s+analysis)?|implementation\s+roadmap|roadmap|estimated\s+costs?(?:\s*&\s*|\s+and\s+)?infrastructure|estimated\s+costs?|costs?(?:\s*&\s*|\s+and\s+)?infrastructure|ui\/?ux\s+design\s+guidelines|design\s+guidelines|guidelines|api\s+endpoints?\s+design(?:\s*\(.*\))?|tech\s+stack|technology\s+stack|architecture\s+overview|system\s+architecture(?:\s*&\s*|\s+and\s+)?(?:tech\s+stack)?|database\s+architecture(?:\s*\(.*\))?|database\s+schema|data\s+model|non[- ]?functional\s+requirements|acceptance\s+criteria|out\s+of\s+scope|milestones?|timeline|budget|infrastructure|security\s*&\s*compliance|security\s+and\s+compliance|voice-to-expense\s+module(?:\s*\(.*\))?|[A-Za-z0-9/&().,\s-]{2,60}\s+module(?:\s*\(.*\))?)$/i;
+
+/** Bullet / numbered-list line prefixes (ASCII, Unicode, Arabic-Indic digits). */
+const BULLET_PREFIX_RE =
+  /^\s*(?:[-*•●○■▪▫‣⁃◦·⋅]|[\u2022\u25CF\u25E6\u2043\u2219]|[0-9]{1,3}[.)]|[٠-٩]{1,3}[.)]|[۰-۹]{1,3}[.)]|REQ[-_]?\d+)\s+/i;
 
 const NON_FUNCTIONAL_RE =
   /\b(security|performance|scalability|reliability|availability|latency|throughput|encryption|privacy|gdpr|compliance|accessibility|a11y|uptime|sla|observability|monitoring|backup|disaster\s+recovery|load\s+time|memory\s+footprint)\b|أمن|أداء|خصوصية|تشفير/i;
@@ -76,7 +80,8 @@ function walk(dir: string, out: string[], depth = 0): void {
 
 /**
  * Decode spec file bytes with UTF-8 / UTF-16 / Windows-1256 detection.
- * Fixes common UTF-8-as-Latin1 Arabic mojibake.
+ * Prefer strict UTF-8 whenever valid — never reinterpret valid UTF-8 as CP1256
+ * (that is the main Arabic mojibake source on real Spendy .txt specs).
  */
 export function decodeSpecBuffer(buf: Buffer): string {
   if (!buf.length) return "";
@@ -99,46 +104,35 @@ export function decodeSpecBuffer(buf: Buffer): string {
     return swapped.toString("utf16le");
   }
 
-  const utf8 = tryUtf8(buf);
-  if (utf8 && !looksLikeMojibake(utf8) && hasValidArabicOrAscii(utf8)) {
-    return utf8;
-  }
-
-  // Windows-1256 (Arabic) when high bytes look like Arabic CP1256
-  if (looksLikeWindows1256(buf)) {
-    try {
-      const ar = new TextDecoder("windows-1256").decode(buf);
-      if (ar && /[\u0600-\u06FF]/.test(ar)) return ar;
-    } catch {
-      /* ignore */
+  // Strict UTF-8 first — valid UTF-8 (incl. Arabic) wins unconditionally
+  const utf8Strict = tryUtf8Strict(buf);
+  if (utf8Strict != null) {
+    if (looksLikeMojibake(utf8Strict)) {
+      const repaired = repairUtf8Mojibake(utf8Strict);
+      if (repaired && /[\u0600-\u06FF]/.test(repaired) && !looksLikeMojibake(repaired)) {
+        return repaired;
+      }
     }
+    return utf8Strict;
   }
 
-  // Mojibake repair: UTF-8 bytes mis-decoded as latin1
-  if (utf8 && looksLikeMojibake(utf8)) {
-    const repaired = repairUtf8Mojibake(utf8);
-    if (repaired && /[\u0600-\u06FF]/.test(repaired)) return repaired;
-  }
-
-  if (utf8) return utf8;
-
+  // UTF-8 failed → try Windows-1256 for legacy Arabic .txt
   try {
-    return new TextDecoder("windows-1256").decode(buf);
+    const ar = new TextDecoder("windows-1256").decode(buf);
+    if (ar && scoreDecodedText(ar) > 0) return ar;
   } catch {
-    return buf.toString("utf-8");
+    /* ignore */
   }
+
+  // Last resort: lossy UTF-8
+  return buf.toString("utf-8");
 }
 
-function tryUtf8(buf: Buffer): string | null {
+function tryUtf8Strict(buf: Buffer): string | null {
   try {
-    const dec = new TextDecoder("utf-8", { fatal: true });
-    return dec.decode(buf);
+    return new TextDecoder("utf-8", { fatal: true }).decode(buf);
   } catch {
-    try {
-      return buf.toString("utf-8");
-    } catch {
-      return null;
-    }
+    return null;
   }
 }
 
@@ -162,28 +156,18 @@ function repairUtf8Mojibake(text: string): string {
   return text;
 }
 
-function looksLikeWindows1256(buf: Buffer): boolean {
-  let hi = 0;
-  let arabicish = 0;
-  for (let i = 0; i < Math.min(buf.length, 4000); i++) {
-    const b = buf[i];
-    if (b >= 0x80) {
-      hi += 1;
-      // CP1256 Arabic letter range roughly 0xC1–0xDA, 0xE1–0xF2
-      if ((b >= 0xc1 && b <= 0xda) || (b >= 0xe1 && b <= 0xf2) || b === 0xc7) {
-        arabicish += 1;
-      }
-    }
-  }
-  return hi >= 4 && arabicish >= 3 && arabicish / hi >= 0.35;
-}
-
-function hasValidArabicOrAscii(text: string): boolean {
-  if (/[\u0600-\u06FF]/.test(text)) return true;
-  // Mostly printable
-  const sample = text.slice(0, 2000);
-  const bad = (sample.match(/\uFFFD/g) || []).length;
-  return bad < 3;
+/** Higher is better — used when choosing among fallbacks. */
+function scoreDecodedText(text: string): number {
+  if (!text) return -1;
+  let score = 0;
+  const arabic = (text.match(/[\u0600-\u06FF]/g) || []).length;
+  const mojibake = (text.match(/[ØÙÃÂ]/g) || []).length;
+  const repl = (text.match(/\uFFFD/g) || []).length;
+  score += arabic * 3;
+  score -= mojibake * 5;
+  score -= repl * 10;
+  if (/[A-Za-z]{3,}/.test(text)) score += 1;
+  return score;
 }
 
 export function readSpecTextFile(file: string): string {
@@ -191,7 +175,13 @@ export function readSpecTextFile(file: string): string {
   return decodeSpecBuffer(buf);
 }
 
+/**
+ * Prefer list-aware OOXML extraction (w:numPr / ListParagraph → "- " prefix).
+ * Mammoth extractRawText drops list markers, which made Spendy feature bullets vanish.
+ */
 async function readDocx(file: string): Promise<string> {
+  const fromXml = readDocxXmlWithLists(file);
+  if (fromXml.trim()) return fromXml;
   try {
     const mammoth = require("mammoth") as {
       extractRawText: (opts: { path: string }) => Promise<{ value: string }>;
@@ -199,50 +189,91 @@ async function readDocx(file: string): Promise<string> {
     const r = await mammoth.extractRawText({ path: file });
     return String(r.value || "");
   } catch {
-    return readDocxXmlFallback(file);
+    return "";
   }
 }
 
-function readDocxXmlFallback(file: string): string {
-  try {
-    const buf = fs.readFileSync(file);
-    const marker = Buffer.from("word/document.xml");
-    const idx = buf.indexOf(marker);
-    if (idx < 0) return "";
-    let start = -1;
-    for (let i = idx; i >= 0; i--) {
-      if (buf[i] === 0x50 && buf[i + 1] === 0x4b && buf[i + 2] === 0x03 && buf[i + 3] === 0x04) {
-        start = i;
-        break;
-      }
+/** Unpack word/document.xml from a .docx (ZIP). */
+function extractDocumentXml(file: string): string {
+  const buf = fs.readFileSync(file);
+  const marker = Buffer.from("word/document.xml");
+  const idx = buf.indexOf(marker);
+  if (idx < 0) return "";
+  let start = -1;
+  for (let i = idx; i >= 0; i--) {
+    if (buf[i] === 0x50 && buf[i + 1] === 0x4b && buf[i + 2] === 0x03 && buf[i + 3] === 0x04) {
+      start = i;
+      break;
     }
-    if (start < 0) return "";
-    const compMethod = buf.readUInt16LE(start + 8);
-    const compSize = buf.readUInt32LE(start + 18);
-    const nameLen = buf.readUInt16LE(start + 26);
-    const extraLen = buf.readUInt16LE(start + 28);
-    const dataStart = start + 30 + nameLen + extraLen;
-    const data = buf.subarray(dataStart, dataStart + compSize);
-    let xml: Buffer;
-    if (compMethod === 0) xml = data;
-    else if (compMethod === 8) {
-      const zlib = require("zlib") as typeof import("zlib");
-      xml = zlib.inflateRawSync(data);
-    } else return "";
-    return xml
-      .toString("utf-8")
-      .replace(/<w:tab\/>/g, "\t")
-      .replace(/<w:br\/>/g, "\n")
-      .replace(/<\/w:p>/g, "\n")
-      .replace(/<[^>]+>/g, " ")
-      .replace(/&amp;/g, "&")
-      .replace(/&lt;/g, "<")
-      .replace(/&gt;/g, ">")
-      .replace(/\s+/g, " ")
-      .trim();
+  }
+  if (start < 0) return "";
+  const compMethod = buf.readUInt16LE(start + 8);
+  const compSize = buf.readUInt32LE(start + 18);
+  const nameLen = buf.readUInt16LE(start + 26);
+  const extraLen = buf.readUInt16LE(start + 28);
+  const dataStart = start + 30 + nameLen + extraLen;
+  const data = buf.subarray(dataStart, dataStart + compSize);
+  let xml: Buffer;
+  if (compMethod === 0) xml = data;
+  else if (compMethod === 8) {
+    const zlib = require("zlib") as typeof import("zlib");
+    xml = zlib.inflateRawSync(data);
+  } else return "";
+  return xml.toString("utf-8");
+}
+
+/**
+ * Convert OOXML paragraphs to plain text, prefixing Word list paragraphs with "- ".
+ * Detects w:numPr and ListParagraph / ListBullet / ListNumber styles.
+ */
+export function docxXmlToText(xml: string): string {
+  if (!xml) return "";
+  const paras = xml.split(/<\/w:p>/i);
+  const lines: string[] = [];
+  for (const raw of paras) {
+    if (!/<w:p[\s>]/i.test(raw) && !/<w:p\b/i.test(raw)) continue;
+    const pPr = raw.match(/<w:pPr\b[^>]*>([\s\S]*?)<\/w:pPr>/i)?.[1] || "";
+    const isList =
+      /<w:numPr\b/i.test(pPr) ||
+      /<w:pStyle\b[^>]*w:val="[^"]*List[^"]*"/i.test(pPr) ||
+      /<w:pStyle\b[^>]*w:val="[^"]*Bullet[^"]*"/i.test(pPr);
+    const isHeading = /<w:pStyle\b[^>]*w:val="[^"]*Heading[^"]*"/i.test(pPr);
+    // Collect visible text runs (skip deleted revisions)
+    let text = "";
+    const tRe = /<w:t\b[^>]*>([\s\S]*?)<\/w:t>/gi;
+    let m: RegExpExecArray | null;
+    while ((m = tRe.exec(raw))) {
+      text += m[1]
+        .replace(/&amp;/g, "&")
+        .replace(/&lt;/g, "<")
+        .replace(/&gt;/g, ">")
+        .replace(/&quot;/g, '"')
+        .replace(/&#39;/g, "'");
+    }
+    text = text.replace(/\s+/g, " ").trim();
+    if (!text) continue;
+    if (isHeading) {
+      lines.push(`# ${text}`);
+    } else if (isList) {
+      lines.push(`- ${text}`);
+    } else {
+      lines.push(text);
+    }
+  }
+  return lines.join("\n").trim();
+}
+
+function readDocxXmlWithLists(file: string): string {
+  try {
+    return docxXmlToText(extractDocumentXml(file));
   } catch {
     return "";
   }
+}
+
+/** @deprecated name kept for callers — now list-aware. */
+function readDocxXmlFallback(file: string): string {
+  return readDocxXmlWithLists(file);
 }
 
 async function readPdf(file: string): Promise<string> {
@@ -270,10 +301,36 @@ async function readSpecFile(file: string): Promise<string> {
   }
 }
 
+/**
+ * True when a line is a section heading — NOT a feature sentence.
+ * Avoid matching "Multi-wallet support with balance…" as a heading.
+ */
+function isSectionHeadingLine(line: string): string | null {
+  const md = line.match(/^#{1,3}\s+(.+)$/);
+  if (md) return md[1].trim().slice(0, 120);
+  const t = line.trim();
+  if (!t || t.length < 4 || t.length > 90) return null;
+  if (BULLET_PREFIX_RE.test(t)) return null;
+  if (FEATURE_MODAL_RE.test(t) && !isDocumentOnlyRequirement(t)) return null;
+  if (USER_STORY_RE.test(t)) return null;
+  // Known document-only titles (Module / Architecture / Tech Stack / …)
+  if (isDocumentOnlyRequirement(t)) return t.slice(0, 120);
+  // Short Title Case / ALL CAPS labels without commas (not prose)
+  if (
+    /^[A-Z][A-Za-z0-9_/&()-]*(?:\s+[A-Z][A-Za-z0-9_/&()-]*){0,8}$/.test(t) &&
+    !/,/.test(t) &&
+    t.split(/\s+/).length <= 8
+  ) {
+    return t.slice(0, 120);
+  }
+  return null;
+}
+
 function sectionize(text: string, file: string): Array<{ section: string; text: string }> {
   const lines = text.replace(/\r/g, "").split("\n");
   const chunks: Array<{ section: string; text: string }> = [];
-  let section = path.basename(file);
+  // Use basename as context only — never as a REQ body
+  let section = path.basename(file).replace(/\.[^.]+$/, "") || path.basename(file);
   let buf: string[] = [];
   const flush = () => {
     const t = buf.join("\n").trim();
@@ -281,23 +338,20 @@ function sectionize(text: string, file: string): Array<{ section: string; text: 
     buf = [];
   };
   for (const line of lines) {
-    const h =
-      line.match(/^#{1,3}\s+(.+)$/) ||
-      line.match(/^([A-Z][A-Za-z0-9 ._/&()-]{3,80})$/);
-    if (h && buf.length > 0) {
-      flush();
-      section = String(h[1]).trim().slice(0, 120);
-      continue;
-    }
-    if (h) {
-      section = String(h[1]).trim().slice(0, 120);
+    const heading = isSectionHeadingLine(line);
+    if (heading) {
+      if (buf.length > 0) flush();
+      section = heading;
       continue;
     }
     buf.push(line);
   }
   flush();
   if (!chunks.length && text.trim()) {
-    chunks.push({ section: path.basename(file), text: text.trim().slice(0, 20000) });
+    chunks.push({
+      section: path.basename(file).replace(/\.[^.]+$/, "") || path.basename(file),
+      text: text.trim().slice(0, 20000),
+    });
   }
   return chunks;
 }
@@ -421,17 +475,31 @@ export function isDocumentOnlyRequirement(text: string): boolean {
   const t = String(text || "").replace(/\s+/g, " ").trim();
   if (!t) return true;
   const stripped = t
-    .replace(/^\s*(?:[-*•]|\d+[.)]|REQ[-_]?\d+)\s+/i, "")
+    .replace(BULLET_PREFIX_RE, "")
     .replace(/\s*\((?:detailed|details|overview)\)\s*$/i, "")
     .trim();
   if (DOCUMENT_ONLY_TITLE_RE.test(stripped)) return true;
+  // Module / Architecture / Tech Stack / Compliance section labels
+  if (
+    /^(?:[\w/&().,\s-]{2,70})\s+module$/i.test(stripped) ||
+    (/^security\s*(&|and)\s*compliance$/i.test(stripped)) ||
+    (/\barchitecture\b/i.test(stripped) &&
+      /(?:database|system|software|app(?:lication)?)/i.test(stripped) &&
+      stripped.length <= 90 &&
+      !FEATURE_MODAL_RE.test(stripped)) ||
+    (/tech\s*stack/i.test(stripped) &&
+      stripped.length <= 90 &&
+      !FEATURE_MODAL_RE.test(stripped))
+  ) {
+    return true;
+  }
   // Short Title Case heading without feature modal verbs
   if (
     stripped.length <= 80 &&
     !FEATURE_MODAL_RE.test(stripped) &&
     !USER_STORY_RE.test(stripped) &&
     /^[A-Z][\w/&()-]*(?:\s+[A-Z][\w/&()-]*){0,8}$/.test(stripped) &&
-    /(?:overview|analysis|roadmap|guidelines?|design|costs?|infrastructure|module|endpoints?|stack|schema|summary|appendix|references)/i.test(
+    /(?:overview|analysis|roadmap|guidelines?|design|costs?|infrastructure|module|endpoints?|stack|schema|summary|appendix|references|architecture|compliance)/i.test(
       stripped
     )
   ) {
@@ -460,10 +528,14 @@ export function classifyReqKind(text: string): SpecReqKind {
 
 function stripBulletPrefix(line: string): string {
   return line
-    .replace(/^\s*(?:[-*•]|\d+[.)]|REQ[-_]?\d+)\s+/i, "")
+    .replace(BULLET_PREFIX_RE, "")
     .replace(/^\s*(?:MUST|SHALL|SHOULD|يمكن|يجب|يلزم|مطلوب|ينبغي)[:\s]+/i, "")
     .trim();
 }
+
+/** Feature vocabulary for unmarked (no bullet) lines from mammoth/plain prose. */
+const FEATURE_TOPIC_RE =
+  /\b(expense|wallet|categor(?:y|ies)|budget|report|chart|otp|login|auth|offline|cache|voice|ocr|receipt|currency|egp|permission|team\s+member|transaction|microphone|camera)\b|مصروف|محفظ|فئ|ميزاني|تقرير|رسم|دخول|صوت|إيصال|جنيه/i;
 
 function isExtractableFeatureLine(body: string): boolean {
   if (!body || body.length < 8 || body.length > 400) return false;
@@ -476,6 +548,7 @@ function isExtractableFeatureLine(body: string): boolean {
     /^[A-Z][\w/&()-]*(?:\s+[A-Z/][\w/&()-]*){0,10}$/.test(body) &&
     !FEATURE_MODAL_RE.test(body) &&
     !USER_STORY_RE.test(body) &&
+    !FEATURE_TOPIC_RE.test(body) &&
     !/[\u0600-\u06FF]/.test(body)
   ) {
     return false;
@@ -490,57 +563,75 @@ type RawCand = {
   kind: SpecReqKind;
 };
 
+function pushCand(
+  cands: RawCand[],
+  text: string,
+  ch: { file: string; section: string }
+): void {
+  const t = text.replace(/\s+/g, " ").trim();
+  if (!isExtractableFeatureLine(t)) return;
+  cands.push({
+    text: t,
+    sourceFile: ch.file,
+    section: ch.section,
+    kind: classifyReqKind(t),
+  });
+}
+
 /** Heuristic requirement extraction from bullets / numbered / MUST / يجب / user stories. */
 export function extractRequirementsHeuristic(
   chunks: Array<{ file: string; section: string; text: string }>
 ): SpecRequirement[] {
   const cands: RawCand[] = [];
-  const lineRe =
-    /^\s*(?:[-*•]|\d+[.)]|REQ[-_]?\d+)\s+(.+)$|^\s*(?:MUST|SHALL|SHOULD|يمكن|يجب|يلزم|مطلوب|ينبغي)[:\s]+(.+)$/i;
+  const modalLineRe =
+    /^\s*(?:MUST|SHALL|SHOULD|يمكن|يجب|يلزم|مطلوب|ينبغي)[:\s]+(.+)$/i;
 
   for (const ch of chunks) {
     const lines = ch.text.split("\n");
     for (const line of lines) {
-      const m = line.match(lineRe);
-      let body = (m?.[1] || m?.[2] || "").trim();
-      if (!body && USER_STORY_RE.test(line.trim())) {
-        body = line.trim();
+      const trimmed = line.trim();
+      if (!trimmed) continue;
+
+      let text = "";
+      const bullet = trimmed.match(BULLET_PREFIX_RE);
+      if (bullet) {
+        text = trimmed.replace(BULLET_PREFIX_RE, "").trim();
+      } else {
+        const modal = trimmed.match(modalLineRe);
+        if (modal) text = modal[1].trim();
+        else if (USER_STORY_RE.test(trimmed)) text = trimmed;
+        else if (
+          // Unmarked feature lines (docx list markers stripped by mammoth).
+          // Require a concrete feature topic — bare "must deliver capabilities"
+          // overview prose is not a REQ.
+          FEATURE_TOPIC_RE.test(trimmed) &&
+          trimmed.length >= 12 &&
+          trimmed.length <= 200 &&
+          !isDocumentOnlyRequirement(trimmed) &&
+          !/\b(overview|description|capabilities|estimates?\s+only|guidelines?)\b/i.test(
+            trimmed
+          )
+        ) {
+          text = trimmed;
+        }
       }
-      if (!body) continue;
-      body = stripBulletPrefix(body.length > 0 && m ? (m[1] || m[2] || body) : body);
-      // Keep original matched body for modal lines
-      const rawBody = (m?.[1] || m?.[2] || body).trim();
-      const text = rawBody.length >= 8 ? rawBody : body;
-      if (!isExtractableFeatureLine(text)) continue;
-      const kind = classifyReqKind(text);
-      cands.push({
-        text,
-        sourceFile: ch.file,
-        section: ch.section,
-        kind,
-      });
+      if (!text) continue;
+      pushCand(cands, text, ch);
       if (cands.length >= 300) break;
     }
     if (cands.length >= 300) break;
   }
 
-  // Sentences with must/should/shall/يجب/يمكن when few line-level bullets found
+  // Sentences with must/should/shall/يجب/يمكن when few line-level hits found
   if (cands.length < 5) {
     for (const ch of chunks) {
-      // Split on sentence enders AND newlines so multi-bullet blocks never fuse
       const sentences = ch.text.split(/(?<=[.؟!])\s+|\n+/);
       for (const s of sentences) {
-        if (!FEATURE_MODAL_RE.test(s)) continue;
-        const t = s.trim().replace(/^[-*•\d.)\s]+/, "").trim();
-        if (!isExtractableFeatureLine(t) || t.length < 20) continue;
-        // Never accept a fused multi-requirement blob
-        if (/\n/.test(t) || /(?:^|\s)(?:[-*•]|\d+[.)])\s+\S/.test(t)) continue;
-        cands.push({
-          text: t,
-          sourceFile: ch.file,
-          section: ch.section,
-          kind: classifyReqKind(t),
-        });
+        if (!FEATURE_MODAL_RE.test(s) && !FEATURE_TOPIC_RE.test(s)) continue;
+        const t = s.trim().replace(BULLET_PREFIX_RE, "").trim();
+        if (!isExtractableFeatureLine(t) || t.length < 12) continue;
+        if (/\n/.test(t)) continue;
+        pushCand(cands, t, ch);
         if (cands.length >= 120) break;
       }
     }
