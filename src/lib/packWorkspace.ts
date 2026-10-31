@@ -19,6 +19,10 @@ export const PACK_CWD_FORBIDDEN = [
   "agency-verdict.md",
   "evidence.json",
   "gates.json",
+  "delivery-board.json",
+  "DELIVERY_BOARD.md",
+  "go-nogo.example.json",
+  "go-nogo.json",
 ] as const;
 
 /** All staged pack artifact basenames (cwd is never the write target). */

@@ -48,6 +48,7 @@ dist/
 /AUDIT_CHECKLIST.md
 /agency-verdict.md
 /gates.json
+/go-nogo.example.json
 /execution-plan.md
 /execution-result.md
 /final-report.md
