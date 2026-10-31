@@ -109,6 +109,19 @@ Place `level3-plan.json` in the pack folder (see example in prior docs).
 
 From the Control Plane — no code changes needed.
 
+## 11) Self-learning memory (lessons + skills)
+
+Harness runs accumulate non-duplicate lessons (auditor / gate failures) and skills (approved strategy shapes) under `SAM_OUTPUT_HOME/memory/`. Relevant entries are injected into Strategist and Auditor prompts; recurring expressible lessons become deterministic pre-checks.
+
+```bash
+pnpm run memory -- list
+pnpm run memory -- show <id>
+pnpm run memory -- prune --min-hits 2
+pnpm run memory -- promote
+```
+
+See `docs/SELF_LEARNING_MEMORY.md`. Do not edit `config/team.json` for this feature (owner-managed).
+
 ## Still not implemented
 
 - Full AT-SPI / Accessibility parity with Windows UIA on every distro without installing OS packages

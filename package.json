@@ -36,6 +36,7 @@
     "trust:evidence": "tsx scripts/trust-cli.ts evidence",
     "trust:policy": "tsx scripts/trust-cli.ts policy",
     "doctor": "tsx scripts/doctor.ts",
+    "memory": "tsx scripts/memory-cli.ts",
     "migrate": "tsx scripts/migrate.ts",
     "quick:smoke": "tsx scripts/quick-smoke.ts",
     "help": "tsx scripts/help.ts",

@@ -63,6 +63,7 @@ import {
 } from "./pathExtract.js";
 import { chooseNonDegenerateDraft } from "./repetitionGuard.js";
 import { learningContextBlock } from "../controlplane/projectMemory.js";
+import { memoryContextForPrompts } from "../memory/index.js";
 import { withLanguageDirective } from "../lib/i18n/index.js";
 import { beginOutputRun } from "../lib/outputHome.js";
 import {
@@ -144,6 +145,17 @@ function loadBriefExtras(task: string): string {
   const learned = learningContextBlock(process.cwd(), 10, 5);
   if (learned) {
     chunks.push(`\n### Project memory / lessons (obey when relevant)\n${learned}`);
+  }
+  try {
+    const selfLearn = memoryContextForPrompts({
+      goalText: extractUserGoal(task),
+      taskType: "architecture",
+    });
+    if (selfLearn) {
+      chunks.push(`\n### Learned memory (prior runs)\n${selfLearn}`);
+    }
+  } catch {
+    /* memory optional */
   }
   for (const f of files) {
     if (fs.existsSync(f)) {
