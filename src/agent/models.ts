@@ -33,6 +33,7 @@ import {
   resolveLongFormModel,
 } from "../agency/modelPolicy.js";
 import { LONG_FORM_REPEAT_PENALTY } from "../agency/repetitionGuard.js";
+import { localOllamaOptions } from "../lib/ollamaLocal.js";
 
 export { CostCapExceededError };
 export type { ModelRoute };
@@ -107,14 +108,28 @@ function chatFromRoute(
     repeatPenalty?: number;
   }
 ): ChatOllama {
+  const local = route.cloud ? null : localOllamaOptions();
+  const requestedPredict = opts.numPredict ?? 1200;
+  // Cloud models keep their full budget; local CPU-only models are capped so a
+  // reasoning model cannot block a role for several minutes.
+  const numPredict = local
+    ? Math.min(requestedPredict, local.numPredict)
+    : requestedPredict;
   return new ChatOllama({
     baseUrl: route.baseUrl,
     ...(route.headers ? { headers: route.headers } : {}),
     model: route.model,
     temperature: opts.temperature,
     think: false,
-    numPredict: opts.numPredict ?? 1200,
-    numCtx: opts.numCtx ?? 8192,
+    numPredict,
+    ...(local
+      ? {
+          numCtx: opts.numCtx ?? local.numCtx,
+          numThread: local.numThread,
+          numBatch: local.numBatch,
+          keepAlive: local.keepAlive,
+        }
+      : { numCtx: opts.numCtx ?? 8192 }),
     ...(opts.repeatPenalty != null
       ? { repeatPenalty: opts.repeatPenalty }
       : {}),
@@ -135,8 +150,8 @@ export function makeCeoModel() {
   });
   return chatFromRoute(route, {
     temperature: 0.1,
-    numPredict: 900,
-    numCtx: 4096,
+    numPredict: 512,
+    numCtx: 8192,
   });
 }
 

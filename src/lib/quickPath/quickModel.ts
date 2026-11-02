@@ -12,6 +12,7 @@ import {
 } from "../costLedger.js";
 import { resolveModelRoute } from "../cost/index.js";
 import { appendAudit } from "../trust/auditLog.js";
+import { localOllamaOptions } from "../ollamaLocal.js";
 import { languageReplyDirective, detectUserLanguage } from "./language.js";
 
 export const DEFAULT_QUICK_LOCAL_MODEL = "qwen2.5:1.5b";
@@ -100,6 +101,7 @@ export async function invokeQuickModel(input: {
     assertWithinCostCap(cwd, route.estimatedUsd);
   }
 
+  const local = route.cloud ? null : localOllamaOptions();
   const model = new ChatOllama({
     baseUrl: route.baseUrl,
     ...(route.headers ? { headers: route.headers } : {}),
@@ -107,7 +109,14 @@ export async function invokeQuickModel(input: {
     temperature: input.temperature ?? 0.4,
     think: false,
     numPredict: input.numPredict ?? 256,
-    numCtx: 4096,
+    ...(local
+      ? {
+          numCtx: local.numCtx,
+          numThread: local.numThread,
+          numBatch: local.numBatch,
+          keepAlive: local.keepAlive,
+        }
+      : { numCtx: 4096 }),
   });
 
   const lang = detectUserLanguage(input.prompt);
@@ -133,13 +142,17 @@ export async function invokeQuickModel(input: {
         forceLocal: true,
         localModel: cheapestLocalFallback(cwd),
       });
+      const fallbackLocal = localOllamaOptions();
       const fallback = new ChatOllama({
         baseUrl: localRoute.baseUrl,
         model: localRoute.model,
         temperature: input.temperature ?? 0.4,
         think: false,
         numPredict: input.numPredict ?? 256,
-        numCtx: 4096,
+        numCtx: fallbackLocal.numCtx,
+        numThread: fallbackLocal.numThread,
+        numBatch: fallbackLocal.numBatch,
+        keepAlive: fallbackLocal.keepAlive,
       });
       const res = await fallback.invoke(fullPrompt);
       text =
