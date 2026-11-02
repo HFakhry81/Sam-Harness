@@ -41,7 +41,10 @@ export type ToolName =
   | "desktop_screenshot"
   | "desktop_verify"
   | "open_media"
-  | "ffmpeg";
+  | "ffmpeg"
+  | "ide_open_file"
+  | "ide_diagnostics"
+  | "ide_apply_diff";
 
 export type CapabilityTier = "none" | "read" | "ops_safe" | "write_workspace" | "implement";
 
@@ -60,6 +63,8 @@ const READ_TOOLS: ToolName[] = [
   "scan_evidence",
   "search_code",
   "grep",
+  "ide_open_file",
+  "ide_diagnostics",
 ];
 const REPORT_TOOLS: ToolName[] = [...READ_TOOLS, "write_report"];
 /** Phase 4 desktop operator tools (UIA / input / media) — still gated by approval matrix. */
@@ -100,6 +105,7 @@ const OPS_TOOLS: ToolName[] = [
   "run_node_sandbox",
   "mcp_call",
   ...DESKTOP_TOOLS,
+  "ide_apply_diff",
 ];
 const WRITE_TOOLS: ToolName[] = [...OPS_TOOLS, "write_report"];
 

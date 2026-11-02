@@ -103,6 +103,17 @@ function ollamaApiKey(): string {
   return String(process.env.OLLAMA_API_KEY || "").trim();
 }
 
+/** Any cloud/free credential that makes a non-local route possible. */
+function cloudKeyPresent(): boolean {
+  return Boolean(
+    ollamaApiKey() ||
+      String(process.env.OPENAI_API_KEY || "").trim() ||
+      String(process.env.ANTHROPIC_API_KEY || "").trim() ||
+      (String(process.env.SAM_FREE_BASE_URL || "").trim() &&
+        String(process.env.SAM_FREE_MODEL || "").trim())
+  );
+}
+
 function resolvePrefersCloud(input: RouteInput, cwd: string): boolean {
   if (typeof input.prefersCloud === "boolean") return input.prefersCloud;
   if (!input.role) return false;
@@ -274,7 +285,7 @@ export function resolveModelRoute(input: RouteInput = {}): ModelRoute {
       !input.forceLocal &&
       !hybridForcesLocal(cwd) &&
       roleMode !== "local" &&
-      ollamaApiKey() &&
+      cloudKeyPresent() &&
       canAffordPaid(cwd, estimatePaidUsd(paidModel, String(input.prompt || "").length), cfg)
     ) {
       return annotate(
@@ -346,7 +357,7 @@ export function resolveModelRoute(input: RouteInput = {}): ModelRoute {
   }
 
   // roleMode === "local" already returned above
-  const paidOk = Boolean(ollamaApiKey()) && canAffordPaid(cwd, est, cfg);
+  const paidOk = cloudKeyPresent() && canAffordPaid(cwd, est, cfg);
 
   // Hybrid mode / per-role `cloud`: prefer paid for non-cheap work when key + budget allow.
   if (roleMode === "cloud" && paidOk && difficulty !== "cheap") {
@@ -412,9 +423,9 @@ export function resolveModelRoute(input: RouteInput = {}): ModelRoute {
       freeRouteForRole(
         cfg,
         difficulty,
-        ollamaApiKey()
+        cloudKeyPresent()
           ? "premium — paid unaffordable/blocked → free"
-          : "premium — no cloud key → free",
+          : "premium — no paid key → free",
         input.freeModel || undefined
       )
     );

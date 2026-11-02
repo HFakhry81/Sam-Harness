@@ -24,6 +24,7 @@
     "smoke:mcp": "tsx scripts/smoke-mcp.ts",
     "smoke:sandbox": "tsx scripts/smoke-sandbox.ts",
     "eval:task-spec": "tsx scripts/eval-task-spec.ts",
+    "eval": "tsx scripts/eval-runner.ts",
     "eval:goal-fidelity": "tsx scripts/eval-goal-fidelity.ts",
     "eval:evidence-scout": "tsx scripts/eval-evidence-scout.ts",
     "eval:pack-home": "tsx scripts/eval-pack-home.ts",

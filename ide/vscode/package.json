@@ -1,0 +1,51 @@
+{
+  "name": "sam-harness-ide",
+  "displayName": "Sam-Harness IDE Bridge",
+  "description": "Connects VS Code / Cursor to the Sam-Harness Control Plane so the agent can open files, apply approved diffs, and read diagnostics.",
+  "version": "0.1.0",
+  "publisher": "sam-harness",
+  "license": "MIT",
+  "engines": {
+    "vscode": "^1.85.0"
+  },
+  "categories": ["Other"],
+  "activationEvents": ["onStartupFinished"],
+  "main": "./extension.js",
+  "contributes": {
+    "commands": [
+      {
+        "command": "samHarness.connect",
+        "title": "Sam-Harness: Connect IDE bridge"
+      },
+      {
+        "command": "samHarness.disconnect",
+        "title": "Sam-Harness: Disconnect IDE bridge"
+      }
+    ],
+    "configuration": {
+      "title": "Sam-Harness",
+      "properties": {
+        "samHarness.baseUrl": {
+          "type": "string",
+          "default": "http://127.0.0.1:8787",
+          "description": "Control Plane base URL (loopback only)."
+        },
+        "samHarness.token": {
+          "type": "string",
+          "default": "",
+          "description": "Owner token. Leave empty to read .controlplane-token from the workspace root."
+        },
+        "samHarness.autoConnect": {
+          "type": "boolean",
+          "default": true,
+          "description": "Start polling the Control Plane on activation."
+        },
+        "samHarness.pollMs": {
+          "type": "number",
+          "default": 1500,
+          "description": "Polling interval in milliseconds."
+        }
+      }
+    }
+  }
+}

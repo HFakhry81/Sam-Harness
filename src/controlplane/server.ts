@@ -140,6 +140,8 @@ import {
   newConversationId,
   resetConversation,
 } from "../lib/conversation/history.js";
+import { buildChatContext } from "../lib/conversation/context.js";
+import { localOllamaOptions } from "../lib/ollamaLocal.js";
 import {
   addDailyJob,
   loadDailyOps,
@@ -150,6 +152,13 @@ import {
   type DailyOpsItem,
 } from "./dailyOps.js";
 import { loadHybridProfile, saveHybridProfile } from "./hybridProfile.js";
+import {
+  IDE_HEARTBEAT_MS,
+  completeIdeCommand,
+  isIdeConnected,
+  pendingIdeCommandCount,
+  pollIdeCommands,
+} from "../ide/bridge.js";
 import { loadMemory, removeMemory, seedHarnessLessons, upsertMemory } from "./projectMemory.js";
 import {
   createCommDraft,
@@ -797,6 +806,18 @@ async function handleChat(req: http.IncomingMessage, res: http.ServerResponse) {
 
   const forceAgency = body.forceAgency === true;
   const decision = classifyRouteHeuristic(message);
+  // Load the thread BEFORE appending this turn so the replay excludes it
+  // (invokeQuickModel sends the current message as the final user turn).
+  const priorConversation = loadConversation(conversationId, tenantOutputHome());
+  const chatContext = buildChatContext(priorConversation.messages, {
+    currentPrompt: message,
+    contextWindow: {
+      numCtx: localOllamaOptions().numCtx,
+      systemChars: 600,
+      promptChars: message.length,
+      numPredict: 220,
+    },
+  });
   appendMessage(conversationId, { role: "user", content: message }, tenantOutputHome());
 
   // Forced or complex/task → write task.ts then let client/callers hit /api/run
@@ -839,6 +860,11 @@ async function handleChat(req: http.IncomingMessage, res: http.ServerResponse) {
   appendLog(
     `[intent-router] route=${decision.route} intent=${decision.intent} (${decision.reason})\n`
   );
+  appendLog(
+    `[intent-router] history=${chatContext.turns.length} turn(s), ${chatContext.chars} chars` +
+      `${chatContext.dropped ? `, dropped=${chatContext.dropped}` : ""}` +
+      `${chatContext.truncated ? `, trimmed=${chatContext.truncated}` : ""}\n`
+  );
 
   try {
     const quick = await tryRunQuickPath({
@@ -846,6 +872,7 @@ async function handleChat(req: http.IncomingMessage, res: http.ServerResponse) {
       cwd: ROOT,
       runId,
       forceAgency: false,
+      history: chatContext.turns,
       networkApproved: body.networkApproved,
       onEvent: (ev) => {
         appendLog(`[intent-router] ${ev.type}: ${ev.message}\n`);
@@ -906,6 +933,8 @@ async function handleChat(req: http.IncomingMessage, res: http.ServerResponse) {
       skippedModel: result?.skippedModel !== false,
       durationMs: result?.durationMs || 0,
       model: result?.model || null,
+      historyTurns: chatContext.turns.length,
+      historyChars: chatContext.chars,
     });
   } catch (e: any) {
     // Chat failures: still reply, never FAILED / task retained
@@ -1104,12 +1133,26 @@ async function handleRun(req: http.IncomingMessage, res: http.ServerResponse) {
       appendLog(
         `[intent-router] route=${heuristic.route} intent=${heuristic.intent} (${heuristic.reason})\n`
       );
+      const priorConversation = loadConversation(conversationId, tenantOutputHome());
+      const chatContext = buildChatContext(priorConversation.messages, {
+        currentPrompt: prompt,
+        contextWindow: {
+          numCtx: localOllamaOptions().numCtx,
+          systemChars: 600,
+          promptChars: prompt.length,
+          numPredict: 400,
+        },
+      });
+      appendLog(
+        `[intent-router] history=${chatContext.turns.length} turn(s), ${chatContext.chars} chars\n`
+      );
       try {
         const quick = await tryRunQuickPath({
           prompt,
           cwd: ROOT,
           runId: durable.id,
           forceAgency: false,
+          history: chatContext.turns,
           networkApproved: body.networkApproved,
           onEvent: (ev) => {
             appendLog(`[intent-router] ${ev.type}: ${ev.message}\n`);
@@ -1171,6 +1214,8 @@ async function handleRun(req: http.IncomingMessage, res: http.ServerResponse) {
             quick: true,
             chatStyle: true,
             entry,
+            historyTurns: chatContext.turns.length,
+            historyChars: chatContext.chars,
           });
           return;
         }
@@ -1617,6 +1662,13 @@ const server = http.createServer(async (req, res) => {
       return;
     }
 
+    // —— Phase 3 — sandbox isolation status (probes Docker + caches 60s) ——
+    if (method === "GET" && p === "/api/sandbox/status") {
+      const { sandboxStatus } = await import("../tools/sandbox.js");
+      sendJson(res, 200, { ok: true, sandbox: sandboxStatus({ probe: true }) });
+      return;
+    }
+
     if (method === "GET" && p === "/api/tenant") {
       const tid = getActiveTenantId();
       let costCapUsd = 0.5;
@@ -1970,6 +2022,36 @@ const server = http.createServer(async (req, res) => {
       return;
     }
 
+    // —— Phase 2 — IDE bridge transport (editor extensions poll here) ——
+    if (method === "GET" && p === "/api/ide/poll") {
+      sendJson(res, 200, { ok: true, commands: pollIdeCommands(), connected: true });
+      return;
+    }
+    if (method === "GET" && p === "/api/ide/status") {
+      sendJson(res, 200, {
+        ok: true,
+        connected: isIdeConnected(),
+        pending: pendingIdeCommandCount(),
+        heartbeatMs: IDE_HEARTBEAT_MS,
+      });
+      return;
+    }
+    if (method === "POST" && p === "/api/ide/result") {
+      const body = JSON.parse((await readBody(req)) || "{}") as {
+        id?: string;
+        ok?: boolean;
+        result?: unknown;
+        error?: string;
+      };
+      const handled = completeIdeCommand(String(body.id || ""), {
+        ok: body.ok !== false,
+        result: body.result,
+        error: body.error,
+      });
+      sendJson(res, handled ? 200 : 404, { ok: handled, error: handled ? undefined : "unknown command id" });
+      return;
+    }
+
     // —— P6 Daily Ops ——
     if (method === "GET" && p === "/api/daily-ops") {
       sendJson(res, 200, { ok: true, ...loadDailyOps(ROOT) });
@@ -2058,6 +2140,7 @@ const server = http.createServer(async (req, res) => {
       const body = JSON.parse((await readBody(req)) || "{}") as {
         mode?: "local" | "cloud" | "auto";
         costCapUsd?: number;
+        costCapUsdPerDay?: number;
         notes?: string;
         roles?: Partial<Record<string, "local" | "cloud" | "auto">>;
       };

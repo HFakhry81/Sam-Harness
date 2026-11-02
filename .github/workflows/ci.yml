@@ -17,7 +17,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        os: [ubuntu-latest, windows-latest]
+        os: [ubuntu-latest, windows-latest, macos-latest]
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -129,6 +129,10 @@ jobs:
 
       - name: Production eval gates
         run: pnpm run smoke:prod-gates
+
+      # Phase 3 — deterministic routing/security/cost evals (no model, no network)
+      - name: Deterministic evals
+        run: pnpm run eval
 
       # Phase 4 — real UI Automation against Notepad (windows-latest only)
       - name: Desktop Windows integration (Notepad)
