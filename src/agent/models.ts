@@ -1,5 +1,11 @@
 import "../lib/loadEnv.js";
 import { ChatOllama } from "@langchain/ollama";
+import type { BaseChatModel } from "@langchain/core/language_models/chat_models";
+import {
+  ChatOpenAiCompat,
+  isLocalOpenAiCompatBase,
+} from "./providers/openAiCompat.js";
+import { redactSensitive } from "../lib/security/redact.js";
 import {
   assertWithinCostCap,
   chargeCloudCall,
@@ -43,6 +49,33 @@ function ollamaApiKey(): string {
   return String(process.env.OLLAMA_API_KEY || "").trim();
 }
 
+function envTrim(key: string): string {
+  return String(process.env[key] || "").trim();
+}
+
+/** Loopback endpoint? Local calls never leave the machine, so no redaction needed. */
+function isLocalEndpoint(baseUrl?: string): boolean {
+  try {
+    const host = new URL(String(baseUrl || "")).hostname.toLowerCase();
+    return ["localhost", "127.0.0.1", "::1", "[::1]", "0.0.0.0"].includes(host);
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * Any cloud credential the router may bill or use. Phase 1 adds OpenAI-compatible
+ * providers so `OPENAI_API_KEY` in `.env.example` is no longer dead config.
+ */
+export function cloudKeyPresent(): boolean {
+  return Boolean(
+    ollamaApiKey() ||
+      envTrim("OPENAI_API_KEY") ||
+      envTrim("ANTHROPIC_API_KEY") ||
+      (envTrim("SAM_FREE_BASE_URL") && envTrim("SAM_FREE_MODEL"))
+  );
+}
+
 function hybridForcesLocal(): boolean {
   if (String(process.env.FORCE_LOCAL_SPECIALISTS || "").trim() === "1") return true;
   const mode = String(process.env.HYBRID_MODE || "").trim().toLowerCase();
@@ -78,7 +111,7 @@ export function isCostCapExhausted(cwd: string = process.cwd()): boolean {
  */
 export function useOllamaCloudNow(): boolean {
   if (hybridForcesLocal()) return false;
-  if (!ollamaApiKey()) return false;
+  if (!cloudKeyPresent()) return false;
   if (isCostCapExhausted()) return false;
   if (shouldDegradeToLocal()) return false;
   return true;
@@ -99,6 +132,54 @@ export function routeForTask(input: RouteInput = {}): ModelRoute {
   });
 }
 
+/**
+ * Pick an OpenAI-compatible endpoint for this route (Phase 1).
+ * Returns null when the route must use the native Ollama client.
+ */
+function openAiCompatTarget(
+  route: ModelRoute
+): { baseUrl: string; apiKey?: string; model: string } | null {
+  const localProvider = envTrim("SAM_LOCAL_PROVIDER").toLowerCase();
+  const isCompatProvider = (p: string) =>
+    ["openai", "openai-compatible", "lmstudio", "lm-studio", "groq", "openrouter", "together"].includes(p);
+
+  if (route.tier === "free") {
+    return {
+      baseUrl: route.baseUrl,
+      apiKey:
+        envTrim("SAM_FREE_API_KEY") ||
+        String(route.headers?.Authorization || "").replace(/^Bearer\s+/i, ""),
+      model: route.model,
+    };
+  }
+
+  if (route.tier === "local") {
+    if (isCompatProvider(localProvider)) {
+      return {
+        baseUrl: route.baseUrl,
+        apiKey: envTrim("SAM_LOCAL_API_KEY") || "local",
+        model: route.model,
+      };
+    }
+    // Auto-detect LM Studio's default port when the user changed only the URL.
+    if (!localProvider && /:1234(?:[/]|$)/.test(route.baseUrl)) {
+      return { baseUrl: route.baseUrl, apiKey: "local", model: route.model };
+    }
+    return null;
+  }
+
+  // paid tier
+  const paidProvider = envTrim("SAM_PAID_PROVIDER").toLowerCase();
+  if (isCompatProvider(paidProvider) && paidProvider !== "lmstudio") {
+    return {
+      baseUrl: envTrim("OPENAI_BASE_URL") || "https://api.openai.com/v1",
+      apiKey: envTrim("OPENAI_API_KEY"),
+      model: route.model,
+    };
+  }
+  return null;
+}
+
 function chatFromRoute(
   route: ModelRoute,
   opts: {
@@ -107,7 +188,7 @@ function chatFromRoute(
     numCtx?: number;
     repeatPenalty?: number;
   }
-): ChatOllama {
+): BaseChatModel {
   const local = route.cloud ? null : localOllamaOptions();
   const requestedPredict = opts.numPredict ?? 1200;
   // Cloud models keep their full budget; local CPU-only models are capped so a
@@ -115,6 +196,22 @@ function chatFromRoute(
   const numPredict = local
     ? Math.min(requestedPredict, local.numPredict)
     : requestedPredict;
+
+  const compat = openAiCompatTarget(route);
+  if (compat) {
+    const headers: Record<string, string> = { ...(route.headers || {}) };
+    if (compat.apiKey) headers.Authorization = `Bearer ${compat.apiKey}`;
+    return new ChatOpenAiCompat({
+      baseUrl: compat.baseUrl,
+      apiKey: compat.apiKey,
+      model: compat.model,
+      temperature: opts.temperature,
+      maxTokens: numPredict,
+      headers,
+      timeoutMs: 180_000,
+    });
+  }
+
   return new ChatOllama({
     baseUrl: route.baseUrl,
     ...(route.headers ? { headers: route.headers } : {}),
@@ -319,10 +416,23 @@ export async function invokeTracked(
           maxChars: cfg.contextMaxChars,
           targetChars: cfg.contextTargetChars,
         });
-        const finalPrompt = compacted.text;
+        let finalPrompt = compacted.text;
         if (compacted.truncated) {
           span.setAttribute("llm.context_compacted", true);
           span.setAttribute("llm.context_removed_chars", compacted.removedChars);
+        }
+
+        // Phase 1 — cloud-egress redaction. Any non-loopback endpoint (paid or
+        // free tier) gets credential-shaped strings stripped before sending.
+        const modelBaseUrl = (model as { baseUrl?: string }).baseUrl;
+        const remoteEgress = modelBaseUrl ? !isLocalEndpoint(modelBaseUrl) : cloud;
+        if (remoteEgress) {
+          const red = redactSensitive(finalPrompt);
+          if (red.hits > 0) {
+            span.setAttribute("llm.redactions", red.hits);
+            span.setAttribute("llm.redaction_kinds", red.kinds.join(","));
+          }
+          finalPrompt = red.text;
         }
 
         if (!meta.skipCache) {
