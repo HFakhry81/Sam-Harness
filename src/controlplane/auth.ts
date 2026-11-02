@@ -117,7 +117,13 @@ export function extractBearer(req: http.IncomingMessage): string | null {
 export function extractOwnerTokenFromRequest(req: http.IncomingMessage): string | null {
   const bearer = extractBearer(req);
   if (bearer) return bearer;
+  // Query-string tokens are accepted ONLY for the SSE stream: EventSource cannot
+  // set headers. Never accept them for mutating calls or other routes, so the
+  // token cannot leak through logs/history/referrers.
+  const method = (req.method || "GET").toUpperCase();
+  if (method !== "GET") return null;
   const url = new URL(req.url || "/", "http://127.0.0.1");
+  if (url.pathname !== "/api/events") return null;
   const q = url.searchParams.get("token");
   return q && q.trim() ? q.trim() : null;
 }

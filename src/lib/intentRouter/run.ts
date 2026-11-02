@@ -31,6 +31,7 @@ import {
   type WebSearchResult,
 } from "../quickPath/webSearch.js";
 import type { DetectedLanguage, QuickPathSource } from "../quickPath/types.js";
+import type { ChatTurn } from "../conversation/context.js";
 
 export type IntentRouterEvent = {
   type: string;
@@ -74,6 +75,8 @@ export type RunIntentRouterInput = {
   onEvent?: (ev: IntentRouterEvent) => void;
   /** When true, research may write one note markdown under documents/. */
   writeResearchNote?: boolean;
+  /** Bounded prior turns (oldest → newest) for chat/research continuity. */
+  history?: ReadonlyArray<ChatTurn>;
 };
 
 /** Deterministic chat reply when local model is unavailable — never escalate to agency. */
@@ -139,6 +142,8 @@ async function runChatReply(input: {
   runId?: string;
   /** Caller injected a model stub (unit tests) — may use it for non-greeting chat. */
   allowInjectedModel?: boolean;
+  /** Bounded prior turns (oldest → newest). */
+  history?: ReadonlyArray<ChatTurn>;
 }): Promise<{
   reply: string;
   model?: string;
@@ -174,9 +179,11 @@ async function runChatReply(input: {
         runId: input.runId,
         numPredict: 220,
         prompt: input.prompt,
+        history: input.history,
         system: [
           "You are Sam-Harness chat assistant.",
           kind,
+          "Use the prior conversation only to resolve references; never invent facts.",
           languageReplyDirective(lang),
         ].join("\n"),
       }),
@@ -212,6 +219,7 @@ async function runResearch(input: {
   onEvent?: (ev: IntentRouterEvent) => void;
   writeResearchNote?: boolean;
   allowInjectedModel?: boolean;
+  history?: ReadonlyArray<ChatTurn>;
 }): Promise<{
   reply: string;
   model?: string;
@@ -314,6 +322,7 @@ async function runResearch(input: {
             "",
             "Rules: summarize ONLY evidence; cite [1],[2]; do not invent facts.",
           ].join("\n"),
+          history: input.history,
           system: [
             "You are a grounded research summarizer.",
             languageReplyDirective(lang),
@@ -459,6 +468,7 @@ export async function runIntentRouter(
         onEvent: emit,
         writeResearchNote: input.writeResearchNote,
         allowInjectedModel: injectedModel,
+        history: input.history,
       });
       return {
         ok: true,
@@ -478,6 +488,7 @@ export async function runIntentRouter(
       cwd,
       runId: input.runId,
       allowInjectedModel: injectedModel,
+      history: input.history,
     });
     return {
       ok: true,

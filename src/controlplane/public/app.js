@@ -1305,6 +1305,11 @@ async function sendChatMessage() {
   busy = true;
   if (els.btnSend) els.btnSend.disabled = true;
   els.healthMeta.textContent = "chat: routing…";
+  const chatStartedAt = Date.now();
+  const chatTick = setInterval(() => {
+    const sec = Math.round((Date.now() - chatStartedAt) / 1000);
+    els.healthMeta.textContent = `chat: ${sec}s… (local model)`;
+  }, 1000);
   try {
     const res = await api("/api/chat", {
       method: "POST",
@@ -1330,6 +1335,7 @@ async function sendChatMessage() {
       );
       lastDraft = data.draft || lastDraft;
       showStage("run");
+      clearInterval(chatTick);
       await runMode("agency");
       return;
     }
@@ -1351,6 +1357,7 @@ async function sendChatMessage() {
     );
     els.healthMeta.textContent = "ready";
   } finally {
+    clearInterval(chatTick);
     busy = false;
     if (els.btnSend) els.btnSend.disabled = false;
     els.prompt?.focus();

@@ -211,13 +211,23 @@ async function main() {
   // launch agency. --force-agency / FORCE_AGENCY=1 still forces the pipeline.
   if (!implementOnly && !forceFlags.forceAgency && !forceFlags.forceOperational) {
     const { tryRunQuickPath } = await import("./src/lib/quickPath/index.js");
-    const { appendMessage, newConversationId } = await import(
+    const { appendMessage, loadConversation, newConversationId } = await import(
       "./src/lib/conversation/history.js"
     );
+    const { buildChatContext } = await import(
+      "./src/lib/conversation/context.js"
+    );
+    const convId =
+      String(process.env.SAM_CONVERSATION_ID || "").trim() ||
+      newConversationId();
+    const chatContext = buildChatContext(loadConversation(convId).messages, {
+      currentPrompt: task,
+    });
     const quick = await tryRunQuickPath({
       prompt: task,
       cwd: process.cwd(),
       forceAgency: false,
+      history: chatContext.turns,
       // Force-quick: still use router but prefer lightweight paths
     });
     if (quick?.result) {
@@ -236,9 +246,6 @@ async function main() {
       );
       console.log(`\n${result.reply}\n`);
       try {
-        const convId =
-          String(process.env.SAM_CONVERSATION_ID || "").trim() ||
-          newConversationId();
         appendMessage(convId, { role: "user", content: task });
         appendMessage(convId, {
           role: "assistant",

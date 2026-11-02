@@ -1,6 +1,6 @@
 {
   "version": 1,
-  "updatedAt": "2026-10-31T08:33:33.580Z",
+  "updatedAt": "2026-11-02T01:17:49.234Z",
   "roles": [
     {
       "id": "ceo_router",
@@ -85,7 +85,7 @@
       "builtin": true,
       "prefersCloud": true,
       "models": {
-        "local": "local-deepseek:latest",
+        "local": "qwen-claude:27b-fast",
         "cloud": "gemma4:cloud",
         "free": null
       },
@@ -105,7 +105,7 @@
       "builtin": true,
       "prefersCloud": true,
       "models": {
-        "local": "local-deepseek:latest",
+        "local": "qwen-claude:27b-fast",
         "cloud": "gemma4:cloud",
         "free": null
       },
@@ -126,7 +126,7 @@
       "builtin": true,
       "prefersCloud": true,
       "models": {
-        "local": "local-deepseek:latest",
+        "local": "qwen-claude:27b-fast",
         "cloud": "gemma4:cloud",
         "free": null
       },
