@@ -1,0 +1,326 @@
+{
+  "$schema": "./schema.md",
+  "version": 1,
+  "description": "Deterministic offline evals for Sam-Harness. No model calls, no network. Run with: pnpm run eval",
+  "thresholds": {
+    "intent": 0.95,
+    "security": 1.0,
+    "cost": 1.0,
+    "sandbox": 1.0,
+    "context": 1.0,
+    "overall": 0.98
+  },
+  "cases": [
+    {
+      "id": "intent-greeting-en",
+      "suite": "intent",
+      "prompt": "hello",
+      "expect": { "route": "chat", "intent": "smalltalk" }
+    },
+    {
+      "id": "intent-greeting-ar",
+      "suite": "intent",
+      "prompt": "مرحبا اسمي هيثم",
+      "expect": { "route": "chat", "intent": "smalltalk" }
+    },
+    {
+      "id": "intent-smalltalk-thanks",
+      "suite": "intent",
+      "prompt": "thank you",
+      "expect": { "route": "chat", "intent": "smalltalk" }
+    },
+    {
+      "id": "intent-lookup-rest",
+      "suite": "intent",
+      "prompt": "What is a REST API?",
+      "expect": { "route": "chat", "intent": "simple_question" }
+    },
+    {
+      "id": "intent-whats-new-nextjs",
+      "suite": "intent",
+      "prompt": "What's new in Next.js 16?",
+      "expect": { "route": "research", "intent": "web_research" }
+    },
+    {
+      "id": "intent-release-notes",
+      "suite": "intent",
+      "prompt": "search the web for TypeScript 5.5 release notes",
+      "expect": { "route": "research", "intent": "web_research" }
+    },
+    {
+      "id": "intent-latest-news-ar",
+      "suite": "intent",
+      "prompt": "ما آخر أخبار أوبن إيه آي اليوم",
+      "expect": { "route": "research", "intent": "web_research" }
+    },
+    {
+      "id": "intent-report-ar",
+      "suite": "intent",
+      "prompt": "اكتب تقرير عن أداء الشركة الربعي",
+      "expect": { "route": "complex", "intent": "complex_task" }
+    },
+    {
+      "id": "intent-report-en",
+      "suite": "intent",
+      "prompt": "write a report on our monthly support backlog",
+      "expect": { "route": "complex", "intent": "complex_task" }
+    },
+    {
+      "id": "intent-count-files-ar",
+      "suite": "intent",
+      "prompt": "كم عدد الملفات في مجلد التنزيلات؟",
+      "expect": { "route": "task", "intent": "simple_task" }
+    },
+    {
+      "id": "intent-count-files-en",
+      "suite": "intent",
+      "prompt": "how many files are in the Downloads folder?",
+      "expect": { "route": "task", "intent": "simple_task" }
+    },
+    {
+      "id": "intent-fix-login-bug",
+      "suite": "intent",
+      "prompt": "fix the login bug in src/auth.ts",
+      "expect": { "route": "complex", "intent": "complex_task" }
+    },
+    {
+      "id": "intent-architecture-gap-matrix",
+      "suite": "intent",
+      "prompt": "analyze Maw3ed architecture and produce a gap matrix",
+      "expect": { "route": "complex", "intent": "complex_task" }
+    },
+    {
+      "id": "intent-path-audit-ar",
+      "suite": "intent",
+      "prompt": "حلل الكود في المسار E:\\UpNexa.com\\spendy",
+      "expect": { "route": "complex", "intent": "complex_task" }
+    },
+    {
+      "id": "intent-excel-task-ar",
+      "suite": "intent",
+      "prompt": "اعمل ملف Excel على سطح المكتب باسم report.xlsx",
+      "expect": { "route": "task", "intent": "simple_task" }
+    },
+    {
+      "id": "intent-open-notepad",
+      "suite": "intent",
+      "prompt": "افتح Notepad واكتب Hello",
+      "expect": { "route": "task", "intent": "simple_task" }
+    },
+    {
+      "id": "intent-move-file-ar",
+      "suite": "intent",
+      "prompt": "انقل الملف report.md إلى Downloads",
+      "expect": { "route": "task", "intent": "simple_task" }
+    },
+    {
+      "id": "intent-force-agency",
+      "suite": "intent",
+      "prompt": "--force-agency run the full pipeline",
+      "expect": { "route": "complex", "intent": "complex_task" }
+    },
+
+    {
+      "id": "redact-openai-key",
+      "suite": "security",
+      "kind": "redact",
+      "input": "here is my key sk-proj-abcdefghijklmnopqrstuvwxyz012345",
+      "expect": { "absent": ["sk-proj-abcdefghijklmnopqrstuvwxyz012345"], "present": [] }
+    },
+    {
+      "id": "redact-jwt-and-aws",
+      "suite": "security",
+      "kind": "redact",
+      "input": "aws AKIAIOSFODNN7EXAMPLE jwt eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiIxMjM0NTY3ODkwIn0.dozjgNryP4J3jVmNHl0w5N_XgL0n3I9PlFUP0THsR8U",
+      "expect": { "absent": ["AKIAIOSFODNN7EXAMPLE", "eyJhbGciOiJIUzI1NiJ9"], "present": [] }
+    },
+    {
+      "id": "redact-env-assignment-keeps-name",
+      "suite": "security",
+      "kind": "redact",
+      "input": "OPENAI_API_KEY=supersecretvalue123\nNORMAL=visible",
+      "expect": { "absent": ["supersecretvalue123"], "present": ["OPENAI_API_KEY=", "NORMAL=visible"] }
+    },
+    {
+      "id": "redact-private-key-block",
+      "suite": "security",
+      "kind": "redact",
+      "input": "-----BEGIN RSA PRIVATE KEY-----\nMIIEowIBAAKCAQEA1234\n-----END RSA PRIVATE KEY-----",
+      "expect": { "absent": ["MIIEowIBAAKCAQEA1234"], "present": [] }
+    },
+    {
+      "id": "redact-clean-text-untouched",
+      "suite": "security",
+      "kind": "redact",
+      "input": "Build a monthly expense report from the Spendy data.",
+      "expect": { "absent": [], "present": ["Build a monthly expense report"] }
+    },
+    {
+      "id": "write-repo-blocked",
+      "suite": "security",
+      "kind": "write",
+      "target": "repo",
+      "expect": { "allowed": false }
+    },
+    {
+      "id": "write-output-allowed",
+      "suite": "security",
+      "kind": "write",
+      "target": "outside",
+      "expect": { "allowed": true }
+    },
+    {
+      "id": "write-source-root-blocked",
+      "suite": "security",
+      "kind": "write",
+      "target": "source",
+      "expect": { "allowed": false }
+    },
+    {
+      "id": "path-secret-env-blocked",
+      "suite": "security",
+      "kind": "path",
+      "target": "project/.env",
+      "expect": { "allowed": false }
+    },
+    {
+      "id": "path-secret-key-blocked",
+      "suite": "security",
+      "kind": "path",
+      "target": "project/server.pem",
+      "expect": { "allowed": false }
+    },
+    {
+      "id": "path-env-example-allowed",
+      "suite": "security",
+      "kind": "path",
+      "target": "project/.env.example",
+      "expect": { "allowed": true }
+    },
+    {
+      "id": "path-mcp-config-blocked",
+      "suite": "security",
+      "kind": "path",
+      "target": "project/mcp.json",
+      "expect": { "allowed": false }
+    },
+
+    {
+      "id": "cost-run-cap-blocks-second-call",
+      "suite": "cost",
+      "runCapUsd": 0.05,
+      "dailyCapUsd": 5,
+      "spentUsd": 0.04,
+      "addUsd": 0.02,
+      "expect": { "error": "COST_CAP_EXCEEDED", "scope": "run" }
+    },
+    {
+      "id": "cost-daily-cap-blocks-across-runs",
+      "suite": "cost",
+      "runCapUsd": 10,
+      "dailyCapUsd": 0.05,
+      "spentUsd": 0.05,
+      "addUsd": 0.01,
+      "expect": { "error": "COST_CAP_EXCEEDED", "scope": "day" }
+    },
+    {
+      "id": "cost-within-both-caps-allowed",
+      "suite": "cost",
+      "runCapUsd": 0.5,
+      "dailyCapUsd": 5,
+      "spentUsd": 0.1,
+      "addUsd": 0.05,
+      "expect": { "error": null }
+    },
+    {
+      "id": "cost-zero-cap-forbids-cloud",
+      "suite": "cost",
+      "runCapUsd": 0,
+      "dailyCapUsd": 5,
+      "spentUsd": 0,
+      "addUsd": 0.001,
+      "expect": { "error": "COST_CAP_EXCEEDED", "scope": "run" }
+    },
+
+    {
+      "id": "sandbox-default-subprocess",
+      "suite": "sandbox",
+      "env": {},
+      "expect": { "mode": "subprocess" }
+    },
+    {
+      "id": "sandbox-legacy-docker-alias",
+      "suite": "sandbox",
+      "env": { "SAM_SANDBOX_DOCKER": "1" },
+      "expect": { "mode": "auto" }
+    },
+    {
+      "id": "sandbox-explicit-docker",
+      "suite": "sandbox",
+      "env": { "SAM_SANDBOX_MODE": "docker" },
+      "expect": { "mode": "docker" }
+    },
+    {
+      "id": "sandbox-explicit-auto",
+      "suite": "sandbox",
+      "env": { "SAM_SANDBOX_MODE": "auto" },
+      "expect": { "mode": "auto" }
+    },
+    {
+      "id": "sandbox-unknown-value-safe",
+      "suite": "sandbox",
+      "env": { "SAM_SANDBOX_MODE": "firecracker" },
+      "expect": { "mode": "subprocess" }
+    },
+
+    {
+      "id": "context-keeps-newest-turns",
+      "suite": "context",
+      "kind": "history",
+      "turns": [
+        { "role": "user", "content": "old question about HTTP" },
+        { "role": "assistant", "content": "old answer" },
+        { "role": "user", "content": "newest question about REST" },
+        { "role": "assistant", "content": "newest answer" }
+      ],
+      "maxMessages": 2,
+      "maxChars": 1000,
+      "expect": {
+        "turns": 2,
+        "present": ["newest question about REST", "newest answer"],
+        "absent": ["old question about HTTP"]
+      }
+    },
+    {
+      "id": "context-char-budget-respected",
+      "suite": "context",
+      "kind": "history",
+      "turns": [
+        { "role": "user", "content": "oldest context that must be dropped" },
+        { "role": "assistant", "content": "an old reply" },
+        { "role": "user", "content": "newest surviving turn" }
+      ],
+      "maxChars": 60,
+      "maxMessageChars": 80,
+      "expect": {
+        "maxChars": 60,
+        "present": ["newest surviving turn"],
+        "absent": ["oldest context that must be dropped"]
+      }
+    },
+    {
+      "id": "context-local-window-default-16k",
+      "suite": "context",
+      "kind": "window",
+      "env": {},
+      "expect": { "numCtx": 16384 }
+    },
+    {
+      "id": "context-local-window-override",
+      "suite": "context",
+      "kind": "window",
+      "env": { "SAM_LOCAL_NUM_CTX": "4096" },
+      "expect": { "numCtx": 4096 }
+    }
+  ]
+}

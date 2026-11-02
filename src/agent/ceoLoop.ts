@@ -1,5 +1,6 @@
 import { ChatOllama } from "@langchain/ollama";
 import * as fs from "fs";
+import { localOllamaOptions } from "../lib/ollamaLocal.js";
 import { live, ok, warn, err } from "../lib/colors.js";
 import {
   ANALYSIS_TOOL_CATALOG,
@@ -20,6 +21,7 @@ import {
   isShellDisabled,
   registerSourceRoots,
   registerWriteRoots,
+  setStrictWriteRoots,
 } from "../lib/writePolicy.js";
 import {
   RepeatGuard,
@@ -64,13 +66,17 @@ export type { CeoDecision };
 /** Prefer a small instruct/coder model for JSON tools; override with CEO_MODEL. */
 const CEO_MODEL = process.env.CEO_MODEL || "qwen2.5-coder:1.5b";
 
+const ceoLocal = localOllamaOptions();
 const ceo = new ChatOllama({
   baseUrl: "http://localhost:11434",
   model: CEO_MODEL,
   temperature: 0,
   think: false,
   numPredict: 400,
-  numCtx: 4096,
+  numCtx: ceoLocal.numCtx,
+  numThread: ceoLocal.numThread,
+  numBatch: ceoLocal.numBatch,
+  keepAlive: ceoLocal.keepAlive,
 });
 
 function extractJson(text: string): Record<string, unknown> | null {
@@ -299,6 +305,9 @@ export async function runOperationalCeoLoop(task: string, maxSteps = 8) {
       ...gp.specRoots.map((p) => p.normalized),
     ]);
     registerWriteRoots([]);
+    // Operational mode: allow normal desktop writes, but source roots and the
+    // harness repo stay read-only (writePolicy enforces the repo block itself).
+    setStrictWriteRoots(false);
   } catch {
     /* ignore */
   }

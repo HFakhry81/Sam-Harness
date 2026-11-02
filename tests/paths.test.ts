@@ -35,6 +35,14 @@ describe("assertAllowedPath / desktop-controller sandbox", () => {
     expect(roots).toContain(path.normalize(getOutputHome()).toLowerCase());
   });
 
+  it("includes the OS temp dir (macOS /var/folders)", () => {
+    delete process.env.WORKSPACE_ROOTS;
+    const roots = listAllowlistRoots().map((r) => path.normalize(r).toLowerCase());
+    expect(roots).toContain(path.normalize(os.tmpdir()).toLowerCase());
+    const probe = path.join(os.tmpdir(), "sh-temp-allow-probe.txt");
+    expect(() => assertAllowedPath(probe)).not.toThrow();
+  });
+
   it("allows Desktop under the user environment by default", () => {
     delete process.env.WORKSPACE_ROOTS;
     const desk = path.join(os.homedir(), "Desktop", "sam-harness-allow-test.txt");

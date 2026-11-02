@@ -72,6 +72,29 @@ const FORCE_AGENCY_RE =
 const QUESTION_RE =
   /^(?:what|who|when|where|why|how|which|is|are|can|does|do|هل|ما|ماذا|من|متى|أين|اين|لماذا|كيف|وش|ايش|كم)\b|[?؟]\s*$/iu;
 
+/**
+ * Time-sensitive / version questions ("what's new in X", "release notes").
+ * These need current information, so they must go to research instead of being
+ * answered from the model's stale memory (spec §11).
+ */
+const RESEARCH_CUE_RE =
+  /(?:\bwhat(?:'s| is| are)\s+new\b|\brelease\s+notes?\b|\bchangelog\b|\blatest\s+(?:version|release|news|update)\b|\bnewest\s+(?:version|release)\b|\bwhat(?:'s| is)\s+the\s+latest\b|\blatest\b|\bup[- ]to[- ]date\b|ما\s+الجديد|أحدث\s+إصدار|احدث\s+اصدار|آخر\s+إصدار|اخر\s+اصدار|ملاحظات\s+الإصدار|سجل\s+التغييرات|أحدث\s+نسخة|احدث\s+نسخة)/iu;
+
+/**
+ * Report / analysis deliverables. "اكتب تقرير…" previously fell through to chat
+ * because `اكتب` alone is not a complex verb.
+ */
+const REPORT_CUE_RE =
+  /(?:اكتب\s+(?:لي\s+)?تقرير|أعد\s+تقرير|اعد\s+تقرير|جه[ّ']?ز\s+تقرير|تقرير\s+(?:عن|حول|مفصل)|\bwrite\s+(?:a\s+|an\s+|me\s+a\s+)?report\b|\breport\s+on\b|\banaly[sz]e\b|\banalysis\s+of\b|\bbreakdown\s+of\b|\bproduce\s+(?:a\s+)?(?:report|analysis)\b|تحليل\s+(?:أداء|اداء|بيانات)|\bخطة\s+(?:عمل|تنفيذ|تطوير)|\bplan\s+(?:for|to)\b)/iu;
+
+/** Filesystem inspection questions. They look like questions but need tools. */
+const FS_INSPECT_RE =
+  /(?:\bhow\s+many\s+(?:files?|folders?|directories)\b|\bcount\s+(?:the\s+)?files?\b|\bfile\s+count\b|\bsize\s+of\s+(?:the\s+)?(?:folder|directory)\b|\bdisk\s+usage\b|\blist\s+(?:the\s+)?files\b|كم\s+عدد\s+ال?ملفات|عدد\s+ال?ملفات|كم\s+ملف|احسب\s+(?:حجم|عدد)|حجم\s+(?:مجلد|المجلد|المسار)|قائمة\s+ال?ملفات)/iu;
+
+/** Bug-fix requests on real code — complex even without an absolute path. */
+const FIX_CODE_RE =
+  /(?:\b(?:fix|debug|patch|resolve)\b[^.!?]{0,60}\b(?:bug|error|exception|test|build|login|crash|issue|regression|typescript|compile)\b|\b(?:bug|error|exception|crash)\b[^.!?]{0,40}\b(?:fix|debug|patch|resolve)\b|أصلح\s+(?:ال)?(?:خطأ|عطل|مشكلة|بق)|صلّ?ح\s+(?:ال)?(?:خطأ|عطل|مشكلة))/iu;
+
 function decision(
   route: IntentRoute,
   intent: IntentClass,
@@ -158,6 +181,10 @@ export function classifyIntentHeuristic(prompt: string): IntentDecision {
   const hasComplex = COMPLEX_VERBS_RE.test(compact);
   const hasSimple = SIMPLE_TASK_RE.test(compact);
   const hasWeb = WEB_RE.test(compact);
+  const hasResearch = RESEARCH_CUE_RE.test(compact);
+  const hasReport = REPORT_CUE_RE.test(compact);
+  const hasFsInspect = FS_INSPECT_RE.test(compact);
+  const hasFixCode = FIX_CODE_RE.test(compact);
 
   // Path + examine/build/fix/audit → complex agency
   if (hasPath && (hasComplex || hasSimple)) {
@@ -182,6 +209,51 @@ export function classifyIntentHeuristic(prompt: string): IntentDecision {
 
   if (hasWeb && !hasComplex && !hasPath) {
     return decision("research", "web_research", 0.9, "web/research cue", "heuristic");
+  }
+
+  // ——— Phase 3 classifier fixes (spec §11) ———
+  // Version / "what's new" questions need current data, not model memory.
+  if (hasResearch && !hasComplex && !hasSimple && !hasPath) {
+    return decision(
+      "research",
+      "web_research",
+      0.86,
+      "current-info/version cue → research",
+      "heuristic"
+    );
+  }
+
+  // "write a report…" / "analyze performance" are deliverables, not chat.
+  if (hasReport && !hasSimple) {
+    return decision(
+      "complex",
+      "complex_task",
+      0.85,
+      "report/analysis deliverable → complex",
+      "heuristic"
+    );
+  }
+
+  // Bug-fix requests on real code are complex even without an absolute path.
+  if (hasFixCode && !hasSimple) {
+    return decision(
+      "complex",
+      "complex_task",
+      0.86,
+      "code fix/debug cue → complex",
+      "heuristic"
+    );
+  }
+
+  // "how many files…" looks like a question but requires filesystem tools.
+  if (hasFsInspect && !hasComplex) {
+    return decision(
+      "task",
+      "simple_task",
+      0.84,
+      "filesystem inspection cue → task",
+      "heuristic"
+    );
   }
 
   if (

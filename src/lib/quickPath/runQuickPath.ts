@@ -18,6 +18,7 @@ import type {
   ReplyPath,
 } from "./types.js";
 import type { IntentRoute } from "../intentRouter/types.js";
+import type { ChatTurn } from "../conversation/context.js";
 
 export type QuickPathEvent = {
   type: string;
@@ -45,6 +46,8 @@ export type RunQuickPathInput = {
   /** Progress / failure events (Control Plane run log). */
   onEvent?: (ev: QuickPathEvent) => void;
   writeResearchNote?: boolean;
+  /** Bounded prior turns (oldest → newest) for chat/research continuity. */
+  history?: ReadonlyArray<ChatTurn>;
 };
 
 /** Honest empty-search message; never invent facts. */
@@ -77,6 +80,7 @@ export async function tryRunQuickPath(
     invokeModel: input.invokeModel,
     networkApproved: input.networkApproved,
     writeResearchNote: input.writeResearchNote,
+    history: input.history,
     onEvent: input.onEvent,
     classify: async (prompt, opts) => {
       const c = await classify(prompt, {

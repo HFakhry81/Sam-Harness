@@ -53,6 +53,8 @@ export function saveHybridProfile(
   patch: Partial<{
     mode: HybridMode;
     costCapUsd: number;
+    /** Daily cloud budget (optional; defaults to costCapUsd when unset). */
+    costCapUsdPerDay: number;
     notes: string;
     roles: Partial<Record<string, HybridMode>>;
   }>
@@ -70,6 +72,10 @@ export function saveHybridProfile(
     ...cur,
     mode: patch.mode || cur.mode,
     costCapUsd: Math.max(0, Number(patch.costCapUsd ?? cur.costCapUsd) || 0),
+    costCapUsdPerDay:
+      patch.costCapUsdPerDay != null
+        ? Math.max(0, Number(patch.costCapUsdPerDay) || 0)
+        : cur.costCapUsdPerDay,
     notes: patch.notes ?? cur.notes,
     roles,
     updatedAt: new Date().toISOString(),

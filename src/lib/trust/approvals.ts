@@ -193,6 +193,26 @@ export function requireDestructiveFsApproval(input: {
   });
 }
 
+/**
+ * Phase 2 — IDE edits (apply diff inside the editor) need an explicit owner
+ * approval. The bridge additionally requires SAM_IDE_ALLOW_WRITE=1 for edits to
+ * prompt sources; the harness repo is never writable.
+ */
+export function requireIdeWriteApproval(input: {
+  path: string;
+  approvalId?: string;
+  runId?: string;
+}): ApprovalDecision {
+  return resolveWithFlags({
+    kind: "ide_write",
+    subject: `ide_write:${path.normalize(input.path)}`,
+    approved: input.approvalId && input.approvalId.trim() ? input.approvalId.trim() : undefined,
+    autoEnvFlags: ["SAM_IDE_AUTO_APPROVE", "APPROVE_TRUST"],
+    runId: input.runId,
+    meta: { path: path.normalize(input.path), surface: "ide" },
+  });
+}
+
 /** Email send via SMTP/Resend — always HITL when policy says so. */
 export function requireEmailSendApproval(input: {
   draftId: string;

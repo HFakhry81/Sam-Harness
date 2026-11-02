@@ -73,6 +73,35 @@ function builtinDenyPrefixes(): string[] {
 }
 
 /**
+ * Secret filenames denied wherever they live — cwd, a target project, or any drive.
+ * Name-based because real projects keep credentials next to code (`.env`, keys, MCP configs).
+ * `.env.example` stays readable on purpose (installers/CI copy it).
+ */
+const DENIED_BASENAME_RES: RegExp[] = [
+  /^\.env$/i,
+  /^\.env\.(?!example$)[^.]+$/i,
+  /\.(pem|key|pfx|p12|keystore|jks)$/i,
+  /^id_(rsa|dsa|ecdsa|ed25519)(\.pub)?$/i,
+  /^\.npmrc$/i,
+  /^\.netrc$/i,
+  /^\.git-credentials$/i,
+  /^credentials\.json$/i,
+  /^\.controlplane-token$/i,
+  /^(cost-ledger|hybrid-profile)\.json$/i,
+  // Harness control files: writing them rewrites guardrails (MCP spawn / sandbox roots).
+  /^mcp\.json$/i,
+  /^\.mcp\.json$/i,
+  /^workspace-roots\.json$/i,
+];
+
+/** True when the file name itself is a protected secret/control file. */
+export function isDeniedBasename(absPath: string): boolean {
+  const base = path.basename(path.normalize(String(absPath || ""))).toLowerCase();
+  if (!base || base === ".env.example") return false;
+  return DENIED_BASENAME_RES.some((re) => re.test(base));
+}
+
+/**
  * Env path list: prefer `;` and newlines (Windows-safe for `D:\...`).
  * Also accepts `path.delimiter` when no `;` is present.
  */
@@ -168,6 +197,9 @@ export function userRoots(cwd: string = process.cwd()): string[] {
   const home = homeDir();
   const defaults = [
     ...always,
+    // Per-user OS scratch dir: /tmp on Linux, /var/folders/.../T on macOS,
+    // %LOCALAPPDATA%\Temp on Windows. Tests and agent scratch files need it.
+    normalizeRoot(os.tmpdir()),
     normalizeRoot(home),
     normalizeRoot(desktopDir()),
     normalizeRoot(path.join(home, "Documents")),
@@ -179,6 +211,8 @@ export function userRoots(cwd: string = process.cwd()): string[] {
     defaults.push(...listWindowsDriveRoots());
   } else {
     defaults.push(
+      // macOS keeps /tmp as a compatibility symlink; keep it for callers that
+      // still hard-code it (os.tmpdir() above is the authoritative path).
       normalizeRoot("/tmp"),
       normalizeRoot(path.join(home, "tmp")),
       normalizeRoot("/home"),
@@ -259,6 +293,7 @@ export function resolveUserPath(rawPath: string): string {
 }
 
 function isDenied(normalizedLower: string, cwd: string): boolean {
+  if (isDeniedBasename(normalizedLower)) return true;
   for (const deny of denyPrefixes(cwd)) {
     if (
       normalizedLower === deny ||
