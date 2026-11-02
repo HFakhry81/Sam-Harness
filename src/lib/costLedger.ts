@@ -53,11 +53,16 @@ export type CostLedger = {
 
 export type CostBudgetSnapshot = {
   day: string;
+  /** Daily cloud cap (kept for UI back-compat). */
   capUsd: number;
   spentUsd: number;
   remainingUsd: number;
   runId: string | null;
+  /** Hard per-run cap from the hybrid profile (spec: $0.50 per run). */
+  runCapUsd: number;
   runSpentUsd: number;
+  runRemainingUsd: number;
+  runBlocked: boolean;
   byModel: CostLedger["byModel"];
   blocked: boolean;
   blockReason: string | null;
@@ -168,15 +173,29 @@ export function dailySpentUsd(cwd: string): number {
   );
 }
 
+/** Hard per-run cloud cap (profile.costCapUsd). $0 forbids cloud spend entirely. */
 export function getCostCapUsd(cwd: string): number {
   const profile = loadHybridProfile(cwd);
   return Math.max(0, Number(profile.costCapUsd) || 0);
 }
 
+/**
+ * Daily cloud cap (profile.costCapUsdPerDay), falling back to the per-run cap
+ * when unset so existing profiles keep their previous daily behaviour.
+ */
+export function getDailyCostCapUsd(cwd: string): number {
+  const profile = loadHybridProfile(cwd);
+  const raw = profile.costCapUsdPerDay;
+  const n = Number(raw);
+  if (raw != null && Number.isFinite(n) && n >= 0) return Math.max(0, n);
+  return getCostCapUsd(cwd);
+}
+
 export function getCostBudget(cwd: string): CostBudgetSnapshot {
   const ledger = loadCostLedger(cwd);
-  const capUsd = getCostCapUsd(cwd);
-  // Only cloud entries count against the daily $ cap (local/free are $0 but still tracked).
+  const capUsd = getDailyCostCapUsd(cwd);
+  const runCapUsd = getCostCapUsd(cwd);
+  // Only cloud entries count against the $ caps (local/free are $0 but still tracked).
   const spentUsd = ledger.entries.reduce(
     (s, e) => s + (e.cloud ? e.costUsd || 0 : 0),
     0
@@ -184,20 +203,26 @@ export function getCostBudget(cwd: string): CostBudgetSnapshot {
   const remainingUsd = Math.max(0, capUsd - spentUsd);
   const runId = activeRunId;
   const runSpentUsd = runId && ledger.runs[runId] ? ledger.runs[runId].costUsd : 0;
+  const runRemainingUsd = Math.max(0, runCapUsd - runSpentUsd);
   // Cap of $0 means no cloud spend allowed (spent 0 >= cap 0 → blocked)
-  const blocked = spentUsd >= capUsd;
+  const dayBlocked = spentUsd >= capUsd;
+  const runBlocked = Boolean(runId) && runSpentUsd >= runCapUsd;
+  const blocked = dayBlocked || runBlocked;
   return {
     day: ledger.day,
     capUsd,
     spentUsd: round4(spentUsd),
     remainingUsd: round4(remainingUsd),
     runId,
+    runCapUsd: round4(runCapUsd),
     runSpentUsd: round4(runSpentUsd),
+    runRemainingUsd: round4(runRemainingUsd),
+    runBlocked,
     byModel: ledger.byModel,
     blocked,
     blockReason: blocked
-      ? capUsd <= 0
-        ? `Daily cost cap is $${capUsd} — cloud calls are blocked`
+      ? runBlocked
+        ? `Per-run cost cap exceeded: spent $${round4(runSpentUsd)} / cap $${runCapUsd}. Switch hybrid mode to local or raise the cap.`
         : `Daily cost cap exceeded: spent $${round4(spentUsd)} / cap $${capUsd}`
       : null,
   };
@@ -219,10 +244,20 @@ export function getRunTokenTotals(
 export function assertWithinCostCap(cwd: string, additionalUsd = 0): CostBudgetSnapshot {
   const budget = getCostBudget(cwd);
   const add = Math.max(0, additionalUsd);
-  // Any positive cloud charge against a zero/exhausted cap must fail
+
+  // 1) Hard per-run cap (spec §2/§6: $0.50 per run), independent of the daily budget.
+  if (add > 0 && budget.runId && budget.runSpentUsd + add > budget.runCapUsd + 1e-9) {
+    throw new CostCapExceededError(
+      `Per-run cost cap exceeded: this cloud call (~$${round4(add)}) would bring this run to $${round4(budget.runSpentUsd + add)} (cap $${budget.runCapUsd}). Switch hybrid mode to local or raise the cap.`,
+      budget.runSpentUsd,
+      budget.runCapUsd,
+      "run"
+    );
+  }
+  // 2) Daily cap still applies across runs.
   if (add > 0 && budget.spentUsd + add > budget.capUsd + 1e-9) {
     throw new CostCapExceededError(
-      `Cost cap exceeded: this cloud call (~$${round4(add)}) would bring daily spend to $${round4(budget.spentUsd + add)} (cap $${budget.capUsd}). Switch hybrid mode to local, raise the cap, or wait until tomorrow.`,
+      `Daily cost cap exceeded: this cloud call (~$${round4(add)}) would bring daily spend to $${round4(budget.spentUsd + add)} (cap $${budget.capUsd}). Switch hybrid mode to local, raise the cap, or wait until tomorrow.`,
       budget.spentUsd,
       budget.capUsd,
       "day"
@@ -231,9 +266,9 @@ export function assertWithinCostCap(cwd: string, additionalUsd = 0): CostBudgetS
   if (add === 0 && budget.blocked) {
     throw new CostCapExceededError(
       budget.blockReason || `Cost cap exceeded ($${budget.spentUsd} / $${budget.capUsd})`,
-      budget.spentUsd,
-      budget.capUsd,
-      "day"
+      budget.runBlocked ? budget.runSpentUsd : budget.spentUsd,
+      budget.runBlocked ? budget.runCapUsd : budget.capUsd,
+      budget.runBlocked ? "run" : "day"
     );
   }
   return budget;

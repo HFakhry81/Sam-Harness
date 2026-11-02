@@ -28,6 +28,20 @@ const state: WritePolicyState = {
   strictWriteRoots: false,
 };
 
+/**
+ * Repo root the agent must never write into (spec §8), in every mode.
+ * Overridable for tests/packaging via SAM_HARNESS_ROOT.
+ */
+function harnessRepoRoot(): string {
+  return path.normalize(path.resolve(process.env.SAM_HARNESS_ROOT || process.cwd()));
+}
+
+function isInsideHarnessRepo(abs: string, roots: string[]): boolean {
+  if (!under(abs, harnessRepoRoot())) return false;
+  // Output home may deliberately live inside the repo (custom SAM_OUTPUT_HOME).
+  return !roots.some((root) => under(abs, root));
+}
+
 function norm(p: string): string {
   return path.normalize(p).replace(/[/\\]+$/, "").toLowerCase();
 }
@@ -126,6 +140,8 @@ export function isWritablePath(absPath: string): boolean {
   const abs = path.normalize(absPath);
   // Never writable if under a registered source root (even if nested under Documents)
   if (isSourcePath(abs)) return false;
+  // Never writable inside the harness repository (spec §8), except the output home.
+  if (isInsideHarnessRepo(abs, state.writeRoots)) return false;
   if (!state.strictWriteRoots) {
     // Operational: source block only; broader allowlist handled by assertAllowedPath
     return true;
@@ -153,6 +169,13 @@ export function assertWriteAllowed(
     return {
       ok: false,
       reason: `Denied ${action}: path is a READ-ONLY source from the user prompt (${abs}). Write only under output home (${getOutputHome()}) or the pack folder.`,
+    };
+  }
+
+  if (isInsideHarnessRepo(abs, state.writeRoots)) {
+    return {
+      ok: false,
+      reason: `Denied ${action}: path is inside the Sam-Harness repository (${harnessRepoRoot()}). Output goes to ${getOutputHome()}.`,
     };
   }
 

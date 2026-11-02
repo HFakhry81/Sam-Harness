@@ -2058,6 +2058,7 @@ const server = http.createServer(async (req, res) => {
       const body = JSON.parse((await readBody(req)) || "{}") as {
         mode?: "local" | "cloud" | "auto";
         costCapUsd?: number;
+        costCapUsdPerDay?: number;
         notes?: string;
         roles?: Partial<Record<string, "local" | "cloud" | "auto">>;
       };
