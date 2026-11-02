@@ -777,7 +777,8 @@ PREFER structured tools first; shell last (and disabled on analysis/audit routes
                 { "argv":["powershell.exe","-NoProfile","-Command","Get-ChildItem -LiteralPath 'D:\\\\My Documents\\\\Spendy'"] }
                 Legacy string command is allowlisted read-only; Export-Csv/Out-File/> blocked.
 9) run_node_sandbox / mcp_call / desktop_* / ffmpeg / open_media
-10) finish       { "summary":"...", "success":true|false }
+10) ide_open_file / ide_diagnostics / ide_apply_diff (needs editor bridge + approval)
+11) finish       { "summary":"...", "success":true|false }
 
 Rules (English/ASCII):
 - Prompt project + spec folders are READ-ONLY sources. Never write/delete/move into them.
@@ -795,7 +796,8 @@ Analysis tools only (run_shell DISABLED):
 2) read_file { "path":"...", "maxLines":200 }
 3) search_code { "path":"...", "pattern":"..." }
 4) write_report { "name":"report.md", "content":"..." }  // output home only
-5) finish { "summary":"...", "success":true|false }
+5) ide_open_file { "path":"...", "line":12 } / ide_diagnostics { "path":"..." }  // editor only, no writes
+6) finish { "summary":"...", "success":true|false }
 Source project/spec paths are READ-ONLY. Write only under Documents/Sam-Harness.
 `;
 
@@ -833,6 +835,35 @@ export async function executeTool(
   if (name === "run_node_sandbox") {
     const { runNodeSandboxTool } = await import("./sandbox.js");
     return runNodeSandboxTool(params);
+  }
+  if (name === "ide_open_file" || name === "ide_apply_diff" || name === "ide_diagnostics") {
+    const ide = await import("../ide/bridge.js");
+    const filePath = String(params.path || "").trim();
+    if (!filePath) {
+      return { ok: false, tool: name, message: "Missing string param: path" };
+    }
+    let r: { ok: boolean; result?: unknown; error?: string };
+    if (name === "ide_open_file") {
+      r = await ide.ideOpenFile(filePath, {
+        line: params.line != null ? Number(params.line) : undefined,
+        column: params.column != null ? Number(params.column) : undefined,
+      });
+    } else if (name === "ide_apply_diff") {
+      r = await ide.ideApplyDiff(filePath, String(params.diff || ""), {
+        approvalId: typeof params.approvalId === "string" ? params.approvalId : undefined,
+        runId: typeof params.runId === "string" ? params.runId : undefined,
+      });
+    } else {
+      r = await ide.ideDiagnostics(filePath);
+    }
+    return {
+      ok: r.ok,
+      tool: name,
+      message: r.ok
+        ? `${name} ok`
+        : r.error || `${name} failed (is an editor bridge connected?)`,
+      data: r,
+    };
   }
   if (name === "mcp_call" || /^mcp:/i.test(name)) {
     const { mcpCallTool, parseMcpToolName } = await import("./mcp.js");

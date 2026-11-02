@@ -150,6 +150,13 @@ import {
   type DailyOpsItem,
 } from "./dailyOps.js";
 import { loadHybridProfile, saveHybridProfile } from "./hybridProfile.js";
+import {
+  IDE_HEARTBEAT_MS,
+  completeIdeCommand,
+  isIdeConnected,
+  pendingIdeCommandCount,
+  pollIdeCommands,
+} from "../ide/bridge.js";
 import { loadMemory, removeMemory, seedHarnessLessons, upsertMemory } from "./projectMemory.js";
 import {
   createCommDraft,
@@ -1967,6 +1974,36 @@ const server = http.createServer(async (req, res) => {
     }
     if (method === "GET" && p === "/api/events") {
       handleSse(req, res);
+      return;
+    }
+
+    // —— Phase 2 — IDE bridge transport (editor extensions poll here) ——
+    if (method === "GET" && p === "/api/ide/poll") {
+      sendJson(res, 200, { ok: true, commands: pollIdeCommands(), connected: true });
+      return;
+    }
+    if (method === "GET" && p === "/api/ide/status") {
+      sendJson(res, 200, {
+        ok: true,
+        connected: isIdeConnected(),
+        pending: pendingIdeCommandCount(),
+        heartbeatMs: IDE_HEARTBEAT_MS,
+      });
+      return;
+    }
+    if (method === "POST" && p === "/api/ide/result") {
+      const body = JSON.parse((await readBody(req)) || "{}") as {
+        id?: string;
+        ok?: boolean;
+        result?: unknown;
+        error?: string;
+      };
+      const handled = completeIdeCommand(String(body.id || ""), {
+        ok: body.ok !== false,
+        result: body.result,
+        error: body.error,
+      });
+      sendJson(res, handled ? 200 : 404, { ok: handled, error: handled ? undefined : "unknown command id" });
       return;
     }
 
