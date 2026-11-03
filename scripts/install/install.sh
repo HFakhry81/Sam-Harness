@@ -200,6 +200,13 @@ cat >.sam-harness-installed <<JSON
 JSON
 ok "Wrote install marker"
 
+step "Enabling git hooks (branch-flow)..."
+if [[ -f scripts/git/setup-hooks.sh ]]; then
+  bash scripts/git/setup-hooks.sh || warn "git hooks setup skipped"
+else
+  warn "scripts/git/setup-hooks.sh missing"
+fi
+
 step "Running doctor..."
 pnpm run doctor
 DOCTOR=$?
@@ -208,6 +215,8 @@ echo ""
 echo "  Install complete. Next:"
 echo "    pnpm run ui"
 echo "    pnpm run doctor"
+echo "    pnpm run git:new-branch -- feat/my-change   # contribute via staging PRs"
 echo "  Uninstall: bash scripts/install/uninstall.sh"
+echo "  Workflow: CONTRIBUTING.md"
 echo ""
 exit "$DOCTOR"

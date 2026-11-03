@@ -1,0 +1,31 @@
+# Branch-flow guard — required-check candidate.
+# Stable check name: "branch-flow"
+# Rules:
+#   - PRs to main must have head branch "staging" (release only).
+#   - PRs to staging must use an allowed feature-branch name.
+#   - PR titles must follow Conventional Commits (release titles also allowed for main).
+name: Branch Flow
+
+on:
+  pull_request:
+    types: [opened, edited, synchronize, reopened, ready_for_review]
+    branches: [main, staging]
+
+concurrency:
+  group: branch-flow-${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  branch-flow:
+    name: branch-flow
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Enforce branch flow
+        env:
+          BASE_REF: ${{ github.base_ref }}
+          HEAD_REF: ${{ github.head_ref }}
+          PR_TITLE: ${{ github.event.pull_request.title }}
+        run: bash scripts/git/check-pr-flow.sh

@@ -66,6 +66,17 @@ Filesystem tools use a **desktop-controller** sandbox: normal user environment (
 | `mcp.example.json` | Example MCP server config (copy to `mcp.json`) |
 | `SamHarness.bat` | Main launcher menu |
 
+## Contributing (git)
+
+**feature → PR into `staging` → release PR `staging` → `main`.** Never push `main`/`staging` directly.
+
+```bash
+pnpm run git:new-branch -- feat/my-change
+pnpm run git:open-pr
+```
+
+See [`CONTRIBUTING.md`](CONTRIBUTING.md), [`AGENTS.md`](AGENTS.md), and [`docs/GIT_WORKFLOW.md`](docs/GIT_WORKFLOW.md). CI guard check name: **`branch-flow`**.
+
 ## Checks
 
 ```bat
