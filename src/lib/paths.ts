@@ -197,6 +197,9 @@ export function userRoots(cwd: string = process.cwd()): string[] {
   const home = homeDir();
   const defaults = [
     ...always,
+    // Per-user OS scratch dir: /tmp on Linux, /var/folders/.../T on macOS,
+    // %LOCALAPPDATA%\Temp on Windows. Tests and agent scratch files need it.
+    normalizeRoot(os.tmpdir()),
     normalizeRoot(home),
     normalizeRoot(desktopDir()),
     normalizeRoot(path.join(home, "Documents")),
@@ -208,6 +211,8 @@ export function userRoots(cwd: string = process.cwd()): string[] {
     defaults.push(...listWindowsDriveRoots());
   } else {
     defaults.push(
+      // macOS keeps /tmp as a compatibility symlink; keep it for callers that
+      // still hard-code it (os.tmpdir() above is the authoritative path).
       normalizeRoot("/tmp"),
       normalizeRoot(path.join(home, "tmp")),
       normalizeRoot("/home"),
