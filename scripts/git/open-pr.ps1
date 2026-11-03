@@ -53,7 +53,7 @@ if (-not $Title) {
   if ($prefix -eq "sync") { $prefix = "chore" }
   if ($prefix -eq "dependabot") { $prefix = "chore" }
   if ($prefix -eq "hotfix") { $prefix = "fix" }
-  $Title = "$prefix: $slug"
+  $Title = "${prefix}: $slug"
 }
 
 $titleOk = $Title -match '^(feat|fix|chore|docs|refactor|test|ci|build|perf|style|revert)(\([^)]+\))?!?: .+'
