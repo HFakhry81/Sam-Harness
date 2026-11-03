@@ -1,0 +1,3 @@
+# Default owner for all paths. Requires CODEOWNERS review when branch protection
+# enables "Require review from Code Owners".
+* @HFakhry81

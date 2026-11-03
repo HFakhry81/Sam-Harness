@@ -54,6 +54,9 @@ jobs:
           $files = @()
           $files += Get-ChildItem -Path Tools -Recurse -Filter *.ps1 -File
           $files += Get-ChildItem -Path scripts\install -Filter *.ps1 -File
+          if (Test-Path -LiteralPath 'scripts\git') {
+            $files += Get-ChildItem -Path scripts\git -Filter *.ps1 -File
+          }
           foreach ($f in $files) {
             $bytes = [System.IO.File]::ReadAllBytes($f.FullName)
             if ($bytes.Length -lt 3 -or $bytes[0] -ne 0xEF -or $bytes[1] -ne 0xBB -or $bytes[2] -ne 0xBF) {

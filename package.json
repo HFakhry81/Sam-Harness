@@ -4,6 +4,11 @@
   "description": "Hybrid AI agency — Control Plane, LangGraph review, Windows desktop operator",
   "main": "index.js",
   "scripts": {
+    "prepare": "node scripts/git/setup-hooks.mjs",
+    "git:setup-hooks": "node scripts/git/setup-hooks.mjs",
+    "git:new-branch": "bash scripts/git/new-branch.sh",
+    "git:open-pr": "bash scripts/git/open-pr.sh",
+    "git:check-pr": "bash scripts/git/check-pr-flow.sh",
     "ensure-task": "tsx scripts/ensure-task.ts",
     "typecheck": "tsx scripts/ensure-task.ts && tsc --noEmit",
     "test": "node --max-old-space-size=4096 ./node_modules/vitest/vitest.mjs run",
