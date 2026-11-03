@@ -190,6 +190,16 @@ $marker = Join-Path $ProjectRoot ".sam-harness-installed"
 } | ConvertTo-Json | Set-Content -LiteralPath $marker -Encoding UTF8
 Write-Ok "Wrote install marker"
 
+# -- git hooks (branch-flow) --
+Write-Step "Enabling git hooks (branch-flow)..."
+$hooksPs1 = Join-Path $ProjectRoot "scripts\git\setup-hooks.ps1"
+if (Test-Path -LiteralPath $hooksPs1) {
+  & $hooksPs1
+  if ($LASTEXITCODE -ne 0) { Write-Warn "git hooks setup skipped" }
+} else {
+  Write-Warn "scripts/git/setup-hooks.ps1 missing"
+}
+
 # -- doctor --
 Write-Step "Running doctor..."
 & pnpm run doctor
@@ -200,6 +210,8 @@ Write-Host "  Install complete. Next:" -ForegroundColor Green
 Write-Host "    pnpm run ui          -> Control Plane"
 Write-Host "    pnpm run doctor      -> re-check"
 Write-Host "    SamHarness.bat       -> launcher menu"
+Write-Host "    pnpm run git:new-branch -- feat/my-change"
 Write-Host "  Uninstall: powershell -File scripts\install\uninstall.ps1"
+Write-Host "  Workflow: CONTRIBUTING.md"
 Write-Host ""
 exit $doctorCode

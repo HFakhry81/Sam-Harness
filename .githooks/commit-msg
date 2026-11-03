@@ -1,0 +1,46 @@
+#!/usr/bin/env bash
+# Enforce Conventional Commits on commit messages (merge/revert exempt).
+set -euo pipefail
+
+ROOT="$(git rev-parse --show-toplevel 2>/dev/null || true)"
+if [[ -z "$ROOT" ]]; then
+  exit 0
+fi
+# shellcheck source=../scripts/git/lib-branch-flow.sh
+source "$ROOT/scripts/git/lib-branch-flow.sh"
+
+msg_file="${1:-}"
+if [[ -z "$msg_file" || ! -f "$msg_file" ]]; then
+  exit 0
+fi
+
+# First non-comment, non-empty line.
+subject=""
+while IFS= read -r line || [[ -n "$line" ]]; do
+  case "$line" in
+    \#*) continue ;;
+  esac
+  if [[ -n "$line" ]]; then
+    subject="$line"
+    break
+  fi
+done <"$msg_file"
+
+if [[ -z "$subject" ]]; then
+  echo "[branch-flow] FAIL: Empty commit message." >&2
+  exit 1
+fi
+
+# Allow merges, reverts, and fixup/squash helpers.
+if [[ "$subject" =~ ^Merge\  ]] || [[ "$subject" =~ ^Revert\  ]] || [[ "$subject" =~ ^(fixup|squash)! ]]; then
+  exit 0
+fi
+
+if ! branch_flow_is_conventional_title "$subject"; then
+  echo "[branch-flow] FAIL: Commit subject must follow Conventional Commits." >&2
+  echo "  Examples: feat: add X | fix(ui): correct Y | chore: bump deps" >&2
+  echo "  Got: $subject" >&2
+  exit 1
+fi
+
+exit 0
