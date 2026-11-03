@@ -1,4 +1,8 @@
 import "./src/lib/loadEnv.js";
+import { initSentry } from "./src/sentry.js";
+
+// Initialize Sentry for error tracking
+initSentry();
 import * as fs from "fs";
 import * as readline from "readline";
 import { colors, live, ok, sys, warn } from "./src/lib/colors.js";
