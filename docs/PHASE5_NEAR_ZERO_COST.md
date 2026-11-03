@@ -56,6 +56,8 @@ Cache hits are recorded as **$0** local usage (tokens optional) and never charge
 
 Prompts longer than `SAM_CONTEXT_MAX_CHARS` keep a head + tail window and replace the middle with a marker, targeting `SAM_CONTEXT_TARGET_CHARS`.
 
+Character compaction does not change the model's `num_ctx`. If a local tag declares an 8K window, larger requests fail before this code runs. See [LOCAL_MODEL_CONTEXT.md](LOCAL_MODEL_CONTEXT.md) for building a 32K/64K profile and aligning desktop-client limits.
+
 ## Env (see `.env.example`)
 
 | Variable | Default | Purpose |
@@ -70,6 +72,9 @@ Prompts longer than `SAM_CONTEXT_MAX_CHARS` keep a head + tail window and replac
 | `SAM_CONTEXT_TARGET_CHARS` | `16000` | Compact target |
 | `SAM_LOCAL_BASE_URL` | `http://localhost:11434` | Local Ollama / OpenAI-compatible |
 | `SAM_LOCAL_MODEL` | `CEO_MODEL` or `qwen2.5-coder:1.5b` | Local model id |
+| `SAM_LOCAL_NUM_CTX` | `16384` | Local prompt window sent to Ollama |
+| `SAM_LOCAL_NUM_PREDICT` | `768` | Output cap for short local calls |
+| `SAM_LOCAL_LONG_PREDICT` | `2048` | Output cap for long-form local roles |
 | `SAM_FREE_BASE_URL` | _(empty)_ | Optional free-tier OpenAI-compatible base |
 | `SAM_FREE_API_KEY` | _(empty)_ | Optional free-tier key |
 | `SAM_FREE_MODEL` | _(empty)_ | Optional free-tier model |

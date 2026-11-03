@@ -39,7 +39,7 @@ import {
   resolveLongFormModel,
 } from "../agency/modelPolicy.js";
 import { LONG_FORM_REPEAT_PENALTY } from "../agency/repetitionGuard.js";
-import { localOllamaOptions } from "../lib/ollamaLocal.js";
+import { capLocalNumPredict, localOllamaOptions } from "../lib/ollamaLocal.js";
 
 export { CostCapExceededError };
 export type { ModelRoute };
@@ -187,6 +187,8 @@ function chatFromRoute(
     numPredict?: number;
     numCtx?: number;
     repeatPenalty?: number;
+    /** Long-form roles get the larger local output ceiling. */
+    longForm?: boolean;
   }
 ): BaseChatModel {
   const local = route.cloud ? null : localOllamaOptions();
@@ -194,7 +196,7 @@ function chatFromRoute(
   // Cloud models keep their full budget; local CPU-only models are capped so a
   // reasoning model cannot block a role for several minutes.
   const numPredict = local
-    ? Math.min(requestedPredict, local.numPredict)
+    ? capLocalNumPredict(requestedPredict, opts.longForm)
     : requestedPredict;
 
   const compat = openAiCompatTarget(route);
@@ -361,6 +363,7 @@ export function makeSpecialistModel(opts: {
     numPredict: opts.numPredict ?? roleCfg?.numPredict ?? 1200,
     // Local calls inherit SAM_LOCAL_NUM_CTX (16k default) so long evidence
     // packs + RTM survive; cloud calls keep chatFromRoute's 8192 default.
+    longForm: LONG_FORM_ROLES.has(role),
     repeatPenalty: LONG_FORM_ROLES.has(role) ? LONG_FORM_REPEAT_PENALTY : undefined,
   });
 }

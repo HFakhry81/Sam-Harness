@@ -15,7 +15,10 @@ export type LocalOllamaOptions = {
   numCtx: number;
   numThread: number;
   numBatch: number;
+  /** Cap for short calls (routing, chat, extraction). */
   numPredict: number;
+  /** Cap for long-form roles (strategy, audit, architecture, help). */
+  numPredictLongForm: number;
   keepAlive: string | number;
 };
 
@@ -44,6 +47,23 @@ export function localOllamaOptions(): LocalOllamaOptions {
     // CPU-only reasoning models spend most tokens on hidden thinking. Cap the
     // total so a slow local call cannot run for 5-10 minutes per role.
     numPredict: envInt("SAM_LOCAL_NUM_PREDICT", 768),
+    // Long-form roles need room for a full strategy/audit document. Keep a
+    // separate ceiling so quick replies stay fast without truncating reviews.
+    numPredictLongForm: envInt("SAM_LOCAL_LONG_PREDICT", 2_048),
     keepAlive: keepAliveValue(),
   };
+}
+
+/**
+ * Clamp a requested output budget to the local model ceiling.
+ * Short calls keep the low cap; long-form roles get a larger one.
+ */
+export function capLocalNumPredict(
+  requested: number,
+  longForm = false
+): number {
+  const opts = localOllamaOptions();
+  const cap = longForm ? opts.numPredictLongForm : opts.numPredict;
+  const wanted = Number.isFinite(requested) ? Math.floor(requested) : 1;
+  return Math.max(1, Math.min(wanted, cap));
 }

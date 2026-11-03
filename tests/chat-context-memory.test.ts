@@ -13,7 +13,10 @@ import {
   renderChatHistory,
   trimChatTurns,
 } from "../src/lib/conversation/context.js";
-import { localOllamaOptions } from "../src/lib/ollamaLocal.js";
+import {
+  capLocalNumPredict,
+  localOllamaOptions,
+} from "../src/lib/ollamaLocal.js";
 import { buildQuickPromptPayload } from "../src/lib/quickPath/quickModel.js";
 import { runIntentRouter } from "../src/lib/intentRouter/index.js";
 
@@ -23,6 +26,8 @@ const ENV_KEYS = [
   "SAM_CHAT_HISTORY_CHARS",
   "SAM_CHAT_HISTORY_MESSAGE_CHARS",
   "SAM_LOCAL_NUM_CTX",
+  "SAM_LOCAL_NUM_PREDICT",
+  "SAM_LOCAL_LONG_PREDICT",
 ] as const;
 
 describe("bounded chat context", () => {
@@ -54,6 +59,20 @@ describe("bounded chat context", () => {
     expect(localOllamaOptions().numCtx).toBe(16_384);
     expect(chatHistoryMaxMessages()).toBe(12);
     expect(chatHistoryMaxChars()).toBe(6_000);
+  });
+
+  it("separates short and long-form local output ceilings", () => {
+    expect(localOllamaOptions().numPredict).toBe(768);
+    expect(localOllamaOptions().numPredictLongForm).toBe(2_048);
+
+    // Short calls stay cheap, long-form roles keep their full request.
+    expect(capLocalNumPredict(400)).toBe(400);
+    expect(capLocalNumPredict(1_600)).toBe(768);
+    expect(capLocalNumPredict(1_600, true)).toBe(1_600);
+    expect(capLocalNumPredict(9_000, true)).toBe(2_048);
+
+    process.env.SAM_LOCAL_LONG_PREDICT = "4096";
+    expect(capLocalNumPredict(9_000, true)).toBe(4_096);
   });
 
   it("keeps the newest N turns in chronological order", () => {
