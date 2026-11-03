@@ -1624,6 +1624,13 @@ const server = http.createServer(async (req, res) => {
       return;
     }
 
+    // —— Phase 3 — sandbox isolation status (probes Docker + caches 60s) ——
+    if (method === "GET" && p === "/api/sandbox/status") {
+      const { sandboxStatus } = await import("../tools/sandbox.js");
+      sendJson(res, 200, { ok: true, sandbox: sandboxStatus({ probe: true }) });
+      return;
+    }
+
     if (method === "GET" && p === "/api/tenant") {
       const tid = getActiveTenantId();
       let costCapUsd = 0.5;

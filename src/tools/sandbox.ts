@@ -1,7 +1,15 @@
 /**
  * Isolated Node code execution for agents (REPL-style).
- * Subprocess with timeout, resource limits, working dir under output home temp/runs.
- * Optional Docker when SAM_SANDBOX_DOCKER=1 and docker is available.
+ *
+ * Default isolation is a hardened subprocess: fresh temp workdir under the
+ * output home, scrubbed environment, hard timeout and heap cap. Docker is
+ * available as a stronger boundary via `SAM_SANDBOX_MODE`:
+ *
+ *   SAM_SANDBOX_MODE=subprocess  (default) hardened child process
+ *   SAM_SANDBOX_MODE=auto        Docker when the daemon answers, else subprocess
+ *   SAM_SANDBOX_MODE=docker      require Docker; refuse to run if unavailable
+ *
+ * `SAM_SANDBOX_DOCKER=1` is kept as a backward-compatible alias for `auto`.
  */
 import { spawn, execFileSync } from "child_process";
 import * as fs from "fs";
@@ -20,7 +28,7 @@ export type SandboxOptions = {
   memoryMb?: number;
   /** Extra argv after node (e.g. ["--input-type=module"]) */
   nodeArgs?: string[];
-  /** Prefer Docker when available and SAM_SANDBOX_DOCKER=1 */
+  /** Per-call opt-in to Docker (still honored only when the daemon answers). */
   preferDocker?: boolean;
   /** Keep workdir after run (default: delete) */
   keepWorkdir?: boolean;
@@ -68,17 +76,94 @@ export function isSecretEnvKey(key: string): boolean {
   return SECRET_ENV_RE.test(key);
 }
 
-export function dockerAvailable(): boolean {
+export type SandboxMode = "auto" | "docker" | "subprocess";
+
+/** Configured isolation mode (never throws; unknown values fall back safely). */
+export function sandboxMode(): SandboxMode {
+  const raw = String(process.env.SAM_SANDBOX_MODE || "").trim().toLowerCase();
+  if (raw === "auto" || raw === "docker" || raw === "subprocess") return raw;
+  // Back-compat alias: the old opt-in flag meant "Docker when available".
+  if (String(process.env.SAM_SANDBOX_DOCKER || "").trim() === "1") return "auto";
+  return "subprocess";
+}
+
+let dockerCache: { at: number; available: boolean } | null = null;
+const DOCKER_CACHE_MS = 60_000;
+
+/** Cached Docker daemon probe (spawning `docker version` costs ~1s on Windows). */
+export function dockerAvailable(opts: { force?: boolean } = {}): boolean {
+  const now = Date.now();
+  if (!opts.force && dockerCache && now - dockerCache.at < DOCKER_CACHE_MS) {
+    return dockerCache.available;
+  }
+  let available = false;
   try {
     execFileSync("docker", ["version", "--format", "{{.Server.Version}}"], {
       stdio: "ignore",
       timeout: 5000,
       windowsHide: true,
     });
-    return true;
+    available = true;
   } catch {
-    return false;
+    available = false;
   }
+  dockerCache = { at: now, available };
+  return available;
+}
+
+export type SandboxStatus = {
+  /** Value from SAM_SANDBOX_MODE (or its legacy alias). */
+  mode: SandboxMode;
+  dockerAvailable: boolean;
+  /** What a run without an explicit per-call override would use. */
+  effectiveMode: "docker" | "subprocess";
+  /** True when mode=docker but the daemon is unreachable (runs will refuse). */
+  misconfigured: boolean;
+};
+
+/** Observable isolation status for the Control Plane / health checks. */
+export function sandboxStatus(opts: { probe?: boolean } = {}): SandboxStatus {
+  const mode = sandboxMode();
+  // Probing spawns `docker version`; only do it on demand (never in health pings).
+  const docker = opts.probe ? dockerAvailable() : Boolean(dockerCache?.available);
+  return {
+    mode,
+    dockerAvailable: docker,
+    effectiveMode: mode === "docker" ? "docker" : mode === "auto" && docker ? "docker" : "subprocess",
+    misconfigured: mode === "docker" && !docker,
+  };
+}
+
+/** Test hook: forget the cached Docker probe. */
+export function __resetSandboxCacheForTests(): void {
+  dockerCache = null;
+}
+
+/** Decide whether this run should use Docker. */
+function shouldUseDocker(opts: SandboxOptions): {
+  use: boolean;
+  /** Set when the run must be refused instead of silently degrading. */
+  refuse?: string;
+} {
+  const mode = sandboxMode();
+  const docker = dockerAvailable();
+
+  if (mode === "docker") {
+    if (!docker) {
+      return {
+        use: false,
+        refuse:
+          "SAM_SANDBOX_MODE=docker but the Docker daemon is not reachable. " +
+          "Start Docker (or use SAM_SANDBOX_MODE=auto|subprocess).",
+      };
+    }
+    return { use: true };
+  }
+
+  if (mode === "auto") return { use: docker };
+
+  // subprocess mode: only an explicit per-call opt-in may use Docker.
+  return { use: opts.preferDocker === true && docker };
 }
 
 function makeWorkdir(): string {
@@ -247,9 +332,20 @@ export async function runNodeSandbox(opts: SandboxOptions): Promise<SandboxResul
   }
   const timeoutMs = Math.min(Math.max(opts.timeoutMs ?? 15_000, 500), 120_000);
   const memoryMb = Math.min(Math.max(opts.memoryMb ?? 128, 32), 1024);
-  const preferDocker =
-    opts.preferDocker === true ||
-    String(process.env.SAM_SANDBOX_DOCKER || "").trim() === "1";
+  const docker = shouldUseDocker(opts);
+
+  if (docker.refuse) {
+    return {
+      ok: false,
+      exitCode: null,
+      timedOut: false,
+      stdout: "",
+      stderr: docker.refuse,
+      workdir: "",
+      mode: "docker",
+      durationMs: 0,
+    };
+  }
 
   const workdir = makeWorkdir();
   const scriptPath = writeScript(workdir, code);
@@ -257,7 +353,7 @@ export async function runNodeSandbox(opts: SandboxOptions): Promise<SandboxResul
   let mode: "subprocess" | "docker" = "subprocess";
   let result: Omit<SandboxResult, "workdir" | "mode" | "durationMs">;
 
-  if (preferDocker && dockerAvailable()) {
+  if (docker.use) {
     mode = "docker";
     result = await runDocker(scriptPath, workdir, { timeoutMs, memoryMb });
     if (!result.ok && /Cannot connect|not found|daemon/i.test(result.stderr)) {
