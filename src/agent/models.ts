@@ -248,7 +248,6 @@ export function makeCeoModel() {
   return chatFromRoute(route, {
     temperature: 0.1,
     numPredict: 512,
-    numCtx: 8192,
   });
 }
 
@@ -360,7 +359,8 @@ export function makeSpecialistModel(opts: {
   return chatFromRoute(route, {
     temperature: opts.temperature ?? roleCfg?.temperature ?? 0.2,
     numPredict: opts.numPredict ?? roleCfg?.numPredict ?? 1200,
-    numCtx: 8192,
+    // Local calls inherit SAM_LOCAL_NUM_CTX (16k default) so long evidence
+    // packs + RTM survive; cloud calls keep chatFromRoute's 8192 default.
     repeatPenalty: LONG_FORM_ROLES.has(role) ? LONG_FORM_REPEAT_PENALTY : undefined,
   });
 }

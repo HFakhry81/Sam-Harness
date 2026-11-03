@@ -36,14 +36,23 @@ import {
 import { saveHybridProfile } from "../src/controlplane/hybridProfile.js";
 import { sandboxMode } from "../src/tools/sandbox.js";
 import { getActiveTenantId, setActiveTenantId } from "../src/lib/tenant/context.js";
+import {
+  buildChatContext,
+  type ChatTurn,
+} from "../src/lib/conversation/context.js";
+import { localOllamaOptions } from "../src/lib/ollamaLocal.js";
 
 type EvalCase = {
   id: string;
-  suite: "intent" | "security" | "cost" | "sandbox";
+  suite: "intent" | "security" | "cost" | "sandbox" | "context";
   prompt?: string;
-  kind?: "redact" | "write" | "path";
+  kind?: "redact" | "write" | "path" | "history" | "window";
   target?: string;
   input?: string;
+  turns?: ChatTurn[];
+  maxMessages?: number;
+  maxChars?: number;
+  maxMessageChars?: number;
   runCapUsd?: number;
   dailyCapUsd?: number;
   spentUsd?: number;
@@ -257,6 +266,49 @@ function runCost(c: EvalCase): CaseResult {
   }
 }
 
+function runHistory(c: EvalCase): CaseResult {
+  const ctx = buildChatContext(c.turns || [], {
+    maxMessages: c.maxMessages,
+    maxChars: c.maxChars,
+    maxMessageChars: c.maxMessageChars,
+  });
+  const present = (c.expect.present as string[] | undefined) || [];
+  const absent = (c.expect.absent as string[] | undefined) || [];
+  const wantTurns =
+    c.expect.turns == null ? null : Number(c.expect.turns);
+  const wantMaxChars =
+    c.expect.maxChars == null ? null : Number(c.expect.maxChars);
+  const missing = present.filter((s) => !ctx.text.includes(s));
+  const leaked = absent.filter((s) => ctx.text.includes(s));
+  const turnsOk = wantTurns == null || ctx.turns.length === wantTurns;
+  const budgetOk = wantMaxChars == null || ctx.chars <= wantMaxChars;
+  const ok = turnsOk && budgetOk && missing.length === 0 && leaked.length === 0;
+  return {
+    id: c.id,
+    suite: c.suite,
+    ok,
+    detail: ok
+      ? `turns=${ctx.turns.length} chars=${ctx.chars}`
+      : `turns=${ctx.turns.length} chars=${ctx.chars} missing=${JSON.stringify(
+          missing
+        )} unexpected=${JSON.stringify(leaked)}`,
+  };
+}
+
+function runLocalWindow(c: EvalCase): CaseResult {
+  const raw = c.env?.SAM_LOCAL_NUM_CTX;
+  return withEnv({ SAM_LOCAL_NUM_CTX: raw }, () => {
+    const got = localOllamaOptions().numCtx;
+    const want = Number(c.expect.numCtx);
+    return {
+      id: c.id,
+      suite: c.suite,
+      ok: got === want,
+      detail: got === want ? `numCtx=${got}` : `want numCtx=${want}; got ${got}`,
+    };
+  });
+}
+
 function runSandbox(c: EvalCase): CaseResult {
   const env: Record<string, string | undefined> = {
     SAM_SANDBOX_MODE: undefined,
@@ -287,6 +339,8 @@ function runCase(c: EvalCase): CaseResult {
       return runCost(c);
     case "sandbox":
       return runSandbox(c);
+    case "context":
+      return c.kind === "window" ? runLocalWindow(c) : runHistory(c);
     default:
       return { id: c.id, suite: String(c.suite), ok: false, detail: "unknown suite" };
   }

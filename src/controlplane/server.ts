@@ -140,6 +140,8 @@ import {
   newConversationId,
   resetConversation,
 } from "../lib/conversation/history.js";
+import { buildChatContext } from "../lib/conversation/context.js";
+import { localOllamaOptions } from "../lib/ollamaLocal.js";
 import {
   addDailyJob,
   loadDailyOps,
@@ -804,6 +806,18 @@ async function handleChat(req: http.IncomingMessage, res: http.ServerResponse) {
 
   const forceAgency = body.forceAgency === true;
   const decision = classifyRouteHeuristic(message);
+  // Load the thread BEFORE appending this turn so the replay excludes it
+  // (invokeQuickModel sends the current message as the final user turn).
+  const priorConversation = loadConversation(conversationId, tenantOutputHome());
+  const chatContext = buildChatContext(priorConversation.messages, {
+    currentPrompt: message,
+    contextWindow: {
+      numCtx: localOllamaOptions().numCtx,
+      systemChars: 600,
+      promptChars: message.length,
+      numPredict: 220,
+    },
+  });
   appendMessage(conversationId, { role: "user", content: message }, tenantOutputHome());
 
   // Forced or complex/task → write task.ts then let client/callers hit /api/run
@@ -846,6 +860,11 @@ async function handleChat(req: http.IncomingMessage, res: http.ServerResponse) {
   appendLog(
     `[intent-router] route=${decision.route} intent=${decision.intent} (${decision.reason})\n`
   );
+  appendLog(
+    `[intent-router] history=${chatContext.turns.length} turn(s), ${chatContext.chars} chars` +
+      `${chatContext.dropped ? `, dropped=${chatContext.dropped}` : ""}` +
+      `${chatContext.truncated ? `, trimmed=${chatContext.truncated}` : ""}\n`
+  );
 
   try {
     const quick = await tryRunQuickPath({
@@ -853,6 +872,7 @@ async function handleChat(req: http.IncomingMessage, res: http.ServerResponse) {
       cwd: ROOT,
       runId,
       forceAgency: false,
+      history: chatContext.turns,
       networkApproved: body.networkApproved,
       onEvent: (ev) => {
         appendLog(`[intent-router] ${ev.type}: ${ev.message}\n`);
@@ -913,6 +933,8 @@ async function handleChat(req: http.IncomingMessage, res: http.ServerResponse) {
       skippedModel: result?.skippedModel !== false,
       durationMs: result?.durationMs || 0,
       model: result?.model || null,
+      historyTurns: chatContext.turns.length,
+      historyChars: chatContext.chars,
     });
   } catch (e: any) {
     // Chat failures: still reply, never FAILED / task retained
@@ -1111,12 +1133,26 @@ async function handleRun(req: http.IncomingMessage, res: http.ServerResponse) {
       appendLog(
         `[intent-router] route=${heuristic.route} intent=${heuristic.intent} (${heuristic.reason})\n`
       );
+      const priorConversation = loadConversation(conversationId, tenantOutputHome());
+      const chatContext = buildChatContext(priorConversation.messages, {
+        currentPrompt: prompt,
+        contextWindow: {
+          numCtx: localOllamaOptions().numCtx,
+          systemChars: 600,
+          promptChars: prompt.length,
+          numPredict: 400,
+        },
+      });
+      appendLog(
+        `[intent-router] history=${chatContext.turns.length} turn(s), ${chatContext.chars} chars\n`
+      );
       try {
         const quick = await tryRunQuickPath({
           prompt,
           cwd: ROOT,
           runId: durable.id,
           forceAgency: false,
+          history: chatContext.turns,
           networkApproved: body.networkApproved,
           onEvent: (ev) => {
             appendLog(`[intent-router] ${ev.type}: ${ev.message}\n`);
@@ -1178,6 +1214,8 @@ async function handleRun(req: http.IncomingMessage, res: http.ServerResponse) {
             quick: true,
             chatStyle: true,
             entry,
+            historyTurns: chatContext.turns.length,
+            historyChars: chatContext.chars,
           });
           return;
         }

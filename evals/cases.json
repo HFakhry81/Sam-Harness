@@ -7,6 +7,7 @@
     "security": 1.0,
     "cost": 1.0,
     "sandbox": 1.0,
+    "context": 1.0,
     "overall": 0.98
   },
   "cases": [
@@ -270,6 +271,56 @@
       "suite": "sandbox",
       "env": { "SAM_SANDBOX_MODE": "firecracker" },
       "expect": { "mode": "subprocess" }
+    },
+
+    {
+      "id": "context-keeps-newest-turns",
+      "suite": "context",
+      "kind": "history",
+      "turns": [
+        { "role": "user", "content": "old question about HTTP" },
+        { "role": "assistant", "content": "old answer" },
+        { "role": "user", "content": "newest question about REST" },
+        { "role": "assistant", "content": "newest answer" }
+      ],
+      "maxMessages": 2,
+      "maxChars": 1000,
+      "expect": {
+        "turns": 2,
+        "present": ["newest question about REST", "newest answer"],
+        "absent": ["old question about HTTP"]
+      }
+    },
+    {
+      "id": "context-char-budget-respected",
+      "suite": "context",
+      "kind": "history",
+      "turns": [
+        { "role": "user", "content": "oldest context that must be dropped" },
+        { "role": "assistant", "content": "an old reply" },
+        { "role": "user", "content": "newest surviving turn" }
+      ],
+      "maxChars": 60,
+      "maxMessageChars": 80,
+      "expect": {
+        "maxChars": 60,
+        "present": ["newest surviving turn"],
+        "absent": ["oldest context that must be dropped"]
+      }
+    },
+    {
+      "id": "context-local-window-default-16k",
+      "suite": "context",
+      "kind": "window",
+      "env": {},
+      "expect": { "numCtx": 16384 }
+    },
+    {
+      "id": "context-local-window-override",
+      "suite": "context",
+      "kind": "window",
+      "env": { "SAM_LOCAL_NUM_CTX": "4096" },
+      "expect": { "numCtx": 4096 }
     }
   ]
 }

@@ -27,6 +27,7 @@ never touched.
 | `security` | Secret-by-filename denial (`.env`, `*.pem`, `mcp.json`, `.env.example` allowed), repo immutability, source-root read-only, cloud-egress redaction |
 | `cost` | Per-run cap independent of the daily cap, daily accumulation, `$0` forbids cloud spend |
 | `sandbox` | `SAM_SANDBOX_MODE=auto\|docker\|subprocess`, legacy `SAM_SANDBOX_DOCKER=1`, unknown values fall back safely |
+| `context` | Newest-turn replay, hard character budget, and the 16k default local context window (`SAM_LOCAL_NUM_CTX`) |
 
 ## Adding a case
 

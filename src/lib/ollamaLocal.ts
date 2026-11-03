@@ -36,7 +36,9 @@ export function localOllamaOptions(): LocalOllamaOptions {
   // Cap at 24 so large servers do not oversubscribe a single local model.
   const defaultThreads = Math.max(1, Math.min(24, logical));
   return {
-    numCtx: envInt("SAM_LOCAL_NUM_CTX", 8192),
+    // 16k keeps medium threads + evidence packs intact for 27B local roles.
+    // Lower it (4096-8192) when RAM is tight; the chat history budget adapts.
+    numCtx: envInt("SAM_LOCAL_NUM_CTX", 16_384),
     numThread: envInt("SAM_LOCAL_NUM_THREAD", defaultThreads),
     numBatch: envInt("SAM_LOCAL_NUM_BATCH", 2048),
     // CPU-only reasoning models spend most tokens on hidden thinking. Cap the

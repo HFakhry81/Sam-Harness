@@ -3,6 +3,12 @@
  */
 import { ChatOllama } from "@langchain/ollama";
 import {
+  AIMessage,
+  HumanMessage,
+  SystemMessage,
+  type BaseMessage,
+} from "@langchain/core/messages";
+import {
   getRoleConfig,
   resolveRoleModels,
 } from "../../agency/teamConfig.js";
@@ -13,6 +19,11 @@ import {
 import { resolveModelRoute } from "../cost/index.js";
 import { appendAudit } from "../trust/auditLog.js";
 import { localOllamaOptions } from "../ollamaLocal.js";
+import {
+  historyBudgetForContext,
+  trimChatTurns,
+  type ChatTurn,
+} from "../conversation/context.js";
 import { languageReplyDirective, detectUserLanguage } from "./language.js";
 
 export const DEFAULT_QUICK_LOCAL_MODEL = "qwen2.5:1.5b";
@@ -24,6 +35,8 @@ export type QuickModelCall = {
   cloud: boolean;
   costUsd: number;
   baseUrl: string;
+  /** Number of replayed turns actually sent (0 = one-shot prompt). */
+  historyTurns?: number;
 };
 
 function cheapestLocalFallback(cwd: string): string {
@@ -69,6 +82,47 @@ export function resolveQuickModel(cwd: string = process.cwd()): {
   };
 }
 
+export type QuickPromptPayload = {
+  prompt: string | BaseMessage[];
+  chars: number;
+  historyTurns: number;
+};
+
+/**
+ * Build the invoke payload. With history we send structured chat messages so
+ * the model sees real turn boundaries; without history we keep the legacy
+ * single-string prompt (cheapest path for one-shot calls).
+ */
+export function buildQuickPromptPayload(input: {
+  system: string;
+  prompt: string;
+  history?: ReadonlyArray<ChatTurn>;
+}): QuickPromptPayload {
+  const turns = (input.history || []).filter(
+    (turn) =>
+      turn &&
+      (turn.role === "user" || turn.role === "assistant") &&
+      String(turn.content ?? "").trim().length > 0
+  );
+
+  if (turns.length === 0) {
+    const full = `${input.system}\n\nUser:\n${input.prompt}`;
+    return { prompt: full, chars: full.length, historyTurns: 0 };
+  }
+
+  const messages: BaseMessage[] = [new SystemMessage(input.system)];
+  let chars = input.system.length + input.prompt.length + 32;
+  for (const turn of turns) {
+    const content = String(turn.content).trim();
+    messages.push(
+      turn.role === "assistant" ? new AIMessage(content) : new HumanMessage(content)
+    );
+    chars += content.length + 16;
+  }
+  messages.push(new HumanMessage(input.prompt));
+  return { prompt: messages, chars, historyTurns: turns.length };
+}
+
 /**
  * One short local (or configured) Ollama call for quick/web summarization.
  * Falls back to cheapest local when Ollama cloud is unavailable / cap blocks.
@@ -82,6 +136,8 @@ export async function invokeQuickModel(input: {
   runId?: string;
   /** Prefer cloud when configured and allowed. */
   allowCloud?: boolean;
+  /** Chronological (oldest → newest) conversation turns, already bounded. */
+  history?: ReadonlyArray<ChatTurn>;
 }): Promise<QuickModelCall> {
   const cwd = input.cwd || process.cwd();
   const cfg = resolveQuickModel(cwd);
@@ -127,10 +183,29 @@ export async function invokeQuickModel(input: {
       languageReplyDirective(lang),
     ].join("\n");
 
-  const fullPrompt = `${system}\n\nUser:\n${input.prompt}`;
+  // Final safety: ensure system + current turn + output still fit the local
+  // context window even if the caller passed an unbounded history array.
+  const historyBudget = local
+    ? historyBudgetForContext({
+        numCtx: local.numCtx,
+        systemChars: system.length,
+        promptChars: input.prompt.length,
+        numPredict: input.numPredict ?? 256,
+        desiredChars: 24_000,
+      })
+    : 24_000;
+  const history = input.history?.length
+    ? trimChatTurns(input.history, { maxChars: historyBudget }).turns
+    : [];
+  const payload = buildQuickPromptPayload({
+    system,
+    prompt: input.prompt,
+    history,
+  });
+
   let text = "";
   try {
-    const res = await model.invoke(fullPrompt);
+    const res = await model.invoke(payload.prompt);
     text = typeof res.content === "string" ? res.content : String(res.content ?? "");
   } catch (e: any) {
     // Fallback: cheapest local if primary failed (e.g. model missing)
@@ -154,12 +229,12 @@ export async function invokeQuickModel(input: {
         numBatch: fallbackLocal.numBatch,
         keepAlive: fallbackLocal.keepAlive,
       });
-      const res = await fallback.invoke(fullPrompt);
+      const res = await fallback.invoke(payload.prompt);
       text =
         typeof res.content === "string" ? res.content : String(res.content ?? "");
       const usage = recordUsage(cwd, {
         model: localRoute.model,
-        inputTokens: Math.ceil(fullPrompt.length / 4),
+        inputTokens: Math.ceil(payload.chars / 4),
         outputTokens: Math.ceil(text.length / 4),
         costUsd: 0,
         cloud: false,
@@ -173,6 +248,7 @@ export async function invokeQuickModel(input: {
           detail: {
             model: localRoute.model,
             fallback: true,
+            historyTurns: payload.historyTurns,
             primaryError: e?.message || String(e),
           },
         });
@@ -185,6 +261,7 @@ export async function invokeQuickModel(input: {
         cloud: false,
         costUsd: usage.costUsd || 0,
         baseUrl: localRoute.baseUrl,
+        historyTurns: payload.historyTurns,
       };
     }
     throw e;
@@ -192,7 +269,7 @@ export async function invokeQuickModel(input: {
 
   const usage = recordUsage(cwd, {
     model: route.model,
-    inputTokens: Math.ceil(fullPrompt.length / 4),
+    inputTokens: Math.ceil(payload.chars / 4),
     outputTokens: Math.ceil(text.length / 4),
     costUsd: route.cloud ? route.estimatedUsd : 0,
     cloud: route.cloud,
@@ -209,6 +286,7 @@ export async function invokeQuickModel(input: {
         cloud: route.cloud,
         tier: route.tier,
         costUsd: usage.costUsd,
+        historyTurns: payload.historyTurns,
       },
     });
   } catch {
@@ -221,6 +299,7 @@ export async function invokeQuickModel(input: {
     cloud: route.cloud,
     costUsd: usage.costUsd || 0,
     baseUrl: route.baseUrl,
+    historyTurns: payload.historyTurns,
   };
 }
 
