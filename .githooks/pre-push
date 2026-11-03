@@ -1,0 +1,69 @@
+#!/usr/bin/env bash
+# Block direct pushes to main/staging and pushes from badly named branches.
+# Enabled via: git config core.hooksPath .githooks  (pnpm prepare / scripts/git/setup-hooks.*)
+set -euo pipefail
+
+ROOT="$(git rev-parse --show-toplevel 2>/dev/null || true)"
+if [[ -z "$ROOT" ]]; then
+  echo "[branch-flow] ERROR: not inside a git work tree." >&2
+  exit 1
+fi
+# shellcheck source=../scripts/git/lib-branch-flow.sh
+source "$ROOT/scripts/git/lib-branch-flow.sh"
+
+remote="${1:-}"
+url="${2:-}"
+echo "[branch-flow] pre-push remote=$remote"
+
+zero="0000000000000000000000000000000000000000"
+failed=0
+
+while read -r local_ref local_sha remote_ref remote_sha; do
+  # Deleting a remote ref — allow (branch protection still applies on server).
+  if [[ "$local_sha" == "$zero" ]]; then
+    continue
+  fi
+
+  remote_branch="${remote_ref#refs/heads/}"
+  if [[ "$remote_ref" == refs/heads/* ]]; then
+    if [[ "$remote_branch" == "main" || "$remote_branch" == "staging" ]]; then
+      echo "[branch-flow] FAIL: Direct push to '$remote_branch' is blocked." >&2
+      echo "  Use a feature branch and open a PR into staging:" >&2
+      echo "    pnpm run git:new-branch -- feat/my-change" >&2
+      echo "    pnpm run git:open-pr" >&2
+      echo "  Release to main: open a PR staging -> main. See CONTRIBUTING.md." >&2
+      failed=1
+      continue
+    fi
+    if ! branch_flow_is_allowed_branch "$remote_branch"; then
+      echo "[branch-flow] FAIL: Refusing to push branch '$remote_branch'." >&2
+      branch_flow_print_branch_help
+      failed=1
+      continue
+    fi
+  fi
+done
+
+# Also validate current branch name (covers default push without refspec edge cases).
+current="$(git rev-parse --abbrev-ref HEAD 2>/dev/null || echo HEAD)"
+if [[ "$current" != "HEAD" && "$current" != "main" && "$current" != "staging" ]]; then
+  if ! branch_flow_is_allowed_branch "$current"; then
+    echo "[branch-flow] FAIL: Current branch '$current' is not an allowed name." >&2
+    branch_flow_print_branch_help
+    failed=1
+  fi
+elif [[ "$current" == "main" || "$current" == "staging" ]]; then
+  # Pushing while ON main/staging usually targets that branch — blocked above when ref listed.
+  # If stdin was empty (unusual), still warn hard.
+  if [[ "$failed" -eq 0 ]]; then
+    # Re-read is not possible; if we got here with no fail, stdin may have been empty.
+    :
+  fi
+fi
+
+if [[ "$failed" -ne 0 ]]; then
+  exit 1
+fi
+
+echo "[branch-flow] pre-push OK"
+exit 0
