@@ -56,7 +56,7 @@ SAM_OUTPUT_HOME/progress/progress-state.json
     "T5": { "id": "T5", "phase": "P10", "title": "تدوير الجلسات تلقائياً Session Rotation", "status": "done", "progress": 100, "notes": "تم إضافة SESSION_ROTATE_AFTER_MS و MAX_SESSIONS مع تدوير تلقائي كل 4 ساعات", "priority": "medium" },
     "T6": { "id": "T6", "phase": "P10", "title": "إصلاح XSS في واجهة التحكم Content Security Policy", "status": "done", "progress": 100, "notes": "تم إضافة رؤوس CSP و X-Content-Type-Options و X-Frame-Options و Referrer-Policy لـ serveStatic", "priority": "high" },
     "T7": { "id": "T7", "phase": "P13", "title": "المصادقة متعددة العوامل MFA TOTP", "status": "done", "progress": 100, "notes": "تم إضافة generateTOTP و verifyTOTP و initiateMfa و completeMfa و isMfaVerified ونقاط نهاية API /api/mfa/* في auth.ts و server.ts", "priority": "high" },
-    "T8": { "id": "T8", "phase": "P13", "title": "نظام RBAC للأدوار والصلاحيات", "status": "in_progress", "progress": 30, "notes": "جاري إضافة أدوار Owner/Admin/Agent/Viewer/Client مع صلاحيات دقيقة لكل وكيل", "priority": "high" },
+    "T8": { "id": "T8", "phase": "P13", "title": "نظام RBAC للأدوار والصلاحيات", "status": "done", "progress": 100, "notes": "تم إضافة أدوار Owner/Admin/Agent/Viewer/Client مع صلاحيات دقيقة ونقاط نهاية API /api/rbac/* في auth.ts و server.ts", "priority": "high" },
     "T3": { "id": "T3", "phase": "P11", "title": "نظام التعاون多人", "status": "not_started", "priority": "high" }
   }
 }
