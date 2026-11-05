@@ -12,6 +12,8 @@ export const SESSION_COOKIE = "sh_session";
 export const CSRF_HEADER = "x-csrf-token";
 
 const SESSION_TTL_MS = 12 * 60 * 60 * 1000; // 12h
+const SESSION_ROTATE_AFTER_MS = 4 * 60 * 60 * 1000; // تدوير الجلسة كل 4 ساعات
+const MAX_SESSIONS = 100; // أقصى عدد جلسات نشطة
 const ENCRYPTION_ALGORITHM = "aes-256-cbc";
 const IV_LENGTH = 16;
 
@@ -92,6 +94,11 @@ export function loadOrCreateOwnerToken(root: string): string {
 
 export function createSession(): AuthSession {
   pruneSessions();
+  // فرض حد أقصى على عدد الجلسات النشطة
+  if (sessions.size >= MAX_SESSIONS) {
+    const oldestKey = sessions.keys().next().value;
+    if (oldestKey !== undefined) sessions.delete(oldestKey);
+  }
   const session: AuthSession = {
     id: crypto.randomBytes(24).toString("base64url"),
     csrfToken: crypto.randomBytes(24).toString("base64url"),
@@ -109,6 +116,15 @@ export function getSession(id: string | undefined | null): AuthSession | null {
   if (Date.now() > s.expiresAt) {
     sessions.delete(id);
     return null;
+  }
+  // تدوير الجلسة إذا مرت أكثر من 4 ساعات منذ إنشائها
+  if (Date.now() > s.createdAt + SESSION_ROTATE_AFTER_MS) {
+    sessions.delete(id);
+    const rotated = createSession();
+    // نسخ CSRF توكن من الجلسة القديمة للحفاظ على الاستمرارية
+    rotated.csrfToken = s.csrfToken;
+    sessions.set(rotated.id, rotated);
+    return rotated;
   }
   return s;
 }

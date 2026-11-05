@@ -53,6 +53,7 @@ SAM_OUTPUT_HOME/progress/progress-state.json
     "T1": { "id": "T1", "phase": "P10", "title": "تشفير توكن لوحة التحكم", "status": "done", "progress": 100, "notes": "تم إضافة encryptToken و decryptToken بـ AES-256-CBC مع مفتاح من CONTROL_PLANE_ENCRYPTION_KEY", "priority": "high" },
     "T2": { "id": "T2", "phase": "P10", "title": "إصلاح sandbox.ts command injection", "status": "done", "progress": 100, "notes": "تم إضافة validateCode و validateNodeArgs وقائمة الأوامر المسموح بها ALLOWED_NODE_COMMANDS", "priority": "high" },
     "T4": { "id": "T4", "phase": "P10", "title": "تحديد المعدل Rate Limiting", "status": "done", "progress": 100, "notes": "تم إضافة checkRateLimit في server.ts مع حدود 120 طلب/دقيقة لكل IP", "priority": "high" },
+    "T5": { "id": "T5", "phase": "P10", "title": "تدوير الجلسات تلقائياً Session Rotation", "status": "done", "progress": 100, "notes": "تم إضافة SESSION_ROTATE_AFTER_MS و MAX_SESSIONS مع تدوير تلقائي كل 4 ساعات", "priority": "medium" },
     "T3": { "id": "T3", "phase": "P11", "title": "نظام التعاون多人", "status": "not_started", "priority": "high" }
   }
 }
