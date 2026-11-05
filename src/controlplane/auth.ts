@@ -42,8 +42,8 @@ function getMfaSecret(): string {
 }
 
 /** إنشاء رمز TOTP للمصادقة الثنائية (بناءً على الوقت الحالي). */
-function generateTOTP(secret: string, timeStepMs: number = 30_000): string {
-  const timeCounter = Math.floor(Date.now() / timeStepMs);
+export function generateTOTP(secret: string, timeStepMs: number = 30_000): string {
+  let timeCounter = Math.floor(Date.now() / timeStepMs);
   const counterBuffer = Buffer.alloc(8);
   for (let i = 7; i >= 0; i--) {
     counterBuffer[i] = timeCounter & 0xff;

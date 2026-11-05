@@ -1561,7 +1561,8 @@ const server = http.createServer(async (req, res) => {
         allowMissingOriginWithBearer: true,
       });
       if (!auth.ok || !auth.session) {
-        sendJson(res, auth.status || 401, { ok: false, error: auth.error || "Unauthorized" });
+        const fail = auth as { status?: number; error?: string };
+        sendJson(res, fail.status || 401, { ok: false, error: fail.error || "Unauthorized" });
         return;
       }
       const entry = initiateMfa(auth.session.id);
@@ -1581,7 +1582,8 @@ const server = http.createServer(async (req, res) => {
         allowMissingOriginWithBearer: true,
       });
       if (!auth.ok || !auth.session) {
-        sendJson(res, auth.status || 401, { ok: false, error: auth.error || "Unauthorized" });
+        const fail = auth as { status?: number; error?: string };
+        sendJson(res, fail.status || 401, { ok: false, error: fail.error || "Unauthorized" });
         return;
       }
       const body = JSON.parse((await readBody(req)) || "{}") as { code?: string };
