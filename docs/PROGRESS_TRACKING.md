@@ -42,7 +42,7 @@ SAM_OUTPUT_HOME/progress/progress-state.json
     "P7": { "status": "done", "progress": 100, "notes": "مكتمل" },
     "P8": { "status": "in_progress", "progress": 70, "notes": "بقي Linux/macOS desktop" },
     "P9": { "status": "in_progress", "progress": 60, "notes": "بقي إكمال المحرر المرئي" },
-    "P10": { "status": "in_progress", "progress": 75, "notes": "تم إصلاح: تشفير التوكن، sandbox command injection، rate limiting، session rotation، XSS/CSP. بقي: MFA، RBAC، تشفير SQLite، DLP، WAF" },
+    "P10": { "status": "done", "progress": 100, "notes": "جميع إصلاحات الأمان مكتملة: تشفير التوكن، sandbox command injection، rate limiting، session rotation، XSS/CSP، MFA، RBAC، WAF، DLP" },
     "P11": { "status": "not_started", "progress": 0, "notes": "نظام التعاون多人" },
     "P12": { "status": "not_started", "progress": 0, "notes": "التكاملات الخارجية" },
     "P13": { "status": "not_started", "progress": 0, "notes": "الأمان المتقدم" },
