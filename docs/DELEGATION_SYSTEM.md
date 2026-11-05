@@ -43,7 +43,7 @@ Intake → Evidence → Strategist → Auditor → Architect → Help → Market
 [ proposer ] → propose → [ reviewers ] → review → [ negotiators ] → negotiate → [ delegator ] → delegate → [ executors ] → execute → [ verifier ] → verify → done
 ```
 
-كل مرحلة لها مهلة زمنية (timeout)، وفي حال انتهاء المهلة بدون قرار، ينتقل القرار إلى CEO router للتحديد.
+كل مرحلة لها مهلة زمنية (timeout)، وفي حال انتهاء المهلة بدون قرار، ينتقل القرار إلى CEO router للتحديد. كل جولة تفاوض تُوثق مع اسمها ونتيجتها.
 
 ---
 
