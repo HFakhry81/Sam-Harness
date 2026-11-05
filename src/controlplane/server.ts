@@ -197,6 +197,45 @@ let LISTEN_PORT = REQUESTED_PORT > 0 ? REQUESTED_PORT : 0;
 const OWNER_TOKEN = loadOrCreateOwnerToken(ROOT);
 const log = createLogger("controlplane");
 
+/** ---------- Rate Limiting (حماية من هجمات حجب الخدمة) ---------- */
+const RATE_LIMIT_WINDOW_MS = 60_000; // نافذة دقيقة واحدة
+const RATE_LIMIT_MAX_REQUESTS = 120; // أقصى 120 طلب لكل IP في الدقيقة
+const rateLimitMap = new Map<string, { count: number; resetAt: number }>();
+
+function rateLimitKey(req: http.IncomingMessage): string {
+  // استخدم الـ IP العميل إن وُجد، وإلا افتراضيًا إلى "local"
+  const forwarded = req.headers["x-forwarded-for"] as string | undefined;
+  const ip = forwarded ? forwarded.split(",")[0].trim() : "local";
+  return ip;
+}
+
+function checkRateLimit(req: http.IncomingMessage): { allowed: boolean; remaining: number; resetAt: number } {
+  const now = Date.now();
+  const key = rateLimitKey(req);
+  let entry = rateLimitMap.get(key);
+
+  if (!entry || now > entry.resetAt) {
+    entry = { count: 0, resetAt: now + RATE_LIMIT_WINDOW_MS };
+    rateLimitMap.set(key, entry);
+  }
+
+  entry.count++;
+  const remaining = Math.max(0, RATE_LIMIT_MAX_REQUESTS - entry.count);
+
+  // تنظيف المدخلات المنتهية صلاحيتها بشكل دوري
+  if (rateLimitMap.size > 1000) {
+    for (const [k, v] of rateLimitMap.entries()) {
+      if (now > v.resetAt) rateLimitMap.delete(k);
+    }
+  }
+
+  return {
+    allowed: entry.count <= RATE_LIMIT_MAX_REQUESTS,
+    remaining,
+    resetAt: entry.resetAt,
+  };
+}
+
 type RunMode = "agency" | "implement" | "smoke" | "legacy";
 type UiPhase = "idle" | "running" | "done";
 
@@ -1428,6 +1467,21 @@ const server = http.createServer(async (req, res) => {
     const url = new URL(req.url || "/", `http://127.0.0.1:${LISTEN_PORT || 8787}`);
     const p = url.pathname;
     const method = req.method || "GET";
+
+    // —— Rate limiting: 적용 لجميع الطلبات ——
+    const rl = checkRateLimit(req);
+    res.setHeader("X-RateLimit-Limit", String(RATE_LIMIT_MAX_REQUESTS));
+    res.setHeader("X-RateLimit-Remaining", String(rl.remaining));
+    res.setHeader("X-RateLimit-Reset", String(Math.floor(rl.resetAt / 1000)));
+    if (!rl.allowed) {
+      res.writeHead(429, {
+        "Content-Type": "application/json; charset=utf-8",
+        "Cache-Control": "no-store",
+        "Retry-After": String(Math.ceil((rl.resetAt - Date.now()) / 1000)),
+      });
+      res.end(JSON.stringify({ ok: false, error: "Too many requests —-rate limited", code: "RATE_LIMITED" }));
+      return;
+    }
 
     // —— Auth: login / status / logout (unauthenticated) ——
     if (method === "POST" && p === "/api/login") {
