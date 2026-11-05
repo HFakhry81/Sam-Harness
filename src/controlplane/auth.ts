@@ -1,6 +1,6 @@
 /**
  * Control Plane owner-token auth + CSRF (loopback UI/API).
- * Token: CONTROL_PLANE_TOKEN env, else generated once into .controlplane-token.
+ * Token: CONTROL_PLANE_TOKEN env, else generated once into .controlplane-token (AES-256 encrypted).
  */
 import * as crypto from "crypto";
 import * as fs from "fs";
@@ -12,6 +12,8 @@ export const SESSION_COOKIE = "sh_session";
 export const CSRF_HEADER = "x-csrf-token";
 
 const SESSION_TTL_MS = 12 * 60 * 60 * 1000; // 12h
+const ENCRYPTION_ALGORITHM = "aes-256-cbc";
+const IV_LENGTH = 16;
 
 export type AuthSession = {
   id: string;
@@ -21,6 +23,41 @@ export type AuthSession = {
 };
 
 const sessions = new Map<string, AuthSession>();
+
+function getEncryptionKey(): Buffer {
+  const keyEnv = process.env.CONTROL_PLANE_ENCRYPTION_KEY;
+  if (keyEnv) {
+    return crypto.scryptSync(keyEnv, "sam-harness-token-v1", 32);
+  }
+  // Fallback: derive from a stable salt (not ideal but better than plain text)
+  console.warn(
+    "[auth] CONTROL_PLANE_ENCRYPTION_KEY not set — token encryption uses a derived fallback key. " +
+      "Set CONTROL_PLANE_ENCRYPTION_KEY for production."
+  );
+  return crypto.scryptSync("sam-harness-fallback-token-key", "sam-harness-token-v1", 32);
+}
+
+function encryptToken(token: string): string {
+  const key = getEncryptionKey();
+  const iv = crypto.randomBytes(IV_LENGTH);
+  const cipher = crypto.createCipheriv(ENCRYPTION_ALGORITHM, key, iv);
+  const encrypted = Buffer.concat([cipher.update(token, "utf8"), cipher.final()]);
+  return iv.toString("hex") + ":" + encrypted.toString("hex");
+}
+
+function decryptToken(encrypted: string): string {
+  const key = getEncryptionKey();
+  const parts = encrypted.split(":");
+  if (parts.length !== 2) {
+    // Backward compatibility: treat as plain text
+    return encrypted;
+  }
+  const iv = Buffer.from(parts[0], "hex");
+  const encryptedData = Buffer.from(parts[1], "hex");
+  const decipher = crypto.createDecipheriv(ENCRYPTION_ALGORITHM, key, iv);
+  const decrypted = Buffer.concat([decipher.update(encryptedData), decipher.final()]);
+  return decrypted.toString("utf8");
+}
 
 export function timingSafeEqualString(a: string, b: string): boolean {
   const ba = Buffer.from(String(a), "utf8");
@@ -42,14 +79,14 @@ export function loadOrCreateOwnerToken(root: string): string {
   try {
     if (fs.existsSync(file)) {
       const existing = fs.readFileSync(file, "utf8").trim();
-      if (existing) return existing;
+      if (existing) return decryptToken(existing);
     }
   } catch {
     /* regenerate below */
   }
 
   const token = crypto.randomBytes(32).toString("base64url");
-  fs.writeFileSync(file, token + "\n", { encoding: "utf8", mode: 0o600 });
+  fs.writeFileSync(file, encryptToken(token) + "\n", { encoding: "utf8", mode: 0o600 });
   return token;
 }
 
