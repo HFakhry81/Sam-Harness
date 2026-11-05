@@ -202,6 +202,17 @@ const RATE_LIMIT_WINDOW_MS = 60_000; // نافذة دقيقة واحدة
 const RATE_LIMIT_MAX_REQUESTS = 120; // أقصى 120 طلب لكل IP في الدقيقة
 const rateLimitMap = new Map<string, { count: number; resetAt: number }>();
 
+/** رؤوس أمان.Content Security Policy لمنع XSS */
+const CSP_HEADER =
+  "default-src 'self'; " +
+  "script-src 'self' 'unsafe-inline'; " +
+  "style-src 'self' 'unsafe-inline'; " +
+  "img-src 'self' data:; " +
+  "connect-src 'self'; " +
+  "frame-ancestors 'none'; " +
+  "base-uri 'self'; " +
+  "form-action 'self'";
+
 function rateLimitKey(req: http.IncomingMessage): string {
   // استخدم الـ IP العميل إن وُجد، وإلا افتراضيًا إلى "local"
   const forwarded = req.headers["x-forwarded-for"] as string | undefined;
@@ -302,7 +313,15 @@ function serveStatic(reqPath: string, res: http.ServerResponse) {
     res.writeHead(404).end("Not found");
     return;
   }
-  res.writeHead(200, { "Content-Type": contentType(abs) });
+  const isHtml = rel.endsWith(".html");
+  const headers: Record<string, string> = { "Content-Type": contentType(abs) };
+  if (isHtml) {
+    headers["Content-Security-Policy"] = CSP_HEADER;
+    headers["X-Content-Type-Options"] = "nosniff";
+    headers["X-Frame-Options"] = "DENY";
+    headers["Referrer-Policy"] = "strict-origin-when-cross-origin";
+  }
+  res.writeHead(200, headers);
   fs.createReadStream(abs).pipe(res);
 }
 
