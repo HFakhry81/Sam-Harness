@@ -22,9 +22,118 @@ export type AuthSession = {
   csrfToken: string;
   createdAt: number;
   expiresAt: number;
+  mfaVerified?: boolean; // هل تم التحقق من MFA لهذه الجلسة
 };
 
 const sessions = new Map<string, AuthSession>();
+
+/** ---------- المصادقة متعددة العوامل MFA (TOTP RFC 6238) ---------- */
+const MFA_SECRET_ENV = "CONTROL_PLANE_MFA_SECRET";
+const MFA_CODE_TTL_MS = 5 * 60 * 1000; // رمز MFA صالح لمدة 5 دقائق
+const mfaPending = new Map<string, { secret: string; expiresAt: number }>(); // sessionId -> secret
+
+/** توليد مفتاح سري لـ TOTP إذا لم يكن محددًا في متغيرات البيئة. */
+function getMfaSecret(): string {
+  const env = process.env[MFA_SECRET_ENV];
+  if (env) return env;
+  // إنشاء مفتاح افتراضي من رمز التحكم (ليست مثالية للإنتاج ولكنها تعمل للتطوير)
+  const token = loadOrCreateOwnerToken(".");
+  return crypto.createHash("sha256").update(token + "mfa-salt").digest("hex").slice(0, 32);
+}
+
+/** إنشاء رمز TOTP للمصادقة الثنائية (بناءً على الوقت الحالي). */
+function generateTOTP(secret: string, timeStepMs: number = 30_000): string {
+  const timeCounter = Math.floor(Date.now() / timeStepMs);
+  const counterBuffer = Buffer.alloc(8);
+  for (let i = 7; i >= 0; i--) {
+    counterBuffer[i] = timeCounter & 0xff;
+    timeCounter = timeCounter >>> 8;
+  }
+  const key = Buffer.from(secret, "utf8");
+  const hmac = crypto.createHmac("sha1", key).update(counterBuffer).digest();
+  const offset = hmac[hmac.length - 1] & 0x0f;
+  const binary =
+    ((hmac[offset] & 0x7f) << 24) |
+    ((hmac[offset + 1] & 0xff) << 16) |
+    ((hmac[offset + 2] & 0xff) << 8) |
+    (hmac[offset + 3] & 0xff);
+  const otp = (binary % 1_000_000).toString().padStart(6, "0");
+  return otp;
+}
+
+/** التحقق من رمز TOTP الذي أدخله المستخدم (يسمح بفارق خطوة واحدة للأمام والوراء). */
+function verifyTOTP(secret: string, code: string): boolean {
+  const now = Date.now();
+  for (let step = -1; step <= 1; step++) {
+    const adjustedTime = Math.floor((now + step * 30_000) / 30_000);
+    const expected = generateTOTP(secret, 30_000);
+    // generateTOTP يستخدم الوقت الحالي، لذا نعدله يدويًا لكل خطوة
+    const counterBuffer = Buffer.alloc(8);
+    let counter = adjustedTime;
+    for (let i = 7; i >= 0; i--) {
+      counterBuffer[i] = counter & 0xff;
+      counter = counter >>> 8;
+    }
+    const key = Buffer.from(secret, "utf8");
+    const hmac = crypto.createHmac("sha1", key).update(counterBuffer).digest();
+    const offset = hmac[hmac.length - 1] & 0x0f;
+    const binary =
+      ((hmac[offset] & 0x7f) << 24) |
+      ((hmac[offset + 1] & 0xff) << 16) |
+      ((hmac[offset + 2] & 0xff) << 8) |
+      (hmac[offset + 3] & 0xff);
+    const otp = (binary % 1_000_000).toString().padStart(6, "0");
+    if (timingSafeEqualString(otp, code)) return true;
+  }
+  return false;
+}
+
+/** بدء جلسة MFA معلقة لمستخدم ما (يتم استدعاؤها قبل تنفيذ عملية حساسة). */
+export function initiateMfa(sessionId: string): { secret: string; expiresAt: number } {
+  const secret = getMfaSecret();
+  const entry = { secret, expiresAt: Date.now() + MFA_CODE_TTL_MS };
+  mfaPending.set(sessionId, entry);
+  return entry;
+}
+
+/** التحقق من رمز MFA وإكمال المصادقة الثنائية للجلسة. */
+export function completeMfa(sessionId: string, code: string): boolean {
+  const entry = mfaPending.get(sessionId);
+  if (!entry) return false;
+  if (Date.now() > entry.expiresAt) {
+    mfaPending.delete(sessionId);
+    return false;
+  }
+  if (!verifyTOTP(entry.secret, code)) return false;
+  // تعيين الجلسة كموثقة عبر MFA
+  const session = sessions.get(sessionId);
+  if (session) {
+    session.mfaVerified = true;
+    sessions.set(sessionId, session);
+  }
+  mfaPending.delete(sessionId);
+  return true;
+}
+
+/** التحقق من أن الجلسة موثقة عبر MFA (مطلوب للعمليات الحساسة). */
+export function isMfaVerified(sessionId: string | undefined | null): boolean {
+  if (!sessionId) return false;
+  const session = sessions.get(sessionId);
+  return Boolean(session?.mfaVerified);
+}
+
+/** operations التي تتطلب MFA */
+export const MFA_REQUIRED_OPS = new Set([
+  "implement",      // تنفيذ الكود (Level-3)
+  "send_email",     // إرسال الإيميل
+  "delete_data",    // حذف البيانات
+  "change_config",  // تغيير الإعدادات
+]);
+
+/** هل تتطلب هذه العملية مصادقة MFA؟ */
+export function requiresMfa(operation: string): boolean {
+  return MFA_REQUIRED_OPS.has(operation);
+}
 
 function getEncryptionKey(): Buffer {
   const keyEnv = process.env.CONTROL_PLANE_ENCRYPTION_KEY;

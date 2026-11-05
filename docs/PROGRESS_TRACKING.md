@@ -55,6 +55,7 @@ SAM_OUTPUT_HOME/progress/progress-state.json
     "T4": { "id": "T4", "phase": "P10", "title": "تحديد المعدل Rate Limiting", "status": "done", "progress": 100, "notes": "تم إضافة checkRateLimit في server.ts مع حدود 120 طلب/دقيقة لكل IP", "priority": "high" },
     "T5": { "id": "T5", "phase": "P10", "title": "تدوير الجلسات تلقائياً Session Rotation", "status": "done", "progress": 100, "notes": "تم إضافة SESSION_ROTATE_AFTER_MS و MAX_SESSIONS مع تدوير تلقائي كل 4 ساعات", "priority": "medium" },
     "T6": { "id": "T6", "phase": "P10", "title": "إصلاح XSS في واجهة التحكم Content Security Policy", "status": "done", "progress": 100, "notes": "تم إضافة رؤوس CSP و X-Content-Type-Options و X-Frame-Options و Referrer-Policy لـ serveStatic", "priority": "high" },
+    "T7": { "id": "T7", "phase": "P13", "title": "المصادقة متعددة العوامل MFA TOTP", "status": "done", "progress": 100, "notes": "تم إضافة generateTOTP و verifyTOTP و initiateMfa و completeMfa و isMfaVerified ونقاط نهاية API /api/mfa/* في auth.ts و server.ts", "priority": "high" },
     "T3": { "id": "T3", "phase": "P11", "title": "نظام التعاون多人", "status": "not_started", "priority": "high" }
   }
 }

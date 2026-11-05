@@ -176,12 +176,17 @@ import { appendRunLesson, parseRunQualityFlags } from "./runLessons.js";
 import {
   authenticateRequest,
   clearSessionCookieHeader,
+  completeMfa,
   createSession,
   destroySession,
   isAllowedHost,
   isAllowedOrigin,
+  initiateMfa,
+  isMfaVerified,
   loadOrCreateOwnerToken,
   parseCookies,
+  requiresMfa,
+  generateTOTP,
   SESSION_COOKIE,
   sessionCookieHeader,
   timingSafeEqualString,
@@ -1545,6 +1550,66 @@ const server = http.createServer(async (req, res) => {
         authenticated: auth.ok,
         via: auth.ok ? auth.via : null,
         csrfToken: auth.ok && auth.via === "session" ? auth.session?.csrfToken : null,
+      });
+      return;
+    }
+    // —— MFA: initiate, verify, status ——
+    if (method === "POST" && p === "/api/mfa/initiate") {
+      const auth = authenticateRequest(req, OWNER_TOKEN, {
+        port: LISTEN_PORT,
+        requireCsrf: true,
+        allowMissingOriginWithBearer: true,
+      });
+      if (!auth.ok || !auth.session) {
+        sendJson(res, auth.status || 401, { ok: false, error: auth.error || "Unauthorized" });
+        return;
+      }
+      const entry = initiateMfa(auth.session.id);
+      const totpCode = generateTOTP(entry.secret); // للعرض في واجهة التطوير فقط
+      sendJson(res, 200, {
+        ok: true,
+        mfaRequired: true,
+        expiresAt: new Date(entry.expiresAt).toISOString(),
+        totpCode: process.env.SAM_DEV_MODE === "1" ? totpCode : undefined, // رمز TOTP للعرض في وضع التطوير فقط
+      });
+      return;
+    }
+    if (method === "POST" && p === "/api/mfa/verify") {
+      const auth = authenticateRequest(req, OWNER_TOKEN, {
+        port: LISTEN_PORT,
+        requireCsrf: true,
+        allowMissingOriginWithBearer: true,
+      });
+      if (!auth.ok || !auth.session) {
+        sendJson(res, auth.status || 401, { ok: false, error: auth.error || "Unauthorized" });
+        return;
+      }
+      const body = JSON.parse((await readBody(req)) || "{}") as { code?: string };
+      const code = String(body.code || "").trim();
+      if (!code) {
+        sendJson(res, 400, { ok: false, error: "MFA code required" });
+        return;
+      }
+      const verified = completeMfa(auth.session.id, code);
+      if (!verified) {
+        sendJson(res, 401, { ok: false, error: "Invalid or expired MFA code" });
+        return;
+      }
+      sendJson(res, 200, { ok: true, mfaVerified: true });
+      return;
+    }
+    if (method === "GET" && p === "/api/mfa/status") {
+      const auth = authenticateRequest(req, OWNER_TOKEN, {
+        port: LISTEN_PORT,
+        requireCsrf: false,
+        allowMissingOriginWithBearer: true,
+      });
+      const mfaVerified = auth.ok && auth.session ? isMfaVerified(auth.session.id) : false;
+      sendJson(res, 200, {
+        ok: true,
+        authenticated: auth.ok,
+        mfaVerified,
+        mfaRequiredOps: Array.from(requiresMfa("implement") ? ["implement", "send_email", "delete_data", "change_config"] : []),
       });
       return;
     }
