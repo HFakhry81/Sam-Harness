@@ -253,16 +253,10 @@ function wafScan(value: string): { blocked: boolean; reason?: string } {
   return { blocked: false };
 }
 
-function wafScanRequest(req: http.IncomingMessage, body?: string): { blocked: boolean; reason?: string } {
+function wafScanRequest(req: http.IncomingMessage): { blocked: boolean; reason?: string } {
   // فحص المسار
   const pathResult = wafScan(req.url || "");
   if (pathResult.blocked) return pathResult;
-
-  // فحص جسم الطلب إن وُجد
-  if (body) {
-    const bodyResult = wafScan(body);
-    if (bodyResult.blocked) return bodyResult;
-  }
 
   // فحص رؤوس الطلب المشبوهة
   const ua = req.headers["user-agent"] as string | undefined;
@@ -1562,15 +1556,8 @@ const server = http.createServer(async (req, res) => {
       return;
     }
 
-    // —— WAF: فحص الطلبات الواردة للكشف عن أنماط SQL Injection و XSS ——
-    let reqBody = "";
-    if (method === "POST" || method === "PUT" || method === "PATCH") {
-      reqBody = await readBody(req);
-      // إعادة تعيين جسم الطلب للقراءة اللاحقة من قبل معالجات النقاط النهائية
-      const originalBody = reqBody;
-      (req as any)._wafBody = originalBody;
-    }
-    const wafResult = wafScanRequest(req, reqBody);
+    // —— WAF: فحص الطلبات الواردة للكشف عن أنماط SQL Injection و XSS (مسار ورؤوس فقط) ——
+    const wafResult = wafScanRequest(req);
     if (wafResult.blocked) {
       res.writeHead(403, {
         "Content-Type": "application/json; charset=utf-8",
