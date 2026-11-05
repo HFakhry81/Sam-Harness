@@ -223,6 +223,56 @@ const CSP_HEADER =
   "base-uri 'self'; " +
   "form-action 'self'";
 
+/** ---------- WAF (جدار حماية للتطبيقات الويب) ---------- */
+const SQL_INJECTION_PATTERNS = [
+  /(\b(SELECT|INSERT|UPDATE|DELETE|DROP|UNION|ALTER|CREATE|EXEC|EXECUTE)\b)/i,
+  /(\b(OR|AND)\b\s+\d+\s*=\s*\d+)/i,
+  /(--|;|${String.fromCharCode(47)}${String.fromCharCode(42)}|${String.fromCharCode(42)}${String.fromCharCode(47)})/i,
+  /(\b(xp_cmdshell|sp_executesql)\b)/i,
+];
+
+const XSS_PATTERNS = [
+  /<script\b[^<]*(?:(?!<\/script>)<[^<]*)*<\/script>/gi,
+  /javascript:/gi,
+  /on\w+\s*=/gi,
+  /<iframe\b[^<]*>/gi,
+  /<object\b[^<]*>/gi,
+];
+
+function wafScan(value: string): { blocked: boolean; reason?: string } {
+  for (const pattern of SQL_INJECTION_PATTERNS) {
+    if (pattern.test(value)) {
+      return { blocked: true, reason: "SQL injection pattern detected" };
+    }
+  }
+  for (const pattern of XSS_PATTERNS) {
+    if (pattern.test(value)) {
+      return { blocked: true, reason: "XSS pattern detected" };
+    }
+  }
+  return { blocked: false };
+}
+
+function wafScanRequest(req: http.IncomingMessage, body?: string): { blocked: boolean; reason?: string } {
+  // فحص المسار
+  const pathResult = wafScan(req.url || "");
+  if (pathResult.blocked) return pathResult;
+
+  // فحص جسم الطلب إن وُجد
+  if (body) {
+    const bodyResult = wafScan(body);
+    if (bodyResult.blocked) return bodyResult;
+  }
+
+  // فحص رؤوس الطلب المشبوهة
+  const ua = req.headers["user-agent"] as string | undefined;
+  if (ua && wafScan(ua).blocked) {
+    return { blocked: true, reason: "Suspicious User-Agent" };
+  }
+
+  return { blocked: false };
+}
+
 function rateLimitKey(req: http.IncomingMessage): string {
   // استخدم الـ IP العميل إن وُجد، وإلا افتراضيًا إلى "local"
   const forwarded = req.headers["x-forwarded-for"] as string | undefined;
@@ -1509,6 +1559,24 @@ const server = http.createServer(async (req, res) => {
         "Retry-After": String(Math.ceil((rl.resetAt - Date.now()) / 1000)),
       });
       res.end(JSON.stringify({ ok: false, error: "Too many requests —-rate limited", code: "RATE_LIMITED" }));
+      return;
+    }
+
+    // —— WAF: فحص الطلبات الواردة للكشف عن أنماط SQL Injection و XSS ——
+    let reqBody = "";
+    if (method === "POST" || method === "PUT" || method === "PATCH") {
+      reqBody = await readBody(req);
+      // إعادة تعيين جسم الطلب للقراءة اللاحقة من قبل معالجات النقاط النهائية
+      const originalBody = reqBody;
+      (req as any)._wafBody = originalBody;
+    }
+    const wafResult = wafScanRequest(req, reqBody);
+    if (wafResult.blocked) {
+      res.writeHead(403, {
+        "Content-Type": "application/json; charset=utf-8",
+        "Cache-Control": "no-store",
+      });
+      res.end(JSON.stringify({ ok: false, error: wafResult.reason, code: "WAF_BLOCKED" }));
       return;
     }
 
