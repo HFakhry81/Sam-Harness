@@ -22,6 +22,55 @@ import type { ToolResult } from "./registry.js";
 const SECRET_ENV_RE =
   /^(?:.*(?:API[_-]?KEY|SECRET|TOKEN|PASSWORD|PRIVATE[_-]?KEY|CREDENTIAL).*|AWS_.*|GEMINI_.*|GOOGLE_API_KEY|OPENAI_.*|ANTHROPIC_.*|RESEND_.*|SMTP_.*|CONTROL_PLANE_TOKEN|OLLAMA_API_KEY)$/i;
 
+/** 명령ات Node.js المسموح بها فقط — أي أمر خارج هذه القائمة يُرفض. */
+const ALLOWED_NODE_COMMANDS = new Set(["node", "npx", "npm", "pnpm", "tsx"]);
+
+/** أنماط التعليمات الخطرة التي يُمنع تنفيذها داخل الساندبوكس. */
+const DANGEROUS_CODE_PATTERNS = [
+  /child_process\s*[.*]/i,
+  /process\.mainModule/i,
+  /require\s*\(\s*["']child_process["']\s*\)/i,
+  /eval\s*\(/i,
+  /new\s+Function\s*\(/i,
+  /setTimeout\s*\(\s*["']/i,
+  /setInterval\s*\(\s*["']/i,
+  /global\s*\[.process.*\]/i,
+  /Buffer\.from\s*\(.*["']base64["']\s*\).*["']decode["']/i,
+];
+
+/** التحقق من أن引数 node آمنة ولا تحتوي على أعلام خطرة. */
+function validateNodeArgs(nodeArgs: string[] | undefined): string[] {
+  const args = nodeArgs || [];
+  const dangerousFlags = [
+    "--require",
+    "--experimental-vm-modules",
+    "--input-type",
+  ];
+  for (const arg of args) {
+    for (const flag of dangerousFlags) {
+      if (arg.startsWith(flag)) {
+        throw new Error(`Node flag blocked for security: ${arg}`);
+      }
+    }
+  }
+  return args;
+}
+
+/** التحقق من أن الكود لا يحتوي على أنماط خطرة. */
+function validateCode(code: string): void {
+  for (const pattern of DANGEROUS_CODE_PATTERNS) {
+    if (pattern.test(code)) {
+      throw new Error(`Code contains blocked pattern: ${pattern.source}`);
+    }
+  }
+}
+
+/** تحقق من أن الأمر المقدم في قائمة الأوامر المسموح بها. */
+function isAllowedCommand(cmd: string[]): boolean {
+  if (!cmd || cmd.length === 0) return false;
+  return ALLOWED_NODE_COMMANDS.has(cmd[0].toLowerCase());
+}
+
 export type SandboxOptions = {
   code: string;
   timeoutMs?: number;
@@ -330,6 +379,11 @@ export async function runNodeSandbox(opts: SandboxOptions): Promise<SandboxResul
       durationMs: 0,
     };
   }
+
+  // ---- التحقق الأمني من الكود والأوامر قبل التنفيذ ----
+  validateCode(code);
+  validateNodeArgs(opts.nodeArgs);
+
   const timeoutMs = Math.min(Math.max(opts.timeoutMs ?? 15_000, 500), 120_000);
   const memoryMb = Math.min(Math.max(opts.memoryMb ?? 128, 32), 1024);
   const docker = shouldUseDocker(opts);

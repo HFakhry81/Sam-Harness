@@ -6,6 +6,7 @@ import nodemailer from "nodemailer";
 import * as fs from "fs";
 import * as path from "path";
 import { ensureOutputHome } from "../lib/outputHome.js";
+import { scanDLP, isContentSafeForTransfer } from "../lib/dlp.js";
 
 export type EmailProviderKind = "smtp" | "resend" | "dry-run";
 
@@ -227,6 +228,29 @@ export async function sendEmail(
       loggedAt,
     };
     appendSendLog({ ...fail, to, subject }, opts?.cwd);
+    return fail;
+  }
+
+  // —— DLP: فحص محتوى الإيميل للبيانات الحساسة قبل الإرسال ——
+  const dlpCheck = scanDLP(`${subject}\n${body}`);
+  if (!dlpCheck.clean) {
+    const fail: SendEmailResult = {
+      ok: false,
+      provider: status.provider,
+      dryRun: true,
+      error: `DLP blocked: sensitive data detected (${dlpCheck.detected.join(", ")})`,
+      loggedAt,
+    };
+    appendSendLog(
+      {
+        ...fail,
+        to,
+        subject,
+        dlpDetected: dlpCheck.detected,
+        dlpCounts: dlpCheck.counts,
+      },
+      opts?.cwd
+    );
     return fail;
   }
 

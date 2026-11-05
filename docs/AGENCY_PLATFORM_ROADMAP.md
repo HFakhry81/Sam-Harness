@@ -83,7 +83,18 @@
 - [x] Phase 9 — Visual workflow editor (SVG canvas, locked review/GO, draft/apply, layout file, `/api/workflow*`) (see `docs/PHASE9_VISUAL_EDITOR.md`)
 
 **Test-ready today:** Control Plane + agency packs + `pnpm test` + smokes + `/healthz` + desktop mock + Windows Notepad + Linux/macOS command builders + near-zero cost + gates/trust + Arabic/install/doctor + Phase 8 team/routing + Phase 9 visual editor.  
-**Next (Phase 10+):** wider connectors / packaging polish.
+
+## New Phases (P11–P15) — Addressing Identified Gaps
+
+| Phase | Name | Outcome | Status |
+|-------|------|---------|--------|
+| **P11** | Collaboration & Delegation | 협동 حقيقي多人، مساحات عمل مشتركة، نظام تفويض بين الوكلاء مع تصويت وتوافق | 🔲 Not started |
+| **P12** | External Integrations | Slack/Discord/Teams, GitHub/GitLab, Jira/Trello/Asana connectors | 🔲 Not started |
+| **P13** | Advanced Security | MFA, RBAC, SQLite encryption, DLP, WAF, Rate Limiting, TLS | 🔲 Not started |
+| **P14** | Auto-Testing & Advanced Features | NL to SQL, auto test generation, performance suggestions, security scanning | 🔲 Not started |
+| **P15** | Visual Workflow Editor V2 | محرر SVG تفاعلي كامل، تصدير/استيراد سير العمل، التحقق من الصحة | 🔲 Not started |
+
+**Next (Phase 10+):** Complete P10 hardening, then P11–P15 to close all identified gaps vs Devin, Cursor/Copilot Workspace, LangChain, and AutoGen.
 
 ## Success metrics (منافسة حقيقية)
 - تكلفة توكن لكل تقرير ناجح → أقرب ما يكون للصفر عبر المحلي.

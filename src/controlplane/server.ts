@@ -176,12 +176,22 @@ import { appendRunLesson, parseRunQualityFlags } from "./runLessons.js";
 import {
   authenticateRequest,
   clearSessionCookieHeader,
+  completeMfa,
   createSession,
   destroySession,
   isAllowedHost,
   isAllowedOrigin,
+  initiateMfa,
+  isMfaVerified,
   loadOrCreateOwnerToken,
   parseCookies,
+  requiresMfa,
+  generateTOTP,
+  ROLE_PERMISSIONS,
+  sessionHasPermission,
+  setSessionRole,
+  UserRole,
+  Permission,
   SESSION_COOKIE,
   sessionCookieHeader,
   timingSafeEqualString,
@@ -196,6 +206,100 @@ const REQUESTED_PORT = Number(process.env.CONTROL_PLANE_PORT || 8787);
 let LISTEN_PORT = REQUESTED_PORT > 0 ? REQUESTED_PORT : 0;
 const OWNER_TOKEN = loadOrCreateOwnerToken(ROOT);
 const log = createLogger("controlplane");
+
+/** ---------- Rate Limiting (حماية من هجمات حجب الخدمة) ---------- */
+const RATE_LIMIT_WINDOW_MS = 60_000; // نافذة دقيقة واحدة
+const RATE_LIMIT_MAX_REQUESTS = 120; // أقصى 120 طلب لكل IP في الدقيقة
+const rateLimitMap = new Map<string, { count: number; resetAt: number }>();
+
+/** رؤوس أمان.Content Security Policy لمنع XSS */
+const CSP_HEADER =
+  "default-src 'self'; " +
+  "script-src 'self' 'unsafe-inline'; " +
+  "style-src 'self' 'unsafe-inline'; " +
+  "img-src 'self' data:; " +
+  "connect-src 'self'; " +
+  "frame-ancestors 'none'; " +
+  "base-uri 'self'; " +
+  "form-action 'self'";
+
+/** ---------- WAF (جدار حماية للتطبيقات الويب) ---------- */
+const SQL_INJECTION_PATTERNS = [
+  /(\b(SELECT|INSERT|UPDATE|DELETE|DROP|UNION|ALTER|CREATE|EXEC|EXECUTE)\b)/i,
+  /(\b(OR|AND)\b\s+\d+\s*=\s*\d+)/i,
+  /(--|;|${String.fromCharCode(47)}${String.fromCharCode(42)}|${String.fromCharCode(42)}${String.fromCharCode(47)})/i,
+  /(\b(xp_cmdshell|sp_executesql)\b)/i,
+];
+
+const XSS_PATTERNS = [
+  /<script\b[^<]*(?:(?!<\/script>)<[^<]*)*<\/script>/gi,
+  /javascript:/gi,
+  /on\w+\s*=/gi,
+  /<iframe\b[^<]*>/gi,
+  /<object\b[^<]*>/gi,
+];
+
+function wafScan(value: string): { blocked: boolean; reason?: string } {
+  for (const pattern of SQL_INJECTION_PATTERNS) {
+    if (pattern.test(value)) {
+      return { blocked: true, reason: "SQL injection pattern detected" };
+    }
+  }
+  for (const pattern of XSS_PATTERNS) {
+    if (pattern.test(value)) {
+      return { blocked: true, reason: "XSS pattern detected" };
+    }
+  }
+  return { blocked: false };
+}
+
+function wafScanRequest(req: http.IncomingMessage): { blocked: boolean; reason?: string } {
+  // فحص المسار
+  const pathResult = wafScan(req.url || "");
+  if (pathResult.blocked) return pathResult;
+
+  // فحص رؤوس الطلب المشبوهة
+  const ua = req.headers["user-agent"] as string | undefined;
+  if (ua && wafScan(ua).blocked) {
+    return { blocked: true, reason: "Suspicious User-Agent" };
+  }
+
+  return { blocked: false };
+}
+
+function rateLimitKey(req: http.IncomingMessage): string {
+  // استخدم الـ IP العميل إن وُجد، وإلا افتراضيًا إلى "local"
+  const forwarded = req.headers["x-forwarded-for"] as string | undefined;
+  const ip = forwarded ? forwarded.split(",")[0].trim() : "local";
+  return ip;
+}
+
+function checkRateLimit(req: http.IncomingMessage): { allowed: boolean; remaining: number; resetAt: number } {
+  const now = Date.now();
+  const key = rateLimitKey(req);
+  let entry = rateLimitMap.get(key);
+
+  if (!entry || now > entry.resetAt) {
+    entry = { count: 0, resetAt: now + RATE_LIMIT_WINDOW_MS };
+    rateLimitMap.set(key, entry);
+  }
+
+  entry.count++;
+  const remaining = Math.max(0, RATE_LIMIT_MAX_REQUESTS - entry.count);
+
+  // تنظيف المدخلات المنتهية صلاحيتها بشكل دوري
+  if (rateLimitMap.size > 1000) {
+    for (const [k, v] of rateLimitMap.entries()) {
+      if (now > v.resetAt) rateLimitMap.delete(k);
+    }
+  }
+
+  return {
+    allowed: entry.count <= RATE_LIMIT_MAX_REQUESTS,
+    remaining,
+    resetAt: entry.resetAt,
+  };
+}
 
 type RunMode = "agency" | "implement" | "smoke" | "legacy";
 type UiPhase = "idle" | "running" | "done";
@@ -263,7 +367,15 @@ function serveStatic(reqPath: string, res: http.ServerResponse) {
     res.writeHead(404).end("Not found");
     return;
   }
-  res.writeHead(200, { "Content-Type": contentType(abs) });
+  const isHtml = rel.endsWith(".html");
+  const headers: Record<string, string> = { "Content-Type": contentType(abs) };
+  if (isHtml) {
+    headers["Content-Security-Policy"] = CSP_HEADER;
+    headers["X-Content-Type-Options"] = "nosniff";
+    headers["X-Frame-Options"] = "DENY";
+    headers["Referrer-Policy"] = "strict-origin-when-cross-origin";
+  }
+  res.writeHead(200, headers);
   fs.createReadStream(abs).pipe(res);
 }
 
@@ -1429,6 +1541,32 @@ const server = http.createServer(async (req, res) => {
     const p = url.pathname;
     const method = req.method || "GET";
 
+    // —— Rate limiting: 적용 لجميع الطلبات ——
+    const rl = checkRateLimit(req);
+    res.setHeader("X-RateLimit-Limit", String(RATE_LIMIT_MAX_REQUESTS));
+    res.setHeader("X-RateLimit-Remaining", String(rl.remaining));
+    res.setHeader("X-RateLimit-Reset", String(Math.floor(rl.resetAt / 1000)));
+    if (!rl.allowed) {
+      res.writeHead(429, {
+        "Content-Type": "application/json; charset=utf-8",
+        "Cache-Control": "no-store",
+        "Retry-After": String(Math.ceil((rl.resetAt - Date.now()) / 1000)),
+      });
+      res.end(JSON.stringify({ ok: false, error: "Too many requests —-rate limited", code: "RATE_LIMITED" }));
+      return;
+    }
+
+    // —— WAF: فحص الطلبات الواردة للكشف عن أنماط SQL Injection و XSS (مسار ورؤوس فقط) ——
+    const wafResult = wafScanRequest(req);
+    if (wafResult.blocked) {
+      res.writeHead(403, {
+        "Content-Type": "application/json; charset=utf-8",
+        "Cache-Control": "no-store",
+      });
+      res.end(JSON.stringify({ ok: false, error: wafResult.reason, code: "WAF_BLOCKED" }));
+      return;
+    }
+
     // —— Auth: login / status / logout (unauthenticated) ——
     if (method === "POST" && p === "/api/login") {
       if (!isAllowedHost(req.headers.host as string | undefined, LISTEN_PORT)) {
@@ -1473,6 +1611,136 @@ const server = http.createServer(async (req, res) => {
         via: auth.ok ? auth.via : null,
         csrfToken: auth.ok && auth.via === "session" ? auth.session?.csrfToken : null,
       });
+      return;
+    }
+    // —— MFA: initiate, verify, status ——
+    if (method === "POST" && p === "/api/mfa/initiate") {
+      const auth = authenticateRequest(req, OWNER_TOKEN, {
+        port: LISTEN_PORT,
+        requireCsrf: true,
+        allowMissingOriginWithBearer: true,
+      });
+      if (!auth.ok || !auth.session) {
+        const fail = auth as { status?: number; error?: string };
+        sendJson(res, fail.status || 401, { ok: false, error: fail.error || "Unauthorized" });
+        return;
+      }
+      const entry = initiateMfa(auth.session.id);
+      const totpCode = generateTOTP(entry.secret); // للعرض في واجهة التطوير فقط
+      sendJson(res, 200, {
+        ok: true,
+        mfaRequired: true,
+        expiresAt: new Date(entry.expiresAt).toISOString(),
+        totpCode: process.env.SAM_DEV_MODE === "1" ? totpCode : undefined, // رمز TOTP للعرض في وضع التطوير فقط
+      });
+      return;
+    }
+    if (method === "POST" && p === "/api/mfa/verify") {
+      const auth = authenticateRequest(req, OWNER_TOKEN, {
+        port: LISTEN_PORT,
+        requireCsrf: true,
+        allowMissingOriginWithBearer: true,
+      });
+      if (!auth.ok || !auth.session) {
+        const fail = auth as { status?: number; error?: string };
+        sendJson(res, fail.status || 401, { ok: false, error: fail.error || "Unauthorized" });
+        return;
+      }
+      const body = JSON.parse((await readBody(req)) || "{}") as { code?: string };
+      const code = String(body.code || "").trim();
+      if (!code) {
+        sendJson(res, 400, { ok: false, error: "MFA code required" });
+        return;
+      }
+      const verified = completeMfa(auth.session.id, code);
+      if (!verified) {
+        sendJson(res, 401, { ok: false, error: "Invalid or expired MFA code" });
+        return;
+      }
+      sendJson(res, 200, { ok: true, mfaVerified: true });
+      return;
+    }
+    if (method === "GET" && p === "/api/mfa/status") {
+      const auth = authenticateRequest(req, OWNER_TOKEN, {
+        port: LISTEN_PORT,
+        requireCsrf: false,
+        allowMissingOriginWithBearer: true,
+      });
+      const mfaVerified = auth.ok && auth.session ? isMfaVerified(auth.session.id) : false;
+      sendJson(res, 200, {
+        ok: true,
+        authenticated: auth.ok,
+        mfaVerified,
+        mfaRequiredOps: Array.from(requiresMfa("implement") ? ["implement", "send_email", "delete_data", "change_config"] : []),
+      });
+      return;
+    }
+    // —— RBAC: roles, me, set-role ——
+    if (method === "GET" && p === "/api/rbac/roles") {
+      const auth = authenticateRequest(req, OWNER_TOKEN, {
+        port: LISTEN_PORT,
+        requireCsrf: false,
+        allowMissingOriginWithBearer: true,
+      });
+      if (!auth.ok) {
+        sendJson(res, auth.status as number, { ok: false, error: auth.error });
+        return;
+      }
+      sendJson(res, 200, {
+        ok: true,
+        roles: Object.entries(ROLE_PERMISSIONS).map(([role, perms]) => ({ role, permissions: perms })),
+      });
+      return;
+    }
+    if (method === "GET" && p === "/api/rbac/me") {
+      const auth = authenticateRequest(req, OWNER_TOKEN, {
+        port: LISTEN_PORT,
+        requireCsrf: false,
+        allowMissingOriginWithBearer: true,
+      });
+      if (!auth.ok || !auth.session) {
+        const fail = auth as { status?: number; error?: string };
+        sendJson(res, fail.status as number, { ok: false, error: fail.error });
+        return;
+      }
+      const role = auth.session.role || "client";
+      const perms = ROLE_PERMISSIONS[role];
+      sendJson(res, 200, {
+        ok: true,
+        sessionId: auth.session.id,
+        role,
+        permissions: perms,
+        mfaVerified: auth.session.mfaVerified || false,
+      });
+      return;
+    }
+    if (method === "POST" && p === "/api/rbac/role") {
+      const auth = authenticateRequest(req, OWNER_TOKEN, {
+        port: LISTEN_PORT,
+        requireCsrf: true,
+        allowMissingOriginWithBearer: true,
+      });
+      if (!auth.ok || !auth.session) {
+        const fail = auth as { status?: number; error?: string };
+        sendJson(res, fail.status as number, { ok: false, error: fail.error });
+        return;
+      }
+      // فقط owner أو admin يمكنه تعيين أدوار
+      if (!sessionHasPermission(auth.session.id, "session:manage")) {
+        sendJson(res, 403, { ok: false, error: "Forbidden: insufficient RBAC permission" });
+        return;
+      }
+      const body = JSON.parse((await readBody(req)) || "{}") as { sessionId?: string; role?: UserRole };
+      if (!body.sessionId || !body.role) {
+        sendJson(res, 400, { ok: false, error: "sessionId and role required" });
+        return;
+      }
+      const ok = setSessionRole(body.sessionId, body.role);
+      if (!ok) {
+        sendJson(res, 404, { ok: false, error: "Session not found" });
+        return;
+      }
+      sendJson(res, 200, { ok: true, sessionId: body.sessionId, role: body.role });
       return;
     }
     if (method === "POST" && p === "/api/logout") {
