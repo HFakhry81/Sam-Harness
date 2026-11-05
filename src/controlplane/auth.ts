@@ -23,7 +23,88 @@ export type AuthSession = {
   createdAt: number;
   expiresAt: number;
   mfaVerified?: boolean; // هل تم التحقق من MFA لهذه الجلسة
+  role?: UserRole; // دور المستخدم في نظام RBAC
 };
+
+/** ---------- نظام RBAC (التحكم في الوصول بناءً على الدور) ---------- */
+export type UserRole = "owner" | "admin" | "agent" | "viewer" | "client";
+
+export type Permission =
+  | "agent:execute"     // تنفيذ وكيل/مهمة
+  | "agent:read"        // قراءة حالة الوكلاء
+  | "agent:write"       // تعديل إعدادات الوكلاء
+  | "agent:delete"      // حذف وكيل
+  | "code:implement"    // تنفيذ كود (Level-3)
+  | "code:read"         // قراءة الكود
+  | "email:send"        // إرسال إيميل
+  | "data:delete"       // حذف بيانات
+  | "data:read"         // قراءة بيانات
+  | "config:read"       // قراءة الإعدادات
+  | "config:write"      // تعديل الإعدادات
+  | "session:manage"    // إدارة الجلسات
+  | "mfa:manage";       // إدارة MFA
+
+/** خريطة الأدوار إلى صلاحياتها */
+export const ROLE_PERMISSIONS: Record<UserRole, Permission[]> = {
+  owner: [
+    "agent:execute", "agent:read", "agent:write", "agent:delete",
+    "code:implement", "code:read",
+    "email:send",
+    "data:delete", "data:read",
+    "config:read", "config:write",
+    "session:manage", "mfa:manage",
+  ],
+  admin: [
+    "agent:execute", "agent:read", "agent:write",
+    "code:implement", "code:read",
+    "email:send",
+    "data:read",
+    "config:read", "config:write",
+    "session:manage",
+  ],
+  agent: [
+    "agent:execute", "agent:read",
+    "code:implement", "code:read",
+    "email:send",
+    "data:read",
+    "config:read",
+  ],
+  viewer: [
+    "agent:read",
+    "code:read",
+    "data:read",
+    "config:read",
+  ],
+  client: [
+    "agent:read",
+    "code:read",
+    "data:read",
+  ],
+};
+
+/** التحقق من أن الدور لديه إذن معين. */
+export function hasPermission(role: UserRole | undefined, permission: Permission): boolean {
+  if (!role) return false;
+  const perms = ROLE_PERMISSIONS[role];
+  return Boolean(perms && perms.includes(permission));
+}
+
+/** التحقق من أن الجلسة لديها إذن معين. */
+export function sessionHasPermission(sessionId: string | undefined | null, permission: Permission): boolean {
+  if (!sessionId) return false;
+  const session = sessions.get(sessionId);
+  if (!session) return false;
+  return hasPermission(session.role, permission);
+}
+
+/** تعيين دور لجلسة ما. */
+export function setSessionRole(sessionId: string, role: UserRole): boolean {
+  const session = sessions.get(sessionId);
+  if (!session) return false;
+  session.role = role;
+  sessions.set(sessionId, session);
+  return true;
+}
 
 const sessions = new Map<string, AuthSession>();
 

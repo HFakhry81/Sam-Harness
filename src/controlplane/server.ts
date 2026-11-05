@@ -187,6 +187,11 @@ import {
   parseCookies,
   requiresMfa,
   generateTOTP,
+  ROLE_PERMISSIONS,
+  sessionHasPermission,
+  setSessionRole,
+  UserRole,
+  Permission,
   SESSION_COOKIE,
   sessionCookieHeader,
   timingSafeEqualString,
@@ -1613,6 +1618,74 @@ const server = http.createServer(async (req, res) => {
         mfaVerified,
         mfaRequiredOps: Array.from(requiresMfa("implement") ? ["implement", "send_email", "delete_data", "change_config"] : []),
       });
+      return;
+    }
+    // —— RBAC: roles, me, set-role ——
+    if (method === "GET" && p === "/api/rbac/roles") {
+      const auth = authenticateRequest(req, OWNER_TOKEN, {
+        port: LISTEN_PORT,
+        requireCsrf: false,
+        allowMissingOriginWithBearer: true,
+      });
+      if (!auth.ok) {
+        sendJson(res, auth.status as number, { ok: false, error: auth.error });
+        return;
+      }
+      sendJson(res, 200, {
+        ok: true,
+        roles: Object.entries(ROLE_PERMISSIONS).map(([role, perms]) => ({ role, permissions: perms })),
+      });
+      return;
+    }
+    if (method === "GET" && p === "/api/rbac/me") {
+      const auth = authenticateRequest(req, OWNER_TOKEN, {
+        port: LISTEN_PORT,
+        requireCsrf: false,
+        allowMissingOriginWithBearer: true,
+      });
+      if (!auth.ok || !auth.session) {
+        const fail = auth as { status?: number; error?: string };
+        sendJson(res, fail.status as number, { ok: false, error: fail.error });
+        return;
+      }
+      const role = auth.session.role || "client";
+      const perms = ROLE_PERMISSIONS[role];
+      sendJson(res, 200, {
+        ok: true,
+        sessionId: auth.session.id,
+        role,
+        permissions: perms,
+        mfaVerified: auth.session.mfaVerified || false,
+      });
+      return;
+    }
+    if (method === "POST" && p === "/api/rbac/role") {
+      const auth = authenticateRequest(req, OWNER_TOKEN, {
+        port: LISTEN_PORT,
+        requireCsrf: true,
+        allowMissingOriginWithBearer: true,
+      });
+      if (!auth.ok || !auth.session) {
+        const fail = auth as { status?: number; error?: string };
+        sendJson(res, fail.status as number, { ok: false, error: fail.error });
+        return;
+      }
+      // فقط owner أو admin يمكنه تعيين أدوار
+      if (!sessionHasPermission(auth.session.id, "session:manage")) {
+        sendJson(res, 403, { ok: false, error: "Forbidden: insufficient RBAC permission" });
+        return;
+      }
+      const body = JSON.parse((await readBody(req)) || "{}") as { sessionId?: string; role?: UserRole };
+      if (!body.sessionId || !body.role) {
+        sendJson(res, 400, { ok: false, error: "sessionId and role required" });
+        return;
+      }
+      const ok = setSessionRole(body.sessionId, body.role);
+      if (!ok) {
+        sendJson(res, 404, { ok: false, error: "Session not found" });
+        return;
+      }
+      sendJson(res, 200, { ok: true, sessionId: body.sessionId, role: body.role });
       return;
     }
     if (method === "POST" && p === "/api/logout") {
