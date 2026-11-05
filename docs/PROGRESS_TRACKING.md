@@ -50,8 +50,8 @@ SAM_OUTPUT_HOME/progress/progress-state.json
     "P15": { "status": "not_started", "progress": 0, "notes": "المحرر المرئي V2" }
   },
   "tasks": {
-    "T1": { "id": "T1", "phase": "P10", "title": "تشفير توكن لوحة التحكم", "status": "not_started", "priority": "high" },
-    "T2": { "id": "T2", "phase": "P10", "title": "إصلاح sandbox.ts command injection", "status": "not_started", "priority": "high" },
+    "T1": { "id": "T1", "phase": "P10", "title": "تشفير توكن لوحة التحكم", "status": "in_progress", "progress": 20, "notes": "جاري إضافة تشفير AES-256 لـ .controlplane-token", "priority": "high" },
+    "T2": { "id": "T2", "phase": "P10", "title": "إصلاح sandbox.ts command injection", "status": "done", "progress": 100, "notes": "تم إضافة validateCode و validateNodeArgs وقائمة الأوامر المسموح بها ALLOWED_NODE_COMMANDS", "priority": "high" },
     "T3": { "id": "T3", "phase": "P11", "title": "نظام التعاون多人", "status": "not_started", "priority": "high" }
   }
 }
