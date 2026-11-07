@@ -18,6 +18,19 @@ dist/
 .tmp-*.json
 *.bak
 
+# --- TLS / secrets: never commit private keys or local cert material ---
+# Generate locally: pnpm run certs:generate
+/certs/*.key
+/certs/*.crt
+/certs/*.pem
+/certs/*.p12
+/certs/*.pfx
+*.pem
+**/*.private.key
+**/id_rsa
+**/id_ecdsa
+**/id_ed25519
+
 # --- Safety net: run artifacts must never be committed ---
 # Packs / reports (legacy locations)
 /sam_harness_reports/
