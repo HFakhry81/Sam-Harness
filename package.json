@@ -10,6 +10,8 @@
     "git:open-pr": "bash scripts/git/open-pr.sh",
     "git:check-pr": "bash scripts/git/check-pr-flow.sh",
     "ensure-task": "tsx scripts/ensure-task.ts",
+    "secrets:check": "tsx scripts/check-no-private-keys.ts",
+    "certs:generate": "tsx scripts/generate-dev-certs.ts",
     "typecheck": "tsx scripts/ensure-task.ts && tsc --noEmit",
     "test": "node --max-old-space-size=4096 ./node_modules/vitest/vitest.mjs run",
     "test:watch": "node --max-old-space-size=4096 ./node_modules/vitest/vitest.mjs",

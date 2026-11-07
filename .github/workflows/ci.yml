@@ -36,6 +36,9 @@ jobs:
       - name: Ensure task.ts seed
         run: pnpm run ensure-task
 
+      - name: Reject tracked PEM private keys
+        run: pnpm run secrets:check
+
       - name: Typecheck
         run: pnpm run typecheck
 

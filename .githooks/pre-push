@@ -65,5 +65,30 @@ if [[ "$failed" -ne 0 ]]; then
   exit 1
 fi
 
+# Block pushes of high-risk key paths / substantial PEM private keys.
+# Prefer the shared TypeScript scanner (same rules as CI). Paths only — never print key bodies.
+if [[ -x "$ROOT/node_modules/.bin/tsx" || -f "$ROOT/node_modules/tsx/dist/cli.mjs" ]]; then
+  if ! (cd "$ROOT" && pnpm run secrets:check); then
+    failed=1
+  fi
+else
+  # Fallback without node_modules: high-risk path names only.
+  while IFS= read -r -d '' tracked; do
+    [[ -z "$tracked" ]] && continue
+    case "$tracked" in
+      certs/README.md) continue ;;
+      certs/*|*.key|*.p12|*.pfx|id_rsa|id_ecdsa|id_ed25519|*/id_rsa|*/id_ecdsa|*/id_ed25519|*.private.key)
+        echo "[secrets] FAIL: Tracked high-risk key/cert path: $tracked" >&2
+        echo "[secrets] Keep local TLS under certs/ gitignored; generate via: pnpm run certs:generate" >&2
+        failed=1
+        ;;
+    esac
+  done < <(git -C "$ROOT" ls-files -z)
+fi
+
+if [[ "$failed" -ne 0 ]]; then
+  exit 1
+fi
+
 echo "[branch-flow] pre-push OK"
 exit 0
