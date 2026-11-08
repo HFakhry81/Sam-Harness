@@ -2,7 +2,7 @@
 
 Sam-Harness uses a three-lane flow. Both **`staging`** and **`main`** are protected; local hooks and the **`branch-flow`** CI check reinforce the same rules.
 
-**Full guide:** [`CONTRIBUTING.md`](../CONTRIBUTING.md) · **Agents:** [`AGENTS.md`](../AGENTS.md)
+**Full guide:** [`CONTRIBUTING.md`](../CONTRIBUTING.md) · **Agents:** [`AGENTS.md`](../AGENTS.md) · **Arabic (practical):** [`GIT-WORKFLOW-AR.md`](./GIT-WORKFLOW-AR.md)
 
 ```mermaid
 flowchart LR
