@@ -254,17 +254,7 @@ function wafScan(value: string): { blocked: boolean; reason?: string } {
 }
 
 function wafScanRequest(req: http.IncomingMessage): { blocked: boolean; reason?: string } {
-  // فحص المسار
-  const pathResult = wafScan(req.url || "");
-  if (pathResult.blocked) return pathResult;
-
-  // فحص رؤوس الطلب المشبوهة
-  const ua = req.headers["user-agent"] as string | undefined;
-  if (ua && wafScan(ua).blocked) {
-    return { blocked: true, reason: "Suspicious User-Agent" };
-  }
-
-  return { blocked: false };
+  return wafScan(req.url || "");
 }
 
 function rateLimitKey(req: http.IncomingMessage): string {
@@ -2984,5 +2974,4 @@ async function boot() {
 }
 
 void boot();
-
 

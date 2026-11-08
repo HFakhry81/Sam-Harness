@@ -440,15 +440,17 @@
         g.appendChild(rect);
 
         const title = document.createElementNS("http://www.w3.org/2000/svg", "text");
-        title.setAttribute("x", "12");
+        title.setAttribute("x", String(NODE_W / 2));
         title.setAttribute("y", "26");
+        title.setAttribute("text-anchor", "middle");
         title.setAttribute("class", "wf-node-title");
-        title.textContent = truncate(n.label || n.id, 18);
+        title.textContent = truncate(n.label || n.id, 14);
         g.appendChild(title);
 
         const sub = document.createElementNS("http://www.w3.org/2000/svg", "text");
-        sub.setAttribute("x", "12");
+        sub.setAttribute("x", String(NODE_W / 2));
         sub.setAttribute("y", "46");
+        sub.setAttribute("text-anchor", "middle");
         sub.setAttribute("class", "wf-node-sub");
         const roleKey = n.roleId || (n.id.startsWith("specialist:") ? n.id.slice(11) : n.id);
         const badge = routeBadge(routes[roleKey]);
