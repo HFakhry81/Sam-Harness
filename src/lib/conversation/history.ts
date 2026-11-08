@@ -1,9 +1,11 @@
 /**
- * Per-session conversation history under SAM_OUTPUT_HOME/conversations/.
+ * Tenant-scoped chat history and learned facts stored in the persistence DB.
  */
 import * as fs from "fs";
 import * as path from "path";
-import { ensureOutputHome, getOutputHome } from "../outputHome.js";
+import { getOutputHome, getOutputLayout } from "../outputHome.js";
+import { loadDoc, saveDoc } from "../db/index.js";
+import { getActiveTenantId } from "../tenant/context.js";
 import type { IntentRoute } from "../intentRouter/types.js";
 
 export type ConversationRole = "user" | "assistant" | "system";
@@ -27,13 +29,60 @@ export type ConversationSession = {
   messages: ConversationMessage[];
 };
 
-function conversationsDir(home: string = getOutputHome()): string {
-  return ensureOutputHome(home).conversations;
+export type ChatInsight = {
+  id: string;
+  fact: string;
+  createdAt: string;
+  sourceConversationId: string;
+};
+
+type ConversationStore = {
+  conversations: ConversationSession[];
+  insights: ChatInsight[];
+};
+
+const EMPTY_STORE: ConversationStore = { conversations: [], insights: [] };
+const STORE_KIND = "chat-conversations";
+const MAX_CONVERSATIONS = 100;
+const MAX_INSIGHTS = 100;
+const MAX_MESSAGES_PER_CONVERSATION = 400;
+
+function isConversationSession(value: unknown): value is ConversationSession {
+  const session = value as ConversationSession | null;
+  return Boolean(session?.id && Array.isArray(session.messages));
 }
 
-function sessionPath(sessionId: string, home?: string): string {
+function legacyConversationPath(sessionId: string, home?: string): string {
   const safe = String(sessionId || "default").replace(/[^a-zA-Z0-9_-]/g, "_");
-  return path.join(conversationsDir(home), `${safe}.json`);
+  return path.join(getOutputLayout(home || getOutputHome()).conversations, `${safe}.json`);
+}
+
+function loadLegacyConversations(home?: string): ConversationSession[] {
+  const dir = getOutputLayout(home || getOutputHome()).conversations;
+  if (!fs.existsSync(dir)) return [];
+  const sessions: ConversationSession[] = [];
+  for (const file of fs.readdirSync(dir).filter((name) => name.endsWith(".json"))) {
+    try {
+      const value = JSON.parse(fs.readFileSync(path.join(dir, file), "utf-8"));
+      if (isConversationSession(value)) sessions.push(value);
+    } catch {
+      // Ignore malformed legacy chat exports during one-time import.
+    }
+  }
+  return sessions;
+}
+
+function loadStore(home?: string): ConversationStore {
+  const tenantId = getActiveTenantId();
+  const stored = loadDoc<ConversationStore>(STORE_KIND, tenantId);
+  if (stored && Array.isArray(stored.conversations) && Array.isArray(stored.insights)) {
+    return stored;
+  }
+  const legacy = loadLegacyConversations(home);
+  if (!legacy.length) return { ...EMPTY_STORE };
+  const migrated: ConversationStore = { conversations: legacy, insights: [] };
+  saveDoc(STORE_KIND, migrated, tenantId);
+  return migrated;
 }
 
 export function newConversationId(): string {
@@ -44,14 +93,22 @@ export function loadConversation(
   sessionId: string,
   home?: string
 ): ConversationSession {
-  const p = sessionPath(sessionId, home);
+  const store = loadStore(home);
+  const existing = store.conversations.find((session) => session.id === sessionId);
+  if (existing) return existing;
+
+  const legacyPath = legacyConversationPath(sessionId, home);
   try {
-    if (fs.existsSync(p)) {
-      const j = JSON.parse(fs.readFileSync(p, "utf-8")) as ConversationSession;
-      if (j?.id && Array.isArray(j.messages)) return j;
+    if (fs.existsSync(legacyPath)) {
+      const legacy = JSON.parse(fs.readFileSync(legacyPath, "utf-8"));
+      if (isConversationSession(legacy)) {
+        store.conversations.push(legacy);
+        saveDoc(STORE_KIND, store, getActiveTenantId());
+        return legacy;
+      }
     }
   } catch {
-    /* fall through */
+    // Keep serving an empty thread if an old on-disk conversation is corrupt.
   }
   const now = new Date().toISOString();
   return { id: sessionId, createdAt: now, updatedAt: now, messages: [] };
@@ -61,33 +118,15 @@ export function saveConversation(
   session: ConversationSession,
   home?: string
 ): string {
-  const dir = conversationsDir(home);
-  fs.mkdirSync(dir, { recursive: true });
   session.updatedAt = new Date().toISOString();
-  const p = sessionPath(session.id, home);
-  fs.writeFileSync(p, JSON.stringify(session, null, 2), "utf-8");
-  // Lightweight markdown mirror for humans
-  try {
-    const mdPath = p.replace(/\.json$/i, ".md");
-    const lines = [
-      `# Conversation ${session.id}`,
-      "",
-      `- Updated: ${session.updatedAt}`,
-      `- Messages: ${session.messages.length}`,
-      "",
-    ];
-    for (const m of session.messages) {
-      const route = m.route ? ` · ${m.route}` : "";
-      lines.push(`## ${m.role}${route}`);
-      lines.push("");
-      lines.push(m.content);
-      lines.push("");
-    }
-    fs.writeFileSync(mdPath, lines.join("\n"), "utf-8");
-  } catch {
-    /* ignore */
-  }
-  return p;
+  const store = loadStore(home);
+  const index = store.conversations.findIndex((item) => item.id === session.id);
+  if (index >= 0) store.conversations[index] = session;
+  else store.conversations.push(session);
+  store.conversations.sort((a, b) => b.updatedAt.localeCompare(a.updatedAt));
+  store.conversations.length = Math.min(store.conversations.length, MAX_CONVERSATIONS);
+  saveDoc(STORE_KIND, store, getActiveTenantId());
+  return session.id;
 }
 
 export function appendMessage(
@@ -106,9 +145,8 @@ export function appendMessage(
     notePath: message.notePath,
     noArtifacts: message.noArtifacts,
   });
-  // Cap history to keep files small
-  if (session.messages.length > 400) {
-    session.messages = session.messages.slice(-400);
+  if (session.messages.length > MAX_MESSAGES_PER_CONVERSATION) {
+    session.messages = session.messages.slice(-MAX_MESSAGES_PER_CONVERSATION);
   }
   saveConversation(session, home);
   return session;
@@ -130,10 +168,69 @@ export function resetConversation(
 }
 
 export function listConversations(home?: string): string[] {
-  const dir = conversationsDir(home);
-  if (!fs.existsSync(dir)) return [];
-  return fs
-    .readdirSync(dir)
-    .filter((f) => f.endsWith(".json"))
-    .map((f) => f.replace(/\.json$/i, ""));
+  return loadStore(home).conversations.map((session) => session.id);
+}
+
+export function buildChatMemoryContext(
+  currentConversationId: string,
+  home?: string,
+  maxChars = 3_000
+): string {
+  const store = loadStore(home);
+  const sections: string[] = [];
+  const insights = store.insights.slice(-MAX_INSIGHTS);
+  if (insights.length) {
+    sections.push(
+      `Remembered user details:\n${insights.map((item) => `- ${item.fact}`).join("\n")}`
+    );
+  }
+
+  const recent = store.conversations
+    .filter((session) => session.id !== currentConversationId && session.messages.length > 0)
+    .sort((a, b) => b.updatedAt.localeCompare(a.updatedAt))
+    .slice(0, 3)
+    .reverse();
+  for (const session of recent) {
+    const turns = session.messages
+      .filter((message) => message.role !== "system")
+      .slice(-4)
+      .map((message) => `${message.role === "user" ? "User" : "Assistant"}: ${message.content}`);
+    if (turns.length) sections.push(`Earlier conversation:\n${turns.join("\n")}`);
+  }
+
+  const context = sections.join("\n\n");
+  return context.length > maxChars ? context.slice(-maxChars) : context;
+}
+
+export function parseRememberRequest(prompt: string): string | null {
+  const match = String(prompt || "").trim().match(
+    /^(?:تذكّر|تذكر|احفظ(?:\s+في\s+ذاكرتك)?|remember(?:\s+that)?|save\s+to\s+memory)\s*[:：]?\s+(.+)$/iu
+  );
+  const fact = match?.[1]?.trim();
+  return fact ? fact.slice(0, 500) : null;
+}
+
+export function rememberChatFact(
+  fact: string,
+  sourceConversationId: string,
+  home?: string
+): ChatInsight {
+  const cleaned = String(fact || "").trim().slice(0, 500);
+  if (!cleaned) throw new Error("Chat memory fact cannot be empty.");
+  const store = loadStore(home);
+  const key = cleaned.toLocaleLowerCase();
+  const existing = store.insights.find(
+    (item) => item.fact.toLocaleLowerCase() === key
+  );
+  if (existing) return existing;
+  const insight: ChatInsight = {
+    id: `insight-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`,
+    fact: cleaned,
+    createdAt: new Date().toISOString(),
+    sourceConversationId,
+  };
+  store.insights.push(insight);
+  store.insights = store.insights.slice(-MAX_INSIGHTS);
+  saveDoc(STORE_KIND, store, getActiveTenantId());
+  return insight;
 }

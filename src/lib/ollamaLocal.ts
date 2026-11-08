@@ -24,8 +24,8 @@ function envInt(name: string, fallback: number): number {
   return Number.isFinite(raw) && raw > 0 ? Math.floor(raw) : fallback;
 }
 
-function keepAliveValue(): string | number {
-  const raw = String(process.env.SAM_LOCAL_KEEP_ALIVE ?? "-1").trim();
+function keepAliveValue(name = "SAM_LOCAL_KEEP_ALIVE", fallback = "-1"): string | number {
+  const raw = String(process.env[name] ?? fallback).trim();
   if (!raw) return -1;
   const n = Number(raw);
   return Number.isFinite(n) ? n : raw;
@@ -45,5 +45,16 @@ export function localOllamaOptions(): LocalOllamaOptions {
     // total so a slow local call cannot run for 5-10 minutes per role.
     numPredict: envInt("SAM_LOCAL_NUM_PREDICT", 768),
     keepAlive: keepAliveValue(),
+  };
+}
+
+/** Lower-memory defaults for interactive chat; long-form agent roles keep full tuning. */
+export function quickOllamaOptions(): LocalOllamaOptions {
+  const shared = localOllamaOptions();
+  return {
+    ...shared,
+    numCtx: envInt("SAM_QUICK_NUM_CTX", Math.min(shared.numCtx, 4096)),
+    numBatch: envInt("SAM_QUICK_NUM_BATCH", Math.min(shared.numBatch, 256)),
+    keepAlive: keepAliveValue("SAM_QUICK_KEEP_ALIVE", "5m"),
   };
 }

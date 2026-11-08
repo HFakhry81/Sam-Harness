@@ -19,6 +19,7 @@ import type {
 } from "./types.js";
 import type { IntentRoute } from "../intentRouter/types.js";
 import type { ChatTurn } from "../conversation/context.js";
+import type { ChatModelPreference } from "./quickModel.js";
 
 export type QuickPathEvent = {
   type: string;
@@ -48,6 +49,8 @@ export type RunQuickPathInput = {
   writeResearchNote?: boolean;
   /** Bounded prior turns (oldest → newest) for chat/research continuity. */
   history?: ReadonlyArray<ChatTurn>;
+  memoryContext?: string;
+  modelPreference?: ChatModelPreference;
 };
 
 /** Honest empty-search message; never invent facts. */
@@ -81,6 +84,8 @@ export async function tryRunQuickPath(
     networkApproved: input.networkApproved,
     writeResearchNote: input.writeResearchNote,
     history: input.history,
+    memoryContext: input.memoryContext,
+    modelPreference: input.modelPreference,
     onEvent: input.onEvent,
     classify: async (prompt, opts) => {
       const c = await classify(prompt, {
@@ -147,6 +152,7 @@ export async function tryRunQuickPath(
     source: out.decision.source,
     route: out.route,
     clarifyQuestion: out.decision.clarifyQuestion,
+    clarifyOptions: out.decision.clarifyOptions,
   };
 
   const result: QuickPathResult = {
@@ -163,6 +169,7 @@ export async function tryRunQuickPath(
     cloud: out.cloud,
     searchFailureReason: out.searchFailureReason,
     skippedModel: out.skippedModel,
+    toolsUsed: out.toolsUsed,
     noArtifacts: out.noArtifacts,
     notePath: out.notePath,
     route: out.route,

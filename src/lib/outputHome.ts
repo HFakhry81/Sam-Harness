@@ -78,7 +78,7 @@ export function ensureOutputHome(home: string = getOutputHome()): OutputLayout {
         "tasks/          — runtime task.ts / task.md / task.spec.json",
         "state/          — SQLite DB and session state",
         "memory/         — self-learning lessons + skills (+ agent-memory.md)",
-        "conversations/  — chat session history",
+        "conversations/  — legacy chat imports",
         "backups/        — DB and config backups (never inside the repo)",
         "logs/           — run / control-plane logs",
         "documents/      — generated documents / help exports",

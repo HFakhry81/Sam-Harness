@@ -128,10 +128,19 @@ describe("POST /api/chat chat route (hermetic)", () => {
         : [];
       expect(after).toEqual(before);
 
-      const convDir = path.join(cpIso!.outputHome, "conversations");
-      expect(fs.existsSync(convDir)).toBe(true);
-      const files = fs.readdirSync(convDir).filter((f) => f.endsWith(".json"));
-      expect(files.length).toBeGreaterThan(0);
+      const conversationDir = path.join(cpIso!.outputHome, "conversations");
+      expect(
+        fs.readdirSync(conversationDir).filter((file) => /\.(?:json|md)$/i.test(file))
+      ).toEqual([]);
+      expect(fs.existsSync(path.join(cpIso!.outputHome, "documents", "research-notes")))
+        .toBe(false);
+      const conversationRes = await fetch(
+        `http://127.0.0.1:${PORT}/api/conversation?id=${encodeURIComponent(body.conversationId)}`,
+        { headers: chatHeaders() }
+      );
+      const conversationBody = await conversationRes.json();
+      expect(conversationBody.conversation.messages.map((m: { role: string }) => m.role))
+        .toContain("user");
     },
     TEST_TIMEOUT_MS
   );
@@ -151,6 +160,47 @@ describe("POST /api/chat chat route (hermetic)", () => {
       expect(body.ok).toBe(true);
       expect(body.pipeline).toBe(true);
       expect(body.route).toBe("complex");
+    },
+    TEST_TIMEOUT_MS
+  );
+
+  it(
+    "clarifies ambiguous chat with selectable options",
+    async () => {
+      const res = await fetch(`http://127.0.0.1:${PORT}/api/chat`, {
+        method: "POST",
+        headers: chatHeaders(),
+        body: JSON.stringify({ message: "هذا" }),
+      });
+      const body = await res.json();
+      expect(res.status).toBe(200);
+      expect(body.route).toBe("clarify");
+      expect(body.clarification.options).toHaveLength(2);
+      expect(body.clarification.options.map((option: { value: string }) => option.value))
+        .toEqual(["chat", "task"]);
+    },
+    TEST_TIMEOUT_MS
+  );
+
+  it(
+    "saves explicit chat memory without creating a chat transcript file",
+    async () => {
+      const res = await fetch(`http://127.0.0.1:${PORT}/api/chat`, {
+        method: "POST",
+        headers: chatHeaders(),
+        body: JSON.stringify({
+          message: "تذكّر: أفضّل الردود باللغة العربية",
+          conversationId: "explicit-memory-test",
+        }),
+      });
+      const body = await res.json();
+      expect(res.status).toBe(200);
+      expect(body.memorySaved).toBe(true);
+      expect(body.noArtifacts).toBe(true);
+      expect(
+        fs.readdirSync(path.join(cpIso!.outputHome, "conversations"))
+          .filter((file) => file === "explicit-memory-test.json" || file === "explicit-memory-test.md")
+      ).toEqual([]);
     },
     TEST_TIMEOUT_MS
   );

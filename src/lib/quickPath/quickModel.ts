@@ -7,6 +7,7 @@ import {
   HumanMessage,
   SystemMessage,
   type BaseMessage,
+  type ToolCall,
 } from "@langchain/core/messages";
 import {
   getRoleConfig,
@@ -18,16 +19,18 @@ import {
 } from "../costLedger.js";
 import { resolveModelRoute } from "../cost/index.js";
 import { appendAudit } from "../trust/auditLog.js";
-import { localOllamaOptions } from "../ollamaLocal.js";
+import { quickOllamaOptions } from "../ollamaLocal.js";
 import {
   historyBudgetForContext,
   trimChatTurns,
   type ChatTurn,
 } from "../conversation/context.js";
 import { languageReplyDirective, detectUserLanguage } from "./language.js";
+import type { BindToolsInput } from "@langchain/core/language_models/chat_models";
 
 export const DEFAULT_QUICK_LOCAL_MODEL = "qwen2.5:1.5b";
 export const QUICK_ROLE_ID = "quick";
+export type ChatModelPreference = "auto" | "local" | "cloud";
 
 export type QuickModelCall = {
   text: string;
@@ -37,7 +40,25 @@ export type QuickModelCall = {
   baseUrl: string;
   /** Number of replayed turns actually sent (0 = one-shot prompt). */
   historyTurns?: number;
+  toolCalls?: ToolCall[];
 };
+
+function normalizeLocalOllamaUrl(baseUrl: string): string {
+  try {
+    const url = new URL(baseUrl);
+    if (url.hostname.toLowerCase() === "localhost") {
+      url.hostname = "127.0.0.1";
+    }
+    return url.toString().replace(/\/$/, "");
+  } catch {
+    return baseUrl;
+  }
+}
+
+function isGpuMemoryError(error: unknown): boolean {
+  const message = error instanceof Error ? error.message : String(error);
+  return /out.of.memory|failed to allocate|Vulkan\d* buffer|GPU.*memory/i.test(message);
+}
 
 function cheapestLocalFallback(cwd: string): string {
   try {
@@ -136,30 +157,45 @@ export async function invokeQuickModel(input: {
   runId?: string;
   /** Prefer cloud when configured and allowed. */
   allowCloud?: boolean;
+  /** User-selected model route from the chat interface. */
+  modelPreference?: ChatModelPreference;
   /** Chronological (oldest → newest) conversation turns, already bounded. */
   history?: ReadonlyArray<ChatTurn>;
+  /** Existing LangChain messages for a tool-call round trip. */
+  messages?: ReadonlyArray<BaseMessage>;
+  /** Optional function schemas supplied to a model for this invocation. */
+  tools?: BindToolsInput[];
 }): Promise<QuickModelCall> {
   const cwd = input.cwd || process.cwd();
   const cfg = resolveQuickModel(cwd);
+  const preference = input.modelPreference ||
+    (input.allowCloud === true ? "auto" : "local");
   const route = resolveModelRoute({
     cwd,
     role: QUICK_ROLE_ID,
-    forceCheap: true,
-    forceLocal: input.allowCloud === true ? false : true,
+    forceCheap: preference === "local",
+    forceLocal: preference === "local",
+    forceCloud: preference === "cloud",
     localModel: cfg.local,
     cloudModel: cfg.cloud,
     freeModel: cfg.free || undefined,
-    prefersCloud: input.allowCloud === true ? cfg.prefersCloud : false,
+    prefersCloud: preference === "local" ? false : cfg.prefersCloud,
   });
+  if (preference === "cloud" && !route.cloud) {
+    throw new Error(`Cloud model unavailable: ${route.reason}`);
+  }
 
   // Cap: never start a paid call that would exceed
   if (route.cloud && route.estimatedUsd > 0) {
     assertWithinCostCap(cwd, route.estimatedUsd);
   }
 
-  const local = route.cloud ? null : localOllamaOptions();
+  const local = route.cloud ? null : quickOllamaOptions();
+  const baseUrl = route.cloud
+    ? route.baseUrl
+    : normalizeLocalOllamaUrl(route.baseUrl);
   const model = new ChatOllama({
-    baseUrl: route.baseUrl,
+    baseUrl,
     ...(route.headers ? { headers: route.headers } : {}),
     model: route.model,
     temperature: input.temperature ?? 0.4,
@@ -202,12 +238,94 @@ export async function invokeQuickModel(input: {
     prompt: input.prompt,
     history,
   });
+  const modelInput = input.messages?.length ? [...input.messages] : payload.prompt;
+  const promptChars = input.messages?.length
+    ? input.messages.reduce(
+        (sum, message) => sum + String(message.content ?? "").length + 16,
+        0
+      )
+    : payload.chars;
 
   let text = "";
+  let toolCalls: ToolCall[] = [];
   try {
-    const res = await model.invoke(payload.prompt);
+    const runner = input.tools?.length ? model.bindTools(input.tools) : model;
+    const res = await runner.invoke(modelInput);
     text = typeof res.content === "string" ? res.content : String(res.content ?? "");
+    toolCalls = res.tool_calls || [];
   } catch (e: any) {
+    if (preference === "cloud") {
+      throw new Error(`Cloud model request failed: ${e?.message || String(e)}`);
+    }
+    const gpuMemoryFailure = !route.cloud && isGpuMemoryError(e);
+    let primaryError: unknown = e;
+    if (gpuMemoryFailure && local) {
+      let cpuText: string | undefined;
+      let cpuToolCalls: ToolCall[] = [];
+      try {
+        const cpuModel = new ChatOllama({
+          baseUrl,
+          model: route.model,
+          temperature: input.temperature ?? 0.4,
+          think: false,
+          numPredict: input.numPredict ?? 256,
+          numCtx: Math.min(local.numCtx, 2048),
+          numThread: local.numThread,
+          numBatch: Math.min(local.numBatch, 128),
+          numGpu: 0,
+          keepAlive: local.keepAlive,
+        });
+        const runner = input.tools?.length
+          ? cpuModel.bindTools(input.tools)
+          : cpuModel;
+        const res = await runner.invoke(modelInput);
+        cpuText =
+          typeof res.content === "string" ? res.content : String(res.content ?? "");
+        cpuToolCalls = res.tool_calls || [];
+      } catch (cpuError) {
+        const primaryMessage = e?.message || String(e);
+        const cpuMessage =
+          cpuError instanceof Error ? cpuError.message : String(cpuError);
+        primaryError = new Error(
+          `Ollama GPU startup failed: ${primaryMessage}. CPU fallback also failed: ${cpuMessage}`
+        );
+      }
+      if (cpuText !== undefined) {
+        const usage = recordUsage(cwd, {
+          model: route.model,
+          inputTokens: Math.ceil(promptChars / 4),
+          outputTokens: Math.ceil(cpuText.length / 4),
+          costUsd: 0,
+          cloud: false,
+          runId: input.runId,
+        });
+        try {
+          appendAudit({
+            category: "cost",
+            action: "quick_path.model",
+            runId: input.runId,
+            detail: {
+              model: route.model,
+              fallback: "cpu_after_gpu_memory_error",
+              historyTurns: payload.historyTurns,
+              primaryError: e?.message || String(e),
+            },
+          });
+        } catch {
+          /* ignore */
+        }
+        return {
+          text: cpuText.trim(),
+          model: route.model,
+          cloud: false,
+          costUsd: usage.costUsd || 0,
+          baseUrl,
+          historyTurns: payload.historyTurns,
+          ...(cpuToolCalls.length ? { toolCalls: cpuToolCalls } : {}),
+        };
+      }
+    }
+
     // Fallback: cheapest local if primary failed (e.g. model missing)
     if (route.model !== cfg.local || route.cloud) {
       const localRoute = resolveModelRoute({
@@ -217,24 +335,49 @@ export async function invokeQuickModel(input: {
         forceLocal: true,
         localModel: cheapestLocalFallback(cwd),
       });
-      const fallbackLocal = localOllamaOptions();
+      const fallbackLocal = quickOllamaOptions();
       const fallback = new ChatOllama({
-        baseUrl: localRoute.baseUrl,
+        baseUrl: normalizeLocalOllamaUrl(localRoute.baseUrl),
         model: localRoute.model,
         temperature: input.temperature ?? 0.4,
         think: false,
         numPredict: input.numPredict ?? 256,
-        numCtx: fallbackLocal.numCtx,
+        numCtx: gpuMemoryFailure
+          ? Math.min(fallbackLocal.numCtx, 2048)
+          : fallbackLocal.numCtx,
         numThread: fallbackLocal.numThread,
-        numBatch: fallbackLocal.numBatch,
+        numBatch: gpuMemoryFailure
+          ? Math.min(fallbackLocal.numBatch, 128)
+          : fallbackLocal.numBatch,
+        ...(gpuMemoryFailure ? { numGpu: 0 } : {}),
         keepAlive: fallbackLocal.keepAlive,
       });
-      const res = await fallback.invoke(payload.prompt);
+      let res;
+      try {
+        const runner = input.tools?.length
+          ? fallback.bindTools(input.tools)
+          : fallback;
+        res = await runner.invoke(modelInput);
+      } catch (fallbackError) {
+        const primaryMessage =
+          primaryError instanceof Error
+            ? primaryError.message
+            : String(primaryError);
+        const fallbackMessage =
+          fallbackError instanceof Error
+            ? fallbackError.message
+            : String(fallbackError);
+        throw new Error(
+          `Ollama request failed for ${route.model} at ${baseUrl}: ${primaryMessage}. ` +
+            `Local fallback ${localRoute.model} at ${normalizeLocalOllamaUrl(localRoute.baseUrl)} also failed: ${fallbackMessage}`
+        );
+      }
       text =
         typeof res.content === "string" ? res.content : String(res.content ?? "");
+      toolCalls = res.tool_calls || [];
       const usage = recordUsage(cwd, {
         model: localRoute.model,
-        inputTokens: Math.ceil(payload.chars / 4),
+        inputTokens: Math.ceil(promptChars / 4),
         outputTokens: Math.ceil(text.length / 4),
         costUsd: 0,
         cloud: false,
@@ -249,7 +392,10 @@ export async function invokeQuickModel(input: {
             model: localRoute.model,
             fallback: true,
             historyTurns: payload.historyTurns,
-            primaryError: e?.message || String(e),
+            primaryError:
+              primaryError instanceof Error
+                ? primaryError.message
+                : String(primaryError),
           },
         });
       } catch {
@@ -260,16 +406,17 @@ export async function invokeQuickModel(input: {
         model: localRoute.model,
         cloud: false,
         costUsd: usage.costUsd || 0,
-        baseUrl: localRoute.baseUrl,
+        baseUrl: normalizeLocalOllamaUrl(localRoute.baseUrl),
         historyTurns: payload.historyTurns,
+        ...(toolCalls.length ? { toolCalls } : {}),
       };
     }
-    throw e;
+    throw primaryError;
   }
 
   const usage = recordUsage(cwd, {
     model: route.model,
-    inputTokens: Math.ceil(payload.chars / 4),
+    inputTokens: Math.ceil(promptChars / 4),
     outputTokens: Math.ceil(text.length / 4),
     costUsd: route.cloud ? route.estimatedUsd : 0,
     cloud: route.cloud,
@@ -298,8 +445,9 @@ export async function invokeQuickModel(input: {
     model: route.model,
     cloud: route.cloud,
     costUsd: usage.costUsd || 0,
-    baseUrl: route.baseUrl,
+    baseUrl,
     historyTurns: payload.historyTurns,
+    ...(toolCalls.length ? { toolCalls } : {}),
   };
 }
 

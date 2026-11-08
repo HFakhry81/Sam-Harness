@@ -27,6 +27,16 @@ export type IntentDecision = {
   source: "heuristic" | "model" | "forced";
   /** Present when route === "clarify". */
   clarifyQuestion?: string;
+  clarifyOptions?: string[];
+  /** Search query selected by the structured intent output. */
+  searchQuery?: string;
+};
+
+export type IntentModelOutput = {
+  route: IntentRoute;
+  searchQuery?: string;
+  clarifyQuestion?: string;
+  clarifyOptions?: string[];
 };
 
 /** Legacy reply-path badges used by older session entries. */

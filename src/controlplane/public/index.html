@@ -103,6 +103,12 @@
                 <input type="checkbox" id="forceAgency" />
                 <span data-i18n="compose.forceAgency">تشغيل كوكالة كاملة</span>
               </label>
+              <label class="chat-model-label" for="chatModel" data-i18n="compose.modelLabel">النموذج</label>
+              <select id="chatModel" aria-label="Chat model">
+                <option value="auto" data-i18n="compose.modelAuto">تلقائي</option>
+                <option value="local" data-i18n="compose.modelLocal">محلي</option>
+                <option value="cloud" data-i18n="compose.modelCloud">سحابي</option>
+              </select>
               <span class="path-badge" id="pathBadge" data-path="chat" title="">chat</span>
               <button type="button" class="linkish" id="btnClearChat" data-i18n="compose.clearChat">مسح المحادثة</button>
             </div>

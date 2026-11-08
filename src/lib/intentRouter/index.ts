@@ -2,6 +2,7 @@ export type {
   IntentRoute,
   IntentClass,
   IntentDecision,
+  IntentModelOutput,
   LegacyReplyPath,
 } from "./types.js";
 export {
