@@ -1,0 +1,8 @@
+{
+    "chat.tools.terminal.autoApprove": {
+        "/^pnpm run doctor$/": {
+            "approve": true,
+            "matchCommandLine": true
+        }
+    }
+}

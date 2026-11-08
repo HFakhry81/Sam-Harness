@@ -9,9 +9,10 @@
 | عنصر | السلوك |
 | --- | --- |
 | الصفحة | Control Plane → **المسار الرسومي** / **Workflow graph** (عربي RTL افتراضياً) |
+| المساحة | المخطط بعرض كامل، ولوحة خصائص العقد أسفله؛ ارتفاع اللوحة يتكيف مع الشاشة |
 | المكتبة | SVG مضمّن في `workflow-editor.js` — بدون React Flow / بدون CDN وقت التشغيل |
 | العقد | Router، Operational، Intake، Evidence، Review (strategist↔auditor)، GO Gate، المتخصصون، Delivery، Level-3 |
-| السحب | سحب العقد + تحريك اللوحة؛ Ctrl/⌘+عجلة للتكبير |
+| السحب | سحب العقد + تحريك اللوحة؛ Ctrl/⌘+عجلة للتكبير؛ عناوين العقد وشاراتها أكبر وأسهل قراءة |
 | الشارات | توجيه حي لكل دور من `GET /api/routing/effective` (local / paid / free، يراعي السقف) |
 
 ---

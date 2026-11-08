@@ -47,6 +47,23 @@ afterAll(async () => {
 });
 
 describe("Control Plane HTTP auth", () => {
+  it("allows a normal browser User-Agent with semicolon-separated tokens", async () => {
+    const res = await fetch(`http://127.0.0.1:${PORT}/api/locale`, {
+      headers: {
+        "User-Agent":
+          "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/142.0.0.0 Safari/537.36",
+      },
+    });
+    expect(res.status).toBe(200);
+  });
+
+  it("continues blocking SQL keywords in request URLs", async () => {
+    const res = await fetch(`http://127.0.0.1:${PORT}/api/locale?query=SELECT%201`);
+    expect(res.status).toBe(403);
+    const body = await res.json();
+    expect(body.code).toBe("WAF_BLOCKED");
+  });
+
   it("POST /api/run without token → 401", async () => {
     const res = await fetch(`http://127.0.0.1:${PORT}/api/run`, {
       method: "POST",
