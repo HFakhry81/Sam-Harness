@@ -36,4 +36,4 @@
 
 عنوان Ollama المحلي الافتراضي هو `http://127.0.0.1:11434` ويمكن تغييره عبر `SAM_LOCAL_BASE_URL`. عند ظهور خطأ اتصال، شغّل Ollama وتحقق من النموذج المحدد عبر `ollama list`، وثبّت النموذج المفقود باستخدام `ollama pull <model>`.
 
-تستخدم المحادثة التفاعلية افتراضياً سياقاً بحجم 4K ودفعة من 256 رمزاً واحتفاظاً بالنموذج لمدة 5 دقائق للحد من استهلاك ذاكرة GPU/RAM. يمكن ضبطها عبر `SAM_QUICK_NUM_CTX` و`SAM_QUICK_NUM_BATCH` و`SAM_QUICK_KEEP_ALIVE`؛ وتبقى إعدادات الأدوار الطويلة على `SAM_LOCAL_NUM_CTX` و`SAM_LOCAL_NUM_BATCH`.
+تعمل المحادثة التفاعلية افتراضياً على CPU بسياق 2K ودفعة 128 رمزاً واحتفاظ بالنموذج لمدة 5 دقائق لتفادي أخطاء تخصيص ذاكرة GPU عند بدء Ollama. إذا كان تشغيل GPU مستقراً، اضبط `SAM_QUICK_NUM_GPU` على عدد الطبقات المطلوب، ثم خصص `SAM_QUICK_NUM_CTX` و`SAM_QUICK_NUM_BATCH` و`SAM_QUICK_KEEP_ALIVE`. تبقى إعدادات الأدوار الطويلة على `SAM_LOCAL_NUM_CTX` و`SAM_LOCAL_NUM_BATCH`.

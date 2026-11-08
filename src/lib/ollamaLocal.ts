@@ -53,8 +53,13 @@ export function quickOllamaOptions(): LocalOllamaOptions {
   const shared = localOllamaOptions();
   return {
     ...shared,
-    numCtx: envInt("SAM_QUICK_NUM_CTX", Math.min(shared.numCtx, 4096)),
-    numBatch: envInt("SAM_QUICK_NUM_BATCH", Math.min(shared.numBatch, 256)),
+    numCtx: envInt("SAM_QUICK_NUM_CTX", Math.min(shared.numCtx, 2048)),
+    numBatch: envInt("SAM_QUICK_NUM_BATCH", Math.min(shared.numBatch, 128)),
     keepAlive: keepAliveValue("SAM_QUICK_KEEP_ALIVE", "5m"),
   };
+}
+
+export function quickOllamaGpuLayers(): number {
+  const raw = Number(String(process.env.SAM_QUICK_NUM_GPU ?? "0").trim());
+  return Number.isInteger(raw) && raw >= 0 ? raw : 0;
 }

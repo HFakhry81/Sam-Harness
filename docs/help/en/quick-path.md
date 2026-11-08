@@ -40,7 +40,7 @@ Chat can iteratively use the read-only `list_dir`, `read_file`, and `search_code
 
 The default local Ollama endpoint is `http://127.0.0.1:11434` (override with `SAM_LOCAL_BASE_URL`). If chat reports a connection error, start Ollama and verify the configured model with `ollama list`; install a missing model with `ollama pull <model>`.
 
-Interactive chat defaults to a 4K context, 256-token batch, and 5-minute model residency to limit GPU/RAM use; tune these independently with `SAM_QUICK_NUM_CTX`, `SAM_QUICK_NUM_BATCH`, and `SAM_QUICK_KEEP_ALIVE`. Long-form agent roles retain the shared `SAM_LOCAL_NUM_CTX` / `SAM_LOCAL_NUM_BATCH` settings.
+Interactive chat defaults to CPU inference with a 2K context, 128-token batch, and 5-minute model residency to avoid the GPU buffer allocation errors seen on Ollama startup. If your Ollama GPU runtime is stable, set `SAM_QUICK_NUM_GPU` to the desired layer count and tune `SAM_QUICK_NUM_CTX`, `SAM_QUICK_NUM_BATCH`, and `SAM_QUICK_KEEP_ALIVE`. Long-form agent roles retain the shared `SAM_LOCAL_NUM_CTX` / `SAM_LOCAL_NUM_BATCH` settings.
 
 - `SAM_ROLE_QUICK_MODEL`
 - `SAM_ROLE_QUICK_CLOUD_MODEL`

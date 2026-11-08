@@ -19,7 +19,10 @@ import {
 } from "../costLedger.js";
 import { resolveModelRoute } from "../cost/index.js";
 import { appendAudit } from "../trust/auditLog.js";
-import { quickOllamaOptions } from "../ollamaLocal.js";
+import {
+  quickOllamaGpuLayers,
+  quickOllamaOptions,
+} from "../ollamaLocal.js";
 import {
   historyBudgetForContext,
   trimChatTurns,
@@ -206,6 +209,7 @@ export async function invokeQuickModel(input: {
           numCtx: local.numCtx,
           numThread: local.numThread,
           numBatch: local.numBatch,
+          numGpu: quickOllamaGpuLayers(),
           keepAlive: local.keepAlive,
         }
       : { numCtx: 4096 }),
@@ -349,7 +353,7 @@ export async function invokeQuickModel(input: {
         numBatch: gpuMemoryFailure
           ? Math.min(fallbackLocal.numBatch, 128)
           : fallbackLocal.numBatch,
-        ...(gpuMemoryFailure ? { numGpu: 0 } : {}),
+        numGpu: gpuMemoryFailure ? 0 : quickOllamaGpuLayers(),
         keepAlive: fallbackLocal.keepAlive,
       });
       let res;

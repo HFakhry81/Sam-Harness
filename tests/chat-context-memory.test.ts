@@ -13,7 +13,11 @@ import {
   renderChatHistory,
   trimChatTurns,
 } from "../src/lib/conversation/context.js";
-import { localOllamaOptions, quickOllamaOptions } from "../src/lib/ollamaLocal.js";
+import {
+  localOllamaOptions,
+  quickOllamaGpuLayers,
+  quickOllamaOptions,
+} from "../src/lib/ollamaLocal.js";
 import { buildQuickPromptPayload } from "../src/lib/quickPath/quickModel.js";
 import { runIntentRouter } from "../src/lib/intentRouter/index.js";
 import {
@@ -60,8 +64,9 @@ describe("bounded chat context", () => {
 
   it("defaults expose a larger local window and a bounded history", () => {
     expect(localOllamaOptions().numCtx).toBe(16_384);
-    expect(quickOllamaOptions().numCtx).toBe(4096);
-    expect(quickOllamaOptions().numBatch).toBe(256);
+    expect(quickOllamaOptions().numCtx).toBe(2048);
+    expect(quickOllamaOptions().numBatch).toBe(128);
+    expect(quickOllamaGpuLayers()).toBe(0);
     expect(chatHistoryMaxMessages()).toBe(12);
     expect(chatHistoryMaxChars()).toBe(6_000);
   });
