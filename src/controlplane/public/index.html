@@ -237,6 +237,8 @@
               <button type="button" class="btn primary" id="btnTeamSavePipeline" data-i18n="team.savePipeline">حفظ ترتيب المسار</button>
             </div>
             <p class="lede-sm" id="teamStatus">—</p>
+            <p class="lede-sm" id="teamModelStatus" role="status" aria-live="polite">—</p>
+            <datalist id="teamOllamaModels"></datalist>
             <p class="workspace-title" data-i18n="team.pipeline">ترتيب ما بعد الموافقة</p>
             <input id="teamPipelineOrder" type="text" class="composer" style="min-height:auto;padding:0.6rem 0.8rem" placeholder="architect,help,marketer,verifier" />
             <table class="ops-table" id="teamRolesTable" style="margin-top:1rem">
@@ -266,6 +268,14 @@
               <div class="field" style="grid-column: span 1">
                 <label for="teamRolePrompt" data-i18n="team.customPrompt">المطالبة</label>
                 <input id="teamRolePrompt" type="text" placeholder="Write a research brief…" />
+              </div>
+              <div class="field">
+                <label for="teamRoleLocalModel" data-i18n="team.customLocal">النموذج المحلي</label>
+                <input id="teamRoleLocalModel" type="text" list="teamOllamaModels" placeholder="qwen2.5:latest" />
+              </div>
+              <div class="field">
+                <label for="teamRoleCloudModel" data-i18n="team.customCloud">النموذج السحابي</label>
+                <input id="teamRoleCloudModel" type="text" value="gemma4:cloud" />
               </div>
               <button type="button" class="btn primary" id="btnTeamAddRole" data-i18n="team.addRole">إضافة دور مخصّص</button>
             </div>

@@ -336,7 +336,12 @@ function Invoke-ActionPullModels {
     Write-SamFail ("ollama not in PATH")
     return 1
   }
-  $models = Get-SamTeamLocalModels -ProjectRoot $ProjectRoot
+  try {
+    $models = Get-SamTeamLocalModels -ProjectRoot $ProjectRoot
+  } catch {
+    Write-SamFail $_.Exception.Message
+    return 1
+  }
   Write-SamInfo ("models: " + ($models -join ", "))
   $failed = 0
   foreach ($m in $models) {
@@ -344,6 +349,14 @@ function Invoke-ActionPullModels {
     $pec = Invoke-SamNative -FilePath "ollama" -ArgumentList @("pull", $m)
     if ($pec -ne 0) {
       Write-SamWarn "pull failed: $m"
+      try {
+        $roleIds = Get-SamTeamRoleIdsForModel -ProjectRoot $ProjectRoot -Model $m
+        if ($roleIds.Count -gt 0) {
+          Write-SamFail ("Unavailable model remains assigned to roles: " + ($roleIds -join ", ") + ". Replace it in Team settings before running those roles.")
+        }
+      } catch {
+        Write-SamFail $_.Exception.Message
+      }
       $failed++
     } else {
       Write-SamOk $m
