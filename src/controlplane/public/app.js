@@ -211,6 +211,7 @@ const els = {
   btnClearChat: $("btnClearChat"),
   btnBack: $("btnBack"),
   btnStop: $("btnStop"),
+  btnStopTop: $("btnStopTop"),
   btnNewTask: $("btnNewTask"),
   btnNewTaskTop: $("btnNewTaskTop"),
   btnRerun: $("btnRerun"),
@@ -513,6 +514,15 @@ function showStage(name) {
   document.querySelectorAll("#platformNav button").forEach((b) => {
     b.classList.toggle("active", name === "compose" && b.dataset.view === "compose");
   });
+}
+
+function setStopControls(active) {
+  const enabled = Boolean(active);
+  els.btnStop.disabled = !enabled;
+  if (els.btnStopTop) {
+    els.btnStopTop.hidden = !enabled;
+    els.btnStopTop.disabled = !enabled;
+  }
 }
 
 function showPlatformPanel(view) {
@@ -1198,7 +1208,7 @@ function showRun(draft) {
   configureRunOptions(draft);
   showStage("run");
   els.runGrid?.classList.remove("is-busy");
-  els.btnStop.disabled = true;
+  setStopControls(false);
   els.runState.textContent = "ready";
 }
 
@@ -1558,6 +1568,8 @@ async function sendChatMessage() {
       lastDraft = data.draft || lastDraft;
       showStage("run");
       clearInterval(chatTick);
+      busy = false;
+      if (els.btnSend) els.btnSend.disabled = false;
       await runMode("agency");
       return;
     }
@@ -1612,7 +1624,7 @@ function showDone(entry) {
   if (chatStyle) {
     lastFailed = false;
     busy = false;
-    els.btnStop.disabled = true;
+    setStopControls(false);
     els.runGrid?.classList.remove("is-busy");
     if (entry.replyPath) setPathBadge(entry.replyPath);
     if (entry.summary) {
@@ -1628,9 +1640,13 @@ function showDone(entry) {
   }
   lastFailed = !entry.success;
   busy = false;
-  els.btnStop.disabled = true;
+  setStopControls(false);
   els.runGrid?.classList.remove("is-busy");
-  els.doneTitle.textContent = entry.success ? "تم بنجاح." : "لم تكتمل.";
+  els.doneTitle.textContent = entry.cancelled
+    ? "أُوقف التشغيل."
+    : entry.success
+      ? "تم بنجاح."
+      : "لم تكتمل.";
   const pathBit = entry.replyPath ? ` · ${pathLabel(entry.replyPath)}` : "";
   els.doneMeta.textContent = `${entry.title} · ${entry.route} · ${entry.mode}${pathBit} · exit ${entry.exitCode}`;
   if (entry.replyPath) setPathBadge(entry.replyPath);
@@ -1647,13 +1663,17 @@ function showDone(entry) {
   els.btnRerun.style.display = entry.success ? "none" : "";
   if (entry.success) clearLocalDraft();
   showStage("done");
-  els.healthMeta.textContent = entry.success ? "ready · task cleared" : "ready · retry kept";
+  els.healthMeta.textContent = entry.cancelled
+    ? "ready · run stopped · task kept"
+    : entry.success
+      ? "ready · task cleared"
+      : "ready · retry kept";
   if (showReports) loadArtifacts();
 }
 
 async function resetForNewTask() {
   if (busy) {
-    alert("انتظر انتهاء التشغيل الحالي أو أوقفه أولاً");
+    showStage("compose");
     return;
   }
   const hasText = (els.prompt.value || "").trim().length > 0;
@@ -1722,26 +1742,39 @@ async function runMode(mode) {
       "   Tip: follow [OK] / [Error] / LIVE lines like the desktop launcher.\n\n"
   );
   els.runState.textContent = `starting:${mode}`;
-  els.btnStop.disabled = false;
+  setStopControls(true);
   els.runGrid?.classList.add("is-busy");
   busy = true;
   showStage("run");
 
   const forceAgency = Boolean(els.forceAgency?.checked);
-  const res = await api("/api/run", {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({
-      mode,
-      confirmImplement: mode === "implement",
-      forceAgency,
-    }),
-  });
-  const data = await res.json();
+  let res;
+  let data;
+  try {
+    res = await api("/api/run", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        mode,
+        confirmImplement: mode === "implement",
+        forceAgency,
+      }),
+    });
+    data = await res.json();
+  } catch (error) {
+    busy = false;
+    setStopControls(false);
+    els.runState.textContent = "error";
+    els.runGrid?.classList.remove("is-busy");
+    const message = error?.message || String(error);
+    appendLog(`\n[Error] Could not start run: ${message}\n`);
+    els.healthMeta.textContent = `run start failed · ${message}`;
+    return;
+  }
   if (!res.ok || !data.ok) {
     busy = false;
     els.runState.textContent = "error";
-    els.btnStop.disabled = true;
+    setStopControls(false);
     els.runGrid?.classList.remove("is-busy");
     appendLog(`\n[Error] ${data.error || res.statusText}\n`);
     if (data.blockedRepeat) {
@@ -1840,13 +1873,34 @@ $("btnClarifySubmit").addEventListener("click", async () => {
 });
 
 els.btnBack.addEventListener("click", () => {
-  if (busy) return;
   showStage("compose");
 });
 
-els.btnStop.addEventListener("click", async () => {
-  await api("/api/stop", { method: "POST" });
-});
+async function stopRun() {
+  if (!busy) return;
+  els.btnStop.disabled = true;
+  if (els.btnStopTop) els.btnStopTop.disabled = true;
+  try {
+    const response = await api("/api/stop", { method: "POST" });
+    const result = await response.json();
+    if (!response.ok || !result.ok) {
+      throw new Error(result.error || response.statusText || "Could not stop the run");
+    }
+    if (result.stopped) {
+      els.runState.textContent = "stopping · waiting for process exit";
+      els.healthMeta.textContent = "run: stopping";
+    } else {
+      setStopControls(false);
+    }
+  } catch (error) {
+    appendLog(`\n[Error] Stop failed: ${error?.message || String(error)}\n`);
+    els.healthMeta.textContent = `stop failed · ${error?.message || String(error)}`;
+    setStopControls(true);
+  }
+}
+
+els.btnStop.addEventListener("click", stopRun);
+els.btnStopTop?.addEventListener("click", stopRun);
 
 els.btnNewTask.addEventListener("click", () => resetForNewTask());
 els.btnNewTaskTop.addEventListener("click", () => resetForNewTask());
@@ -1940,10 +1994,6 @@ els.route.addEventListener("change", () => {
 
 document.querySelectorAll("#platformNav button").forEach((btn) => {
   btn.addEventListener("click", () => {
-    if (busy) {
-      alert("انتظر انتهاء التشغيل أو أوقفه أولاً");
-      return;
-    }
     showPlatformPanel(btn.dataset.view);
   });
 });
@@ -2192,6 +2242,10 @@ let bootAppReady = false;
 async function bootApp() {
   try {
     const h = await api("/api/health").then((r) => r.json());
+    if (h.running) {
+      busy = true;
+      setStopControls(true);
+    }
     els.healthMeta.textContent = h.running
       ? "run: active"
       : `ready · :${h.port} · ${h.tasksInSession || 0} tasks`;
@@ -2234,8 +2288,14 @@ async function bootApp() {
     });
     es.addEventListener("ready", () => {
       busy = false;
-      els.btnStop.disabled = true;
+      setStopControls(false);
       els.runGrid?.classList.remove("is-busy");
+    });
+    es.addEventListener("hello", (ev) => {
+      if (JSON.parse(ev.data).running) {
+        busy = true;
+        setStopControls(true);
+      }
     });
     es.addEventListener("run", (ev) => {
       const data = JSON.parse(ev.data);
@@ -2244,12 +2304,12 @@ async function bootApp() {
         showStage("run");
         els.runGrid?.classList.add("is-busy");
         els.runState.textContent = `running:${data.mode || data.script || "?"}`;
-        els.btnStop.disabled = false;
+        setStopControls(true);
         els.healthMeta.textContent = "run: active";
       }
       if (data.type === "end") {
         busy = false;
-        els.btnStop.disabled = true;
+        setStopControls(false);
         els.runGrid?.classList.remove("is-busy");
         els.runState.textContent = `done · exit ${data.exitCode}`;
         void loadProfiles();
@@ -2268,9 +2328,8 @@ async function bootApp() {
         }
       }
       if (data.type === "stopped") {
-        busy = false;
-        els.runState.textContent = "stopped";
-        els.btnStop.disabled = true;
+        els.runState.textContent = "stopped · preparing report";
+        setStopControls(false);
       }
     });
     es.onerror = () => {

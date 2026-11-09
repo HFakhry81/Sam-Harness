@@ -7,6 +7,8 @@ import * as http from "http";
 import * as path from "path";
 import { fileURLToPath, pathToFileURL } from "url";
 import { spawn, type ChildProcessWithoutNullStreams } from "child_process";
+import { terminateChildProcessTree } from "./processTree.js";
+import { summarizeRunOutcome } from "./runOutcome.js";
 import {
   buildTaskDraft,
   persistComposeDraft,
@@ -307,6 +309,8 @@ type SseClient = { id: number; res: http.ServerResponse };
 let sseId = 0;
 const sseClients = new Map<number, SseClient>();
 let activeChild: ChildProcessWithoutNullStreams | null = null;
+let runActive = false;
+let activeRunCancelled = false;
 let session: AgencySession = loadSession(ROOT);
 let currentDraft: TaskDraft | null = null;
 let runLogBuffer = "";
@@ -446,7 +450,7 @@ async function handleCompose(req: http.IncomingMessage, res: http.ServerResponse
   }
 
   // Never overwrite canonical task.* while an agent run is live (prevents goal contamination)
-  if (activeChild) {
+  if (runActive) {
     sendJson(res, 409, {
       ok: false,
       error:
@@ -531,6 +535,7 @@ function appendLog(text: string) {
 }
 
 async function finalizeRun(mode: RunMode, exitCode: number | null) {
+  const cancelled = activeRunCancelled;
   try {
     mirrorRunArtifacts(ROOT);
   } catch {
@@ -539,6 +544,7 @@ async function finalizeRun(mode: RunMode, exitCode: number | null) {
   endCostRun();
   endOutputRun();
   const endedAt = new Date().toISOString();
+  activeChild = null;
   if (lastRun) {
     lastRun.running = false;
     lastRun.exitCode = exitCode;
@@ -546,7 +552,6 @@ async function finalizeRun(mode: RunMode, exitCode: number | null) {
     lastRun.phase = "done";
   }
   if (activeDurableRunId) {
-    const cancelled = Boolean((lastRun as { cancelled?: boolean } | null)?.cancelled);
     finishDurableRun(activeDurableRunId, {
       ok: exitCode === 0 && !cancelled,
       exitCode,
@@ -561,7 +566,7 @@ async function finalizeRun(mode: RunMode, exitCode: number | null) {
   const arts = readExecutionArtifacts(ROOT);
   // Prefer tool-level success from final-report (file may have ## Verification appended)
   // Ignore stale artifacts older than this run's start (architecture crash left old ops report)
-  let success = exitCode === 0;
+  let success = exitCode === 0 && !cancelled;
   let auditPassed: boolean | null = null;
   let goalPassed: boolean | null = null;
   let goalFidelityScore: number | null = null;
@@ -611,6 +616,7 @@ async function finalizeRun(mode: RunMode, exitCode: number | null) {
   } catch {
     /* keep exit-based */
   }
+  if (cancelled) success = false;
 
   const title = currentDraft?.title || cfg.title || "Untitled task";
   const body = currentDraft?.body || cfg.body || "";
@@ -636,18 +642,37 @@ async function finalizeRun(mode: RunMode, exitCode: number | null) {
     }
   }
 
+  const outcome = summarizeRunOutcome({
+    success,
+    cancelled,
+    exitCode,
+    log: runLogBuffer,
+    artifacts: arts.artifacts,
+  });
+  const summary = arts.summary === "Run finished (no summary file)."
+    ? outcome.summary
+    : `${arts.summary.slice(0, 1_000)}\n\n${outcome.summary}`.slice(0, 2_000);
   const report = buildRunReport({
     success,
     title,
     route: String(route),
     mode,
-    summary: arts.summary,
+    summary,
     artifacts: arts.artifacts,
     taskLifecycle,
     auditPassed,
     goalPassed,
     goalFidelityScore,
   });
+  report.headline = outcome.headline;
+  report.bullets = [
+    `العنوان: ${title}`,
+    `المسار: ${route} · الوضع: ${mode}`,
+    ...(auditPassed != null ? [`التدقيق: ${auditPassed ? "ناجح" : "فاشل"}`] : []),
+    ...(goalPassed != null ? [`مطابقة الهدف: ${goalPassed ? "ناجحة" : "فاشلة"}`] : []),
+    ...outcome.bullets,
+  ];
+  report.nextSteps = outcome.nextSteps;
 
   const entry: SessionEntry = {
     id: `run-${Date.now().toString(36)}`,
@@ -664,7 +689,7 @@ async function finalizeRun(mode: RunMode, exitCode: number | null) {
     endedAt,
     exitCode,
     success,
-    summary: arts.summary,
+    summary,
     artifacts: arts.artifacts,
     logTail: runLogBuffer.slice(-2500),
     auditPassed,
@@ -673,6 +698,7 @@ async function finalizeRun(mode: RunMode, exitCode: number | null) {
     replyPath: "agency",
     report,
     taskLifecycle,
+    ...(cancelled ? { cancelled: true } : {}),
   };
   session.entries.unshift(entry);
   if (session.entries.length > 50) session.entries.length = 50;
@@ -685,7 +711,7 @@ async function finalizeRun(mode: RunMode, exitCode: number | null) {
       taskConversationId,
       {
         role: "assistant",
-        content: `${success ? "Task completed" : "Task did not complete"}: ${title}\n${arts.summary.slice(0, 2_000)}`,
+        content: `${success ? "Task completed" : "Task did not complete"}: ${title}\n${summary.slice(0, 2_000)}`,
         route: route === "operational" ? "task" : "complex",
         noArtifacts: false,
       },
@@ -713,6 +739,7 @@ async function finalizeRun(mode: RunMode, exitCode: number | null) {
     /* non-fatal */
   }
 
+  runActive = false;
   broadcast("run", {
     type: "end",
     exitCode,
@@ -726,10 +753,13 @@ async function finalizeRun(mode: RunMode, exitCode: number | null) {
   broadcast("ready", {
     message: success
       ? "نجحت المهمة — تم إفراغ Task. اكتب مهمة جديدة."
-      : "فشلت المهمة — Task محفوظ لإعادة المحاولة.",
+      : cancelled
+        ? "أُوقف التشغيل — المهمة محفوظة ويمكن مراجعة ما أُنجز."
+        : "فشلت المهمة — Task محفوظ لإعادة المحاولة.",
     at: endedAt,
     taskLifecycle,
   });
+  activeRunCancelled = false;
 }
 
 function extractPromptForQuickPath(draft: TaskDraft | null, metaRaw: string): string {
@@ -882,6 +912,8 @@ async function finalizeQuickRun(opts: {
   }
   activeDurableRunId = null;
   activeRunStartedMs = 0;
+  runActive = false;
+  activeRunCancelled = false;
 
   broadcast("run", {
     type: "end",
@@ -1220,7 +1252,7 @@ async function handleRun(req: http.IncomingMessage, res: http.ServerResponse) {
   const mode = (body.mode || "agency") as RunMode;
   const forceAgency = body.forceAgency === true;
 
-  if (activeChild) {
+  if (runActive) {
     sendJson(res, 409, { ok: false, error: "A run is already in progress" });
     return;
   }
@@ -1337,6 +1369,8 @@ async function handleRun(req: http.IncomingMessage, res: http.ServerResponse) {
   });
   activeDurableRunId = durable.id;
   activeRunStartedMs = Date.now();
+  runActive = true;
+  activeRunCancelled = false;
   const outputRun = beginOutputRun(runId);
   runLogBuffer = "";
   smokePending = mode === "smoke" ? 2 : 0;
@@ -1535,6 +1569,7 @@ async function handleRun(req: http.IncomingMessage, res: http.ServerResponse) {
       ...(forceAgency ? { FORCE_AGENCY: "1" } : {}),
     },
     shell: true,
+    detached: process.platform !== "win32",
   });
   activeChild = child;
 
@@ -1553,7 +1588,7 @@ async function handleRun(req: http.IncomingMessage, res: http.ServerResponse) {
   child.stderr.on("data", (buf) => appendLog(buf.toString("utf-8")));
   child.on("close", (code) => {
     activeChild = null;
-    if (mode === "smoke" && code === 0 && smokePending > 0) {
+    if (!activeRunCancelled && mode === "smoke" && code === 0 && smokePending > 0) {
       void runSmokeChain(code);
       return;
     }
@@ -1572,11 +1607,17 @@ async function handleRun(req: http.IncomingMessage, res: http.ServerResponse) {
 
 async function runSmokeChain(firstCode: number | null) {
   for (const script of ["smoke:delivery", "smoke:capabilities"]) {
+    if (activeRunCancelled) break;
     await new Promise<void>((resolve) => {
       const child = spawn(
         process.platform === "win32" ? "pnpm.cmd" : "pnpm",
         ["run", script],
-        { cwd: ROOT, shell: true, env: process.env }
+        {
+          cwd: ROOT,
+          shell: true,
+          env: process.env,
+          detached: process.platform !== "win32",
+        }
       );
       activeChild = child;
       broadcast("run", { type: "start", mode: "smoke", script, phase: "running" });
@@ -1594,23 +1635,42 @@ async function runSmokeChain(firstCode: number | null) {
   await finalizeRun("smoke", firstCode);
 }
 
-function handleStop(_req: http.IncomingMessage, res: http.ServerResponse) {
-  if (!activeChild) {
+async function handleStop(_req: http.IncomingMessage, res: http.ServerResponse) {
+  if (!runActive) {
     sendJson(res, 200, { ok: true, stopped: false });
     return;
   }
-  if (activeDurableRunId) {
-    cancelDurableRun(activeDurableRunId);
-    if (lastRun) (lastRun as { cancelled?: boolean }).cancelled = true;
+  const child = activeChild;
+  if (!child) {
+    sendJson(res, 409, {
+      ok: false,
+      error: "The run is preparing and has no stoppable process yet. Try again shortly.",
+    });
+    return;
   }
-  // Kill only — child's "close" handler finalizes session + unlocks UI
-  broadcast("run", { type: "stopped", phase: "running", runId: activeDurableRunId });
-  activeChild.kill();
-  sendJson(res, 200, { ok: true, stopped: true, runId: activeDurableRunId });
+  const runId = activeDurableRunId;
+  activeRunCancelled = true;
+  try {
+    await terminateChildProcessTree(child);
+  } catch (error) {
+    activeRunCancelled = false;
+    const message = error instanceof Error ? error.message : String(error);
+    appendLog(`\n[Error] Stop failed: ${message}\n`);
+    sendJson(res, 500, { ok: false, error: message });
+    return;
+  }
+  if (runId && activeDurableRunId === runId) cancelDurableRun(runId);
+  broadcast("run", {
+    type: "stopped",
+    phase: "running",
+    runId,
+    confirmed: true,
+  });
+  sendJson(res, 200, { ok: true, stopped: true, runId });
 }
 
 function handleReady(_req: http.IncomingMessage, res: http.ServerResponse) {
-  if (activeChild) {
+  if (runActive) {
     sendJson(res, 409, { ok: false, error: "Cannot reset while a run is active" });
     return;
   }
@@ -1626,7 +1686,7 @@ function handleReady(_req: http.IncomingMessage, res: http.ServerResponse) {
 }
 
 function handleSessionReset(_req: http.IncomingMessage, res: http.ServerResponse) {
-  if (activeChild) {
+  if (runActive) {
     sendJson(res, 409, { ok: false, error: "Cannot clear session while running" });
     return;
   }
@@ -1646,7 +1706,7 @@ function handleSse(_req: http.IncomingMessage, res: http.ServerResponse) {
     `event: hello\ndata: ${JSON.stringify({
       ok: true,
       phase: lastRun?.phase || "idle",
-      running: Boolean(activeChild),
+      running: runActive,
     })}\n\n`
   );
   res.write(`event: session\ndata: ${JSON.stringify(session)}\n\n`);
@@ -2026,7 +2086,7 @@ const server = http.createServer(async (req, res) => {
         tenantId: getActiveTenantId(),
         db: dbInfo,
         uptimeSec: getMetrics().uptimeSec,
-        running: Boolean(activeChild),
+        running: runActive,
       });
       return;
     }
@@ -2048,8 +2108,8 @@ const server = http.createServer(async (req, res) => {
       sendJson(res, 200, {
         ok: true,
         root: ROOT,
-        running: Boolean(activeChild),
-        phase: lastRun?.phase || (activeChild ? "running" : "idle"),
+        running: runActive,
+        phase: lastRun?.phase || (runActive ? "running" : "idle"),
         lastRun,
         tasksInSession: session.entries.length,
         port: LISTEN_PORT,
@@ -2417,7 +2477,7 @@ const server = http.createServer(async (req, res) => {
       return;
     }
     if (method === "POST" && p === "/api/stop") {
-      handleStop(req, res);
+      void handleStop(req, res);
       return;
     }
     if (method === "GET" && p === "/api/events") {

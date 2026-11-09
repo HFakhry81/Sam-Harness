@@ -106,6 +106,18 @@ describe("intent router heuristics", () => {
     expect(c.route).toBe("task");
   });
 
+  it("routes Arabic code-fix requests to the complex pipeline", () => {
+    const c = classifyIntentHeuristic("حل مشكلة زر إيقاف المهمة في الواجهة");
+    expect(c.route).toBe("complex");
+    expect(c.intent).toBe("complex_task");
+  });
+
+  it("routes Arabic file inventory requests to tool-capable chat", () => {
+    const c = classifyIntentHeuristic("أريد معرفة الملفات .txt على سطح المكتب");
+    expect(c.route).toBe("chat");
+    expect(c.intent).toBe("simple_question");
+  });
+
   it("honors forceAgency → complex", async () => {
     const c = await classifyIntent("مرحبا", { forceAgency: true });
     expect(c.route).toBe("complex");

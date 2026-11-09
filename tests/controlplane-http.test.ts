@@ -78,6 +78,15 @@ describe("Control Plane HTTP auth", () => {
     expect(body.authRequired).toBe(true);
   });
 
+  it("POST /api/stop with no active run reports an idle state", async () => {
+    const res = await fetch(`http://127.0.0.1:${PORT}/api/stop`, {
+      method: "POST",
+      headers: { Authorization: `Bearer ${TOKEN}` },
+    });
+    expect(res.status).toBe(200);
+    await expect(res.json()).resolves.toMatchObject({ ok: true, stopped: false });
+  });
+
   it("POST /api/run with foreign Origin → 403", async () => {
     const res = await fetch(`http://127.0.0.1:${PORT}/api/run`, {
       method: "POST",

@@ -97,11 +97,11 @@ const REPORT_CUE_RE =
 
 /** Filesystem inspection questions. They look like questions but need tools. */
 const FS_INSPECT_RE =
-  /(?:\bhow\s+many\s+(?:files?|folders?|directories)\b|\bcount\s+(?:the\s+)?files?\b|\bfile\s+count\b|\bsize\s+of\s+(?:the\s+)?(?:folder|directory)\b|\bdisk\s+usage\b|\blist\s+(?:the\s+)?files\b|كم\s+عدد\s+ال?ملفات|عدد\s+ال?ملفات|كم\s+ملف|احسب\s+(?:حجم|عدد)|حجم\s+(?:مجلد|المجلد|المسار)|قائمة\s+ال?ملفات)/iu;
+  /(?:\bhow\s+many\s+(?:files?|folders?|directories)\b|\bcount\s+(?:the\s+)?files?\b|\bfile\s+count\b|\bsize\s+of\s+(?:the\s+)?(?:folder|directory)\b|\bdisk\s+usage\b|\blist\s+(?:the\s+)?(?:all\s+)?files\b|\bshow\s+(?:me\s+)?(?:all\s+)?files\b|كم\s+عدد\s+ال?ملفات|عدد\s+ال?ملفات|كم\s+ملف|احسب\s+(?:حجم|عدد)|حجم\s+(?:مجلد|المجلد|المسار)|قائمة\s+ال?ملفات|(?:اريد|أريد)\s+(?:معرفة|عرض|قائمة)\s+(?:ب)?ال?ملفات)/iu;
 
 /** Bug-fix requests on real code — complex even without an absolute path. */
 const FIX_CODE_RE =
-  /(?:\b(?:fix|debug|patch|resolve)\b[^.!?]{0,60}\b(?:bug|error|exception|test|build|login|crash|issue|regression|typescript|compile)\b|\b(?:bug|error|exception|crash)\b[^.!?]{0,40}\b(?:fix|debug|patch|resolve)\b|أصلح\s+(?:ال)?(?:خطأ|عطل|مشكلة|بق)|صلّ?ح\s+(?:ال)?(?:خطأ|عطل|مشكلة))/iu;
+  /(?:\b(?:fix|debug|patch|resolve)\b[^.!?]{0,60}\b(?:bug|error|exception|test|build|login|crash|issue|regression|typescript|compile)\b|\b(?:bug|error|exception|crash)\b[^.!?]{0,40}\b(?:fix|debug|patch|resolve)\b|(?:حل|حلّ)\s+(?:ال)?مشكلة|(?:أصلح|اصلح|صلّ?ح)\s+(?:ال)?(?:خطأ|عطل|مشكلة|بق))/iu;
 
 function decision(
   route: IntentRoute,
