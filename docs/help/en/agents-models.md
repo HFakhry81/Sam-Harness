@@ -31,6 +31,17 @@ Every role has configurable **local**, **cloud/paid**, and optional **free** mod
 
 Edit models in Control Plane → **Team**, or patch `config/team.json`, or set env overrides.
 
+## Check and assign models safely
+
+In **Team**, inspect installed Ollama models, assign a local or cloud model per role, save changes, or check a model. The check uses `/api/show` metadata and does not generate text. Roles assigned to missing models are marked not ready.
+
+- A new local assignment or re-enabling a role is rejected if its Ollama model is not installed.
+- A legacy assignment to a missing model remains visible, but local invocation is blocked with an actionable role/model error; the system never silently substitutes a different model.
+- If `Tools → Pull Ollama models` fails, it reports which roles still reference that model and exits with failure. It does not rewrite team configuration.
+- If `config/team.json` cannot be read, ToolBox stops instead of hiding the parse error behind a misleading default model list.
+
+Assign an installed model or pull the missing model in Ollama, then check it again. Cloud models are not part of the local Ollama catalog.
+
 ## Global provider defaults
 
 | Variable | Default |

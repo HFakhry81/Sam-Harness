@@ -1168,6 +1168,33 @@ body {
   font-size: 0.75rem;
 }
 
+.team-model-cell {
+  min-width: 10rem;
+}
+
+.team-model-cell input {
+  width: 100%;
+  min-width: 9rem;
+  padding: 0.35rem 0.45rem;
+  direction: ltr;
+  text-align: left;
+  font: 0.75rem var(--mono);
+}
+
+.team-model-warning {
+  display: block;
+  margin-top: 0.25rem;
+  color: var(--danger, #c65353);
+}
+
+#teamModelStatus.error {
+  color: var(--danger, #c65353);
+}
+
+#teamModelStatus.success {
+  color: var(--success, #4a9d68);
+}
+
 .chip {
   display: inline-block;
   padding: 0.15rem 0.5rem;
@@ -1760,6 +1787,60 @@ html[dir="ltr"] .report-head h2 {
 
 .chat-tools .force-agency {
   margin: 0;
+}
+
+.chat-model-label {
+  color: var(--muted);
+}
+
+.chat-tools select {
+  border: 1px solid var(--line-strong);
+  border-radius: 8px;
+  background: var(--bg1);
+  color: var(--text);
+  font: inherit;
+  padding: 0.3rem 0.5rem;
+}
+
+.chat-sources {
+  margin: 0.55rem 0 0;
+  padding-inline-start: 1.25rem;
+  color: var(--muted);
+  font-size: 0.82rem;
+}
+
+.chat-sources a {
+  color: var(--sage);
+  overflow-wrap: anywhere;
+}
+
+.chat-tool-meta {
+  margin-top: 0.55rem;
+  color: var(--muted);
+  font-size: 0.78rem;
+}
+
+.chat-choices {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+  margin-top: 0.75rem;
+}
+
+.chat-choice {
+  border: 1px solid var(--line-strong);
+  border-radius: 999px;
+  background: var(--bg1);
+  color: var(--text);
+  cursor: pointer;
+  font: inherit;
+  font-size: 0.8rem;
+  padding: 0.4rem 0.75rem;
+}
+
+.chat-choice:hover {
+  border-color: var(--sage);
+  background: color-mix(in oklab, var(--sage) 14%, var(--bg1));
 }
 
 .path-badge[data-path="chat"],

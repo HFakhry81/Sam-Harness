@@ -2,7 +2,12 @@
  * Intent router — deterministic rules first, optional tiny local model, safe clarify fallback.
  * Must run before any agency / ops pipeline.
  */
-import type { IntentClass, IntentDecision, IntentRoute } from "./types.js";
+import type {
+  IntentClass,
+  IntentDecision,
+  IntentModelOutput,
+  IntentRoute,
+} from "./types.js";
 import { detectUserLanguage } from "../quickPath/language.js";
 
 /** Confidence below this triggers optional model triage (when provided). */
@@ -16,6 +21,9 @@ const GREETING_ONLY_RE =
 
 const SMALLTALK_ONLY_RE =
   /^(?:thanks|thank\s*you|ty|thx|شكراً?|يسلمو|تمام|ok+|okay|cool|nice|bye|goodbye|مع\s*السلامة|باي|تصبح\s*على\s*خير)[\s!?.،؟!~]*$/iu;
+
+const VAGUE_SHORT_RE =
+  /^(?:(?:maybe\s+)?(?:this|that|it)|do\s+it|handle\s+this|help(?:\s+me)?|continue|what\s+now|هذا|هذه|ذلك|تلك|هو|هي|ساعدني|نفّذ|نفذ|أكمل|اكمل)[\s!?.،؟!~]*$/iu;
 
 /** Greeting + self-intro / name fluff — still chat (the owner greeting from the bug report). */
 const GREETING_INTRO_RE =
@@ -89,11 +97,11 @@ const REPORT_CUE_RE =
 
 /** Filesystem inspection questions. They look like questions but need tools. */
 const FS_INSPECT_RE =
-  /(?:\bhow\s+many\s+(?:files?|folders?|directories)\b|\bcount\s+(?:the\s+)?files?\b|\bfile\s+count\b|\bsize\s+of\s+(?:the\s+)?(?:folder|directory)\b|\bdisk\s+usage\b|\blist\s+(?:the\s+)?files\b|كم\s+عدد\s+ال?ملفات|عدد\s+ال?ملفات|كم\s+ملف|احسب\s+(?:حجم|عدد)|حجم\s+(?:مجلد|المجلد|المسار)|قائمة\s+ال?ملفات)/iu;
+  /(?:\bhow\s+many\s+(?:files?|folders?|directories)\b|\bcount\s+(?:the\s+)?files?\b|\bfile\s+count\b|\bsize\s+of\s+(?:the\s+)?(?:folder|directory)\b|\bdisk\s+usage\b|\blist\s+(?:the\s+)?(?:all\s+)?files\b|\bshow\s+(?:me\s+)?(?:all\s+)?files\b|كم\s+عدد\s+ال?ملفات|عدد\s+ال?ملفات|كم\s+ملف|احسب\s+(?:حجم|عدد)|حجم\s+(?:مجلد|المجلد|المسار)|قائمة\s+ال?ملفات|(?:اريد|أريد)\s+(?:معرفة|عرض|قائمة)\s+(?:ب)?ال?ملفات)/iu;
 
 /** Bug-fix requests on real code — complex even without an absolute path. */
 const FIX_CODE_RE =
-  /(?:\b(?:fix|debug|patch|resolve)\b[^.!?]{0,60}\b(?:bug|error|exception|test|build|login|crash|issue|regression|typescript|compile)\b|\b(?:bug|error|exception|crash)\b[^.!?]{0,40}\b(?:fix|debug|patch|resolve)\b|أصلح\s+(?:ال)?(?:خطأ|عطل|مشكلة|بق)|صلّ?ح\s+(?:ال)?(?:خطأ|عطل|مشكلة))/iu;
+  /(?:\b(?:fix|debug|patch|resolve)\b[^.!?]{0,60}\b(?:bug|error|exception|test|build|login|crash|issue|regression|typescript|compile)\b|\b(?:bug|error|exception|crash)\b[^.!?]{0,40}\b(?:fix|debug|patch|resolve)\b|(?:حل|حلّ)\s+(?:ال)?مشكلة|(?:أصلح|اصلح|صلّ?ح)\s+(?:ال)?(?:خطأ|عطل|مشكلة|بق))/iu;
 
 function decision(
   route: IntentRoute,
@@ -149,6 +157,17 @@ export function classifyIntentHeuristic(prompt: string): IntentDecision {
       0.97,
       "greeting/smalltalk pattern",
       "heuristic"
+    );
+  }
+
+  if (VAGUE_SHORT_RE.test(compact)) {
+    return decision(
+      "clarify",
+      "clarify",
+      0.5,
+      "vague short prompt requires clarification",
+      "heuristic",
+      clarifyQuestionFor(compact)
     );
   }
 
@@ -245,13 +264,13 @@ export function classifyIntentHeuristic(prompt: string): IntentDecision {
     );
   }
 
-  // "how many files…" looks like a question but requires filesystem tools.
+  // Read-only filesystem questions can use the chat agent's bounded tool loop.
   if (hasFsInspect && !hasComplex) {
     return decision(
-      "task",
-      "simple_task",
+      "chat",
+      "simple_question",
       0.84,
-      "filesystem inspection cue → task",
+      "filesystem inspection cue → chat tools",
       "heuristic"
     );
   }
@@ -384,7 +403,9 @@ export type ClassifyOptions = {
    * Optional cheap local model (<=3B) triage when heuristic confidence is low.
    * Must return an IntentRoute (or null to keep heuristic).
    */
-  modelClassify?: (prompt: string) => Promise<IntentRoute | null>;
+  modelClassify?: (
+    prompt: string
+  ) => Promise<IntentRoute | IntentModelOutput | null>;
 };
 
 /**
@@ -418,7 +439,11 @@ export async function classifyIntent(
   }
 
   try {
-    const modelRoute = await opts.modelClassify(prompt);
+    const modelOutput = await opts.modelClassify(prompt);
+    const modelRoute =
+      typeof modelOutput === "string" ? modelOutput : modelOutput?.route;
+    const details =
+      typeof modelOutput === "string" ? undefined : modelOutput || undefined;
     if (
       modelRoute === "chat" ||
       modelRoute === "research" ||
@@ -435,23 +460,31 @@ export async function classifyIntent(
             : modelRoute === "task"
               ? "simple_task"
               : "complex_task";
-      return decision(
+      return {
+        ...decision(
         modelRoute,
         intent,
         Math.max(result.confidence, 0.78),
         `model override of heuristic (${result.route})`,
         "model"
-      );
+        ),
+        ...(details?.searchQuery ? { searchQuery: details.searchQuery } : {}),
+      };
     }
     if (modelRoute === "clarify") {
-      return decision(
+      return {
+        ...decision(
         "clarify",
         "clarify",
         0.6,
         "model requested clarify",
         "model",
-        clarifyQuestionFor(prompt)
-      );
+          details?.clarifyQuestion || clarifyQuestionFor(prompt)
+        ),
+        ...(details?.clarifyOptions?.length
+          ? { clarifyOptions: details.clarifyOptions }
+          : {}),
+      };
     }
   } catch {
     /* keep heuristic */

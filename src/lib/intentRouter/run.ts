@@ -22,6 +22,7 @@ import {
   modelClassifyIntentRoute,
   withTimeout,
   CHAT_MODEL_TIMEOUT_MS,
+  CLOUD_MODEL_TIMEOUT_MS,
 } from "./model.js";
 import {
   runWebSearch,
@@ -31,7 +32,9 @@ import {
   type WebSearchResult,
 } from "../quickPath/webSearch.js";
 import type { DetectedLanguage, QuickPathSource } from "../quickPath/types.js";
+import type { ChatModelPreference } from "../quickPath/quickModel.js";
 import type { ChatTurn } from "../conversation/context.js";
+import { runChatToolLoop } from "./toolLoop.js";
 
 export type IntentRouterEvent = {
   type: string;
@@ -55,6 +58,7 @@ export type IntentRouterResult = {
   notePath?: string;
   searchFailureReason?: string;
   skippedModel?: boolean;
+  toolsUsed?: Array<{ name: string; ok: boolean; message: string }>;
   /** True when no report folder / task.ts / pack artifacts were written. */
   noArtifacts: boolean;
 };
@@ -77,6 +81,9 @@ export type RunIntentRouterInput = {
   writeResearchNote?: boolean;
   /** Bounded prior turns (oldest → newest) for chat/research continuity. */
   history?: ReadonlyArray<ChatTurn>;
+  /** Bounded context retrieved from other chat sessions and saved insights. */
+  memoryContext?: string;
+  modelPreference?: ChatModelPreference;
 };
 
 /** Deterministic chat reply when local model is unavailable — never escalate to agency. */
@@ -144,6 +151,9 @@ async function runChatReply(input: {
   allowInjectedModel?: boolean;
   /** Bounded prior turns (oldest → newest). */
   history?: ReadonlyArray<ChatTurn>;
+  memoryContext?: string;
+  modelPreference?: ChatModelPreference;
+  onEvent?: (event: IntentRouterEvent) => void;
 }): Promise<{
   reply: string;
   model?: string;
@@ -151,6 +161,8 @@ async function runChatReply(input: {
   cloud?: boolean;
   language: DetectedLanguage;
   skippedModel?: boolean;
+  error?: string;
+  toolsUsed?: Array<{ name: string; ok: boolean; message: string }>;
 }> {
   const lang = detectUserLanguage(input.prompt);
   // Greetings / high-confidence heuristic chat: instantaneous deterministic reply.
@@ -171,46 +183,66 @@ async function runChatReply(input: {
   const kind =
     input.decision.intent === "smalltalk"
       ? "Respond as a brief friendly greeting/acknowledgment."
-      : "Answer the simple question briefly and accurately. No tools. No files.";
+      : "Answer the user's request accurately and concisely. Use available read-only tools when needed.";
   try {
     const call = await withTimeout(
-      input.invokeModel({
+      runChatToolLoop({
         cwd: input.cwd,
         runId: input.runId,
-        numPredict: 220,
         prompt: input.prompt,
         history: input.history,
-        system: [
-          "You are Sam-Harness chat assistant.",
+        memoryContext: input.memoryContext,
+        systemDirective: [
           kind,
-          "Use the prior conversation only to resolve references; never invent facts.",
+          "Use prior conversation only to resolve references; never invent facts.",
           languageReplyDirective(lang),
         ].join("\n"),
+        modelPreference: input.modelPreference,
+        invokeModel: input.invokeModel,
+        onEvent: input.onEvent,
       }),
-      CHAT_MODEL_TIMEOUT_MS,
-      "chat model"
+      input.modelPreference === "cloud"
+        ? CLOUD_MODEL_TIMEOUT_MS * 3
+        : CHAT_MODEL_TIMEOUT_MS * 6,
+      "chat tool loop"
     );
     return {
-      reply: call.text || fallbackChatReply(input.prompt, lang),
+      reply: call.reply || fallbackChatReply(input.prompt, lang),
       model: call.model,
       costUsd: call.costUsd,
       cloud: call.cloud,
       language: lang,
       skippedModel: false,
+      toolsUsed: call.toolsUsed,
     };
-  } catch {
+  } catch (e) {
+    const error = e instanceof Error ? e.message : String(e);
+    if (input.modelPreference === "cloud") {
+      return {
+        reply:
+          lang === "ar" || lang === "mixed"
+            ? `تعذّر استخدام النموذج السحابي: ${error}`
+            : `The cloud model could not be used: ${error}`,
+        language: lang,
+        skippedModel: true,
+        error,
+      };
+    }
     return {
-      reply: fallbackChatReply(input.prompt, lang),
+      reply:
+        lang === "ar" || lang === "mixed"
+          ? `تعذّر الاتصال بنموذج Ollama المحلي: ${error}\nتأكد من تشغيل Ollama وتثبيت النموذج المحدد (ollama list / ollama pull <model>).`
+          : `Could not connect to the local Ollama model: ${error}\nMake sure Ollama is running and the configured model is installed (ollama list / ollama pull <model>).`,
       language: lang,
-      costUsd: 0,
-      cloud: false,
       skippedModel: true,
+      error,
     };
   }
 }
 
 async function runResearch(input: {
   prompt: string;
+  searchQuery?: string;
   cwd: string;
   runId?: string;
   invokeModel: typeof invokeQuickModel;
@@ -220,6 +252,8 @@ async function runResearch(input: {
   writeResearchNote?: boolean;
   allowInjectedModel?: boolean;
   history?: ReadonlyArray<ChatTurn>;
+  memoryContext?: string;
+  modelPreference?: ChatModelPreference;
 }): Promise<{
   reply: string;
   model?: string;
@@ -230,6 +264,7 @@ async function runResearch(input: {
   notePath?: string;
   searchFailureReason?: string;
   skippedModel?: boolean;
+  error?: string;
 }> {
   const lang = detectUserLanguage(input.prompt);
   const emit = (ev: IntentRouterEvent) => {
@@ -241,7 +276,7 @@ async function runResearch(input: {
   };
 
   const search: WebSearchResult = await input.webSearch({
-    query: input.prompt,
+    query: input.searchQuery || input.prompt,
     runId: input.runId,
     approved: input.networkApproved,
     fetchPages: true,
@@ -299,6 +334,7 @@ async function runResearch(input: {
   let costUsd = 0;
   let cloud = false;
   let skippedModel = false;
+  let modelError: string | undefined;
   // Hermetic / no-model mode: cite sources without calling a real LLM.
   if (isHermeticIntentMode() && !input.allowInjectedModel) {
     text =
@@ -325,10 +361,16 @@ async function runResearch(input: {
           history: input.history,
           system: [
             "You are a grounded research summarizer.",
+            input.memoryContext
+              ? `Prior Sam-Harness context (use only to interpret references, not as research evidence):\n${input.memoryContext}`
+              : "",
             languageReplyDirective(lang),
           ].join("\n"),
+          modelPreference: input.modelPreference,
         }),
-        CHAT_MODEL_TIMEOUT_MS * 2,
+        input.modelPreference === "cloud"
+          ? CLOUD_MODEL_TIMEOUT_MS
+          : CHAT_MODEL_TIMEOUT_MS * 2,
         "research model"
       );
       text = call.text;
@@ -336,7 +378,14 @@ async function runResearch(input: {
       costUsd = call.costUsd;
       cloud = call.cloud;
     } catch (e: any) {
-      text = emptyResearchReply(lang, e?.message || String(e));
+      const error = e?.message || String(e);
+      modelError = error;
+      text =
+        input.modelPreference === "cloud"
+          ? lang === "ar" || lang === "mixed"
+            ? `تعذّر استخدام النموذج السحابي لتلخيص نتائج البحث: ${error}`
+            : `The cloud model could not summarize the search results: ${error}`
+          : emptyResearchReply(lang, error);
       skippedModel = true;
     }
   }
@@ -373,6 +422,7 @@ async function runResearch(input: {
     cloud,
     notePath,
     skippedModel,
+    error: modelError,
   };
 }
 
@@ -460,6 +510,7 @@ export async function runIntentRouter(
     if (decision.route === "research") {
       const partial = await runResearch({
         prompt: input.prompt,
+        searchQuery: decision.searchQuery,
         cwd,
         runId: input.runId,
         invokeModel,
@@ -469,6 +520,8 @@ export async function runIntentRouter(
         writeResearchNote: input.writeResearchNote,
         allowInjectedModel: injectedModel,
         history: input.history,
+        memoryContext: input.memoryContext,
+        modelPreference: input.modelPreference,
       });
       return {
         ok: true,
@@ -489,6 +542,9 @@ export async function runIntentRouter(
       runId: input.runId,
       allowInjectedModel: injectedModel,
       history: input.history,
+      memoryContext: input.memoryContext,
+      modelPreference: input.modelPreference,
+      onEvent: emit,
     });
     return {
       ok: true,

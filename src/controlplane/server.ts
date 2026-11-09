@@ -7,6 +7,8 @@ import * as http from "http";
 import * as path from "path";
 import { fileURLToPath, pathToFileURL } from "url";
 import { spawn, type ChildProcessWithoutNullStreams } from "child_process";
+import { terminateChildProcessTree } from "./processTree.js";
+import { summarizeRunOutcome } from "./runOutcome.js";
 import {
   buildTaskDraft,
   persistComposeDraft,
@@ -136,12 +138,21 @@ import {
 import type { IntentRoute } from "../lib/intentRouter/types.js";
 import {
   appendMessage,
+  buildChatMemoryContext,
   loadConversation,
   newConversationId,
+  parseRememberRequest,
+  rememberChatFact,
   resetConversation,
 } from "../lib/conversation/history.js";
 import { buildChatContext } from "../lib/conversation/context.js";
 import { localOllamaOptions } from "../lib/ollamaLocal.js";
+import {
+  inspectLocalOllamaModel,
+  listLocalOllamaModels,
+  ollamaModelNamesMatch,
+  usesOllamaLocalProvider,
+} from "../lib/ollamaModels.js";
 import {
   addDailyJob,
   loadDailyOps,
@@ -298,6 +309,8 @@ type SseClient = { id: number; res: http.ServerResponse };
 let sseId = 0;
 const sseClients = new Map<number, SseClient>();
 let activeChild: ChildProcessWithoutNullStreams | null = null;
+let runActive = false;
+let activeRunCancelled = false;
 let session: AgencySession = loadSession(ROOT);
 let currentDraft: TaskDraft | null = null;
 let runLogBuffer = "";
@@ -437,7 +450,7 @@ async function handleCompose(req: http.IncomingMessage, res: http.ServerResponse
   }
 
   // Never overwrite canonical task.* while an agent run is live (prevents goal contamination)
-  if (activeChild) {
+  if (runActive) {
     sendJson(res, 409, {
       ok: false,
       error:
@@ -522,6 +535,7 @@ function appendLog(text: string) {
 }
 
 async function finalizeRun(mode: RunMode, exitCode: number | null) {
+  const cancelled = activeRunCancelled;
   try {
     mirrorRunArtifacts(ROOT);
   } catch {
@@ -530,6 +544,7 @@ async function finalizeRun(mode: RunMode, exitCode: number | null) {
   endCostRun();
   endOutputRun();
   const endedAt = new Date().toISOString();
+  activeChild = null;
   if (lastRun) {
     lastRun.running = false;
     lastRun.exitCode = exitCode;
@@ -537,7 +552,6 @@ async function finalizeRun(mode: RunMode, exitCode: number | null) {
     lastRun.phase = "done";
   }
   if (activeDurableRunId) {
-    const cancelled = Boolean((lastRun as { cancelled?: boolean } | null)?.cancelled);
     finishDurableRun(activeDurableRunId, {
       ok: exitCode === 0 && !cancelled,
       exitCode,
@@ -552,7 +566,7 @@ async function finalizeRun(mode: RunMode, exitCode: number | null) {
   const arts = readExecutionArtifacts(ROOT);
   // Prefer tool-level success from final-report (file may have ## Verification appended)
   // Ignore stale artifacts older than this run's start (architecture crash left old ops report)
-  let success = exitCode === 0;
+  let success = exitCode === 0 && !cancelled;
   let auditPassed: boolean | null = null;
   let goalPassed: boolean | null = null;
   let goalFidelityScore: number | null = null;
@@ -602,6 +616,7 @@ async function finalizeRun(mode: RunMode, exitCode: number | null) {
   } catch {
     /* keep exit-based */
   }
+  if (cancelled) success = false;
 
   const title = currentDraft?.title || cfg.title || "Untitled task";
   const body = currentDraft?.body || cfg.body || "";
@@ -627,18 +642,37 @@ async function finalizeRun(mode: RunMode, exitCode: number | null) {
     }
   }
 
+  const outcome = summarizeRunOutcome({
+    success,
+    cancelled,
+    exitCode,
+    log: runLogBuffer,
+    artifacts: arts.artifacts,
+  });
+  const summary = arts.summary === "Run finished (no summary file)."
+    ? outcome.summary
+    : `${arts.summary.slice(0, 1_000)}\n\n${outcome.summary}`.slice(0, 2_000);
   const report = buildRunReport({
     success,
     title,
     route: String(route),
     mode,
-    summary: arts.summary,
+    summary,
     artifacts: arts.artifacts,
     taskLifecycle,
     auditPassed,
     goalPassed,
     goalFidelityScore,
   });
+  report.headline = outcome.headline;
+  report.bullets = [
+    `العنوان: ${title}`,
+    `المسار: ${route} · الوضع: ${mode}`,
+    ...(auditPassed != null ? [`التدقيق: ${auditPassed ? "ناجح" : "فاشل"}`] : []),
+    ...(goalPassed != null ? [`مطابقة الهدف: ${goalPassed ? "ناجحة" : "فاشلة"}`] : []),
+    ...outcome.bullets,
+  ];
+  report.nextSteps = outcome.nextSteps;
 
   const entry: SessionEntry = {
     id: `run-${Date.now().toString(36)}`,
@@ -655,7 +689,7 @@ async function finalizeRun(mode: RunMode, exitCode: number | null) {
     endedAt,
     exitCode,
     success,
-    summary: arts.summary,
+    summary,
     artifacts: arts.artifacts,
     logTail: runLogBuffer.slice(-2500),
     auditPassed,
@@ -664,10 +698,30 @@ async function finalizeRun(mode: RunMode, exitCode: number | null) {
     replyPath: "agency",
     report,
     taskLifecycle,
+    ...(cancelled ? { cancelled: true } : {}),
   };
   session.entries.unshift(entry);
   if (session.entries.length > 50) session.entries.length = 50;
   saveSession(ROOT, session);
+
+  if (pendingChatTaskConversationId) {
+    const taskConversationId = pendingChatTaskConversationId;
+    pendingChatTaskConversationId = null;
+    appendMessage(
+      taskConversationId,
+      {
+        role: "assistant",
+        content: `${success ? "Task completed" : "Task did not complete"}: ${title}\n${summary.slice(0, 2_000)}`,
+        route: route === "operational" ? "task" : "complex",
+        noArtifacts: false,
+      },
+      tenantOutputHome()
+    );
+    broadcast(
+      "conversation",
+      loadConversation(taskConversationId, tenantOutputHome())
+    );
+  }
 
   try {
     appendRunLesson(ROOT, {
@@ -685,6 +739,7 @@ async function finalizeRun(mode: RunMode, exitCode: number | null) {
     /* non-fatal */
   }
 
+  runActive = false;
   broadcast("run", {
     type: "end",
     exitCode,
@@ -698,10 +753,13 @@ async function finalizeRun(mode: RunMode, exitCode: number | null) {
   broadcast("ready", {
     message: success
       ? "نجحت المهمة — تم إفراغ Task. اكتب مهمة جديدة."
-      : "فشلت المهمة — Task محفوظ لإعادة المحاولة.",
+      : cancelled
+        ? "أُوقف التشغيل — المهمة محفوظة ويمكن مراجعة ما أُنجز."
+        : "فشلت المهمة — Task محفوظ لإعادة المحاولة.",
     at: endedAt,
     taskLifecycle,
   });
+  activeRunCancelled = false;
 }
 
 function extractPromptForQuickPath(draft: TaskDraft | null, metaRaw: string): string {
@@ -854,6 +912,8 @@ async function finalizeQuickRun(opts: {
   }
   activeDurableRunId = null;
   activeRunStartedMs = 0;
+  runActive = false;
+  activeRunCancelled = false;
 
   broadcast("run", {
     type: "end",
@@ -883,6 +943,7 @@ async function finalizeQuickRun(opts: {
 /** Active chat conversation id for Control Plane (persisted under SAM_OUTPUT_HOME). */
 let conversationId =
   String(process.env.SAM_CONVERSATION_ID || "").trim() || newConversationId();
+let pendingChatTaskConversationId: string | null = null;
 
 /**
  * Chat-first send: intent router before any pipeline.
@@ -896,6 +957,7 @@ async function handleChat(req: http.IncomingMessage, res: http.ServerResponse) {
     forceAgency?: boolean;
     conversationId?: string;
     networkApproved?: boolean | string;
+    modelPreference?: "auto" | "local" | "cloud";
   };
   const message = String(body.message || "").trim();
   if (!message) {
@@ -920,7 +982,37 @@ async function handleChat(req: http.IncomingMessage, res: http.ServerResponse) {
       numPredict: 220,
     },
   });
+  const memoryContext = buildChatMemoryContext(
+    conversationId,
+    tenantOutputHome()
+  );
   appendMessage(conversationId, { role: "user", content: message }, tenantOutputHome());
+
+  const rememberedFact = parseRememberRequest(message);
+  if (rememberedFact) {
+    rememberChatFact(rememberedFact, conversationId, tenantOutputHome());
+    const reply = /[\u0600-\u06ff]/u.test(message)
+      ? "حفظت هذه المعلومة في ذاكرتي للمحادثات القادمة."
+      : "I’ll remember that for future conversations.";
+    appendMessage(
+      conversationId,
+      { role: "assistant", content: reply, route: "chat", noArtifacts: true },
+      tenantOutputHome()
+    );
+    const conversation = loadConversation(conversationId, tenantOutputHome());
+    broadcast("conversation", conversation);
+    sendJson(res, 200, {
+      ok: true,
+      route: "chat",
+      pipeline: false,
+      conversationId,
+      reply,
+      conversation,
+      noArtifacts: true,
+      memorySaved: true,
+    });
+    return;
+  }
 
   // Forced or complex/task → write task.ts then let client/callers hit /api/run
   if (
@@ -940,6 +1032,19 @@ async function handleChat(req: http.IncomingMessage, res: http.ServerResponse) {
       sendJson(res, 400, { ok: false, error: e?.message || String(e) });
       return;
     }
+    pendingChatTaskConversationId = conversationId;
+    appendMessage(
+      conversationId,
+      {
+        role: "assistant",
+        content: /[\u0600-\u06ff]/u.test(message)
+          ? "تم توجيه طلبك إلى مسار مهام Sam-Harness. سيظل التنفيذ خاضعاً لموافقات الحماية المعتادة."
+          : "Your request is now with the Sam-Harness task workflow. Existing approval gates still apply.",
+        route: forceAgency ? "complex" : decision.route,
+        noArtifacts: true,
+      },
+      tenantOutputHome()
+    );
     const conv = loadConversation(conversationId, tenantOutputHome());
     broadcast("task", { draft, spec: draft.spec });
     sendJson(res, 200, {
@@ -975,6 +1080,12 @@ async function handleChat(req: http.IncomingMessage, res: http.ServerResponse) {
       runId,
       forceAgency: false,
       history: chatContext.turns,
+      memoryContext,
+      modelPreference:
+        body.modelPreference === "local" || body.modelPreference === "cloud"
+          ? body.modelPreference
+          : "auto",
+      writeResearchNote: false,
       networkApproved: body.networkApproved,
       onEvent: (ev) => {
         appendLog(`[intent-router] ${ev.type}: ${ev.message}\n`);
@@ -982,11 +1093,48 @@ async function handleChat(req: http.IncomingMessage, res: http.ServerResponse) {
     });
 
     const result = quick?.result;
+    if (!quick) {
+      const clarification = /[\u0600-\u06ff]/u.test(message)
+        ? {
+            question: "هل تريد رداً في المحادثة أم تشغيل مهمة؟",
+            originalMessage: message,
+            options: [
+              { label: "أجب في المحادثة", value: "chat" },
+              { label: "شغّل كوكالة كاملة", value: "task" },
+            ],
+          }
+        : {
+            question: "Would you like a chat response or a task run?",
+            originalMessage: message,
+            options: [
+              { label: "Answer in chat", value: "chat" },
+              { label: "Run as a full task", value: "task" },
+            ],
+          };
+      appendMessage(
+        conversationId,
+        { role: "assistant", content: clarification.question, route: "clarify", noArtifacts: true },
+        tenantOutputHome()
+      );
+      const conversation = loadConversation(conversationId, tenantOutputHome());
+      sendJson(res, 200, {
+        ok: true,
+        route: "clarify",
+        pipeline: false,
+        conversationId,
+        reply: clarification.question,
+        clarification,
+        conversation,
+        noArtifacts: true,
+      });
+      return;
+    }
     const reply =
       result?.reply ||
       decision.clarifyQuestion ||
       "OK";
     const route = (result?.route || decision.route) as IntentRoute;
+    const responseDecision = quick.classification;
 
     appendMessage(
       conversationId,
@@ -1033,8 +1181,32 @@ async function handleChat(req: http.IncomingMessage, res: http.ServerResponse) {
       notePath: result?.notePath || null,
       noArtifacts: true,
       skippedModel: result?.skippedModel !== false,
+      toolsUsed: result?.toolsUsed || [],
       durationMs: result?.durationMs || 0,
       model: result?.model || null,
+      cloud: result?.cloud ?? false,
+      modelError: result?.error || null,
+      clarification:
+        route === "clarify"
+          ? {
+              question: reply,
+              originalMessage: message,
+              options: responseDecision.clarifyOptions?.length
+                ? responseDecision.clarifyOptions.map((option) => ({
+                    label: option,
+                    value: option,
+                  }))
+                : /[\u0600-\u06ff]/u.test(message)
+                  ? [
+                    { label: "أجب في المحادثة", value: "chat" },
+                    { label: "شغّل كوكالة كاملة", value: "task" },
+                  ]
+                  : [
+                    { label: "Answer in chat", value: "chat" },
+                    { label: "Run as a full task", value: "task" },
+                  ],
+            }
+          : null,
       historyTurns: chatContext.turns.length,
       historyChars: chatContext.chars,
     });
@@ -1080,7 +1252,7 @@ async function handleRun(req: http.IncomingMessage, res: http.ServerResponse) {
   const mode = (body.mode || "agency") as RunMode;
   const forceAgency = body.forceAgency === true;
 
-  if (activeChild) {
+  if (runActive) {
     sendJson(res, 409, { ok: false, error: "A run is already in progress" });
     return;
   }
@@ -1197,6 +1369,8 @@ async function handleRun(req: http.IncomingMessage, res: http.ServerResponse) {
   });
   activeDurableRunId = durable.id;
   activeRunStartedMs = Date.now();
+  runActive = true;
+  activeRunCancelled = false;
   const outputRun = beginOutputRun(runId);
   runLogBuffer = "";
   smokePending = mode === "smoke" ? 2 : 0;
@@ -1255,7 +1429,12 @@ async function handleRun(req: http.IncomingMessage, res: http.ServerResponse) {
           runId: durable.id,
           forceAgency: false,
           history: chatContext.turns,
+          memoryContext: buildChatMemoryContext(
+            conversationId,
+            tenantOutputHome()
+          ),
           networkApproved: body.networkApproved,
+          writeResearchNote: false,
           onEvent: (ev) => {
             appendLog(`[intent-router] ${ev.type}: ${ev.message}\n`);
           },
@@ -1390,6 +1569,7 @@ async function handleRun(req: http.IncomingMessage, res: http.ServerResponse) {
       ...(forceAgency ? { FORCE_AGENCY: "1" } : {}),
     },
     shell: true,
+    detached: process.platform !== "win32",
   });
   activeChild = child;
 
@@ -1408,7 +1588,7 @@ async function handleRun(req: http.IncomingMessage, res: http.ServerResponse) {
   child.stderr.on("data", (buf) => appendLog(buf.toString("utf-8")));
   child.on("close", (code) => {
     activeChild = null;
-    if (mode === "smoke" && code === 0 && smokePending > 0) {
+    if (!activeRunCancelled && mode === "smoke" && code === 0 && smokePending > 0) {
       void runSmokeChain(code);
       return;
     }
@@ -1427,11 +1607,17 @@ async function handleRun(req: http.IncomingMessage, res: http.ServerResponse) {
 
 async function runSmokeChain(firstCode: number | null) {
   for (const script of ["smoke:delivery", "smoke:capabilities"]) {
+    if (activeRunCancelled) break;
     await new Promise<void>((resolve) => {
       const child = spawn(
         process.platform === "win32" ? "pnpm.cmd" : "pnpm",
         ["run", script],
-        { cwd: ROOT, shell: true, env: process.env }
+        {
+          cwd: ROOT,
+          shell: true,
+          env: process.env,
+          detached: process.platform !== "win32",
+        }
       );
       activeChild = child;
       broadcast("run", { type: "start", mode: "smoke", script, phase: "running" });
@@ -1449,23 +1635,42 @@ async function runSmokeChain(firstCode: number | null) {
   await finalizeRun("smoke", firstCode);
 }
 
-function handleStop(_req: http.IncomingMessage, res: http.ServerResponse) {
-  if (!activeChild) {
+async function handleStop(_req: http.IncomingMessage, res: http.ServerResponse) {
+  if (!runActive) {
     sendJson(res, 200, { ok: true, stopped: false });
     return;
   }
-  if (activeDurableRunId) {
-    cancelDurableRun(activeDurableRunId);
-    if (lastRun) (lastRun as { cancelled?: boolean }).cancelled = true;
+  const child = activeChild;
+  if (!child) {
+    sendJson(res, 409, {
+      ok: false,
+      error: "The run is preparing and has no stoppable process yet. Try again shortly.",
+    });
+    return;
   }
-  // Kill only — child's "close" handler finalizes session + unlocks UI
-  broadcast("run", { type: "stopped", phase: "running", runId: activeDurableRunId });
-  activeChild.kill();
-  sendJson(res, 200, { ok: true, stopped: true, runId: activeDurableRunId });
+  const runId = activeDurableRunId;
+  activeRunCancelled = true;
+  try {
+    await terminateChildProcessTree(child);
+  } catch (error) {
+    activeRunCancelled = false;
+    const message = error instanceof Error ? error.message : String(error);
+    appendLog(`\n[Error] Stop failed: ${message}\n`);
+    sendJson(res, 500, { ok: false, error: message });
+    return;
+  }
+  if (runId && activeDurableRunId === runId) cancelDurableRun(runId);
+  broadcast("run", {
+    type: "stopped",
+    phase: "running",
+    runId,
+    confirmed: true,
+  });
+  sendJson(res, 200, { ok: true, stopped: true, runId });
 }
 
 function handleReady(_req: http.IncomingMessage, res: http.ServerResponse) {
-  if (activeChild) {
+  if (runActive) {
     sendJson(res, 409, { ok: false, error: "Cannot reset while a run is active" });
     return;
   }
@@ -1481,7 +1686,7 @@ function handleReady(_req: http.IncomingMessage, res: http.ServerResponse) {
 }
 
 function handleSessionReset(_req: http.IncomingMessage, res: http.ServerResponse) {
-  if (activeChild) {
+  if (runActive) {
     sendJson(res, 409, { ok: false, error: "Cannot clear session while running" });
     return;
   }
@@ -1501,7 +1706,7 @@ function handleSse(_req: http.IncomingMessage, res: http.ServerResponse) {
     `event: hello\ndata: ${JSON.stringify({
       ok: true,
       phase: lastRun?.phase || "idle",
-      running: Boolean(activeChild),
+      running: runActive,
     })}\n\n`
   );
   res.write(`event: session\ndata: ${JSON.stringify(session)}\n\n`);
@@ -1881,7 +2086,7 @@ const server = http.createServer(async (req, res) => {
         tenantId: getActiveTenantId(),
         db: dbInfo,
         uptimeSec: getMetrics().uptimeSec,
-        running: Boolean(activeChild),
+        running: runActive,
       });
       return;
     }
@@ -1903,8 +2108,8 @@ const server = http.createServer(async (req, res) => {
       sendJson(res, 200, {
         ok: true,
         root: ROOT,
-        running: Boolean(activeChild),
-        phase: lastRun?.phase || (activeChild ? "running" : "idle"),
+        running: runActive,
+        phase: lastRun?.phase || (runActive ? "running" : "idle"),
         lastRun,
         tasksInSession: session.entries.length,
         port: LISTEN_PORT,
@@ -2272,7 +2477,7 @@ const server = http.createServer(async (req, res) => {
       return;
     }
     if (method === "POST" && p === "/api/stop") {
-      handleStop(req, res);
+      void handleStop(req, res);
       return;
     }
     if (method === "GET" && p === "/api/events") {
@@ -2425,6 +2630,104 @@ const server = http.createServer(async (req, res) => {
     }
 
     // —— Phase 8 — team config CRUD ——
+    if (method === "GET" && p === "/api/team/models") {
+      let config: TeamConfig;
+      try {
+        config = loadTeamConfig(ROOT);
+      } catch (e: any) {
+        sendJson(res, 503, {
+          ok: false,
+          available: false,
+          code: "TEAM_CONFIG_INVALID",
+          error: e?.message || String(e),
+          models: [],
+          roles: [],
+        });
+        return;
+      }
+      const ollama = usesOllamaLocalProvider();
+      let models: Awaited<ReturnType<typeof listLocalOllamaModels>> = [];
+      if (ollama) {
+        try {
+          models = await listLocalOllamaModels({ refresh: true });
+        } catch (e: any) {
+          sendJson(res, 503, {
+            ok: false,
+            available: false,
+            provider: "ollama",
+            error: e?.message || String(e),
+            models: [],
+            roles: [],
+          });
+          return;
+        }
+      }
+      sendJson(res, 200, {
+        ok: true,
+        available: ollama,
+        provider: ollama ? "ollama" : "external",
+        models,
+        roles: config.roles.map((role) => ({
+          id: role.id,
+          enabled: role.enabled,
+          model: role.models.local,
+          installed: ollama
+            ? models.some((entry) =>
+                ollamaModelNamesMatch(entry.name, role.models.local)
+              )
+            : null,
+          overridden: {
+            local: Boolean(
+              String(
+                process.env[
+                  `SAM_ROLE_${role.id.toUpperCase().replace(/[^A-Z0-9]/g, "_")}_MODEL`
+                ] || ""
+              ).trim()
+            ),
+            cloud: Boolean(
+              String(
+                process.env[
+                  `SAM_ROLE_${role.id.toUpperCase().replace(/[^A-Z0-9]/g, "_")}_CLOUD_MODEL`
+                ] || ""
+              ).trim()
+            ),
+          },
+        })),
+      });
+      return;
+    }
+    if (method === "POST" && p === "/api/team/models/check") {
+      let body: { model?: unknown };
+      try {
+        body = JSON.parse((await readBody(req)) || "{}");
+      } catch {
+        sendJson(res, 400, { ok: false, error: "Invalid JSON" });
+        return;
+      }
+      if (typeof body.model !== "string" || !body.model.trim()) {
+        sendJson(res, 400, { ok: false, error: "model is required" });
+        return;
+      }
+      if (!usesOllamaLocalProvider()) {
+        sendJson(res, 409, {
+          ok: false,
+          error: "Model checks are only available for the native Ollama provider.",
+        });
+        return;
+      }
+      try {
+        const result = await inspectLocalOllamaModel(body.model);
+        sendJson(res, 200, { ok: true, ...result });
+      } catch (e: any) {
+        const error = e?.message || String(e);
+        sendJson(res, /not installed|not found|HTTP 404/i.test(error) ? 404 : 503, {
+          ok: false,
+          installed: false,
+          error,
+        });
+      }
+      return;
+    }
     if (method === "GET" && p === "/api/team") {
       sendJson(res, 200, {
         ok: true,
@@ -2462,6 +2765,56 @@ const server = http.createServer(async (req, res) => {
         if (!body.id) {
           sendJson(res, 400, { ok: false, error: "id required" });
           return;
+        }
+        const current = loadTeamConfig(ROOT).roles.find(
+          (role) => role.id === body.id
+        );
+        const roleEnvKey = body.id.toUpperCase().replace(/[^A-Z0-9]/g, "_");
+        if (
+          (typeof body.models?.local === "string" &&
+            String(process.env[`SAM_ROLE_${roleEnvKey}_MODEL`] || "").trim()) ||
+          (typeof body.models?.cloud === "string" &&
+            String(process.env[`SAM_ROLE_${roleEnvKey}_CLOUD_MODEL`] || "").trim())
+        ) {
+          sendJson(res, 409, {
+            ok: false,
+            code: "ROLE_MODEL_ENV_OVERRIDE",
+            error: `Role "${body.id}" has a model override in the environment. Update SAM_ROLE_${roleEnvKey}_MODEL or SAM_ROLE_${roleEnvKey}_CLOUD_MODEL before editing that assignment.`,
+          });
+          return;
+        }
+        const requestedLocalModel =
+          typeof body.models?.local === "string"
+            ? body.models.local.trim()
+            : current?.models.local;
+        if (
+          usesOllamaLocalProvider() &&
+          requestedLocalModel &&
+          (body.enabled === true || typeof body.models?.local === "string")
+        ) {
+          let models;
+          try {
+            models = await listLocalOllamaModels({ refresh: true });
+          } catch (e: any) {
+            sendJson(res, 503, {
+              ok: false,
+              code: "OLLAMA_UNAVAILABLE",
+              error: e?.message || String(e),
+            });
+            return;
+          }
+          if (
+            !models.some(
+              (model) => ollamaModelNamesMatch(model.name, requestedLocalModel)
+            )
+          ) {
+            sendJson(res, 409, {
+              ok: false,
+              code: "LOCAL_MODEL_UNAVAILABLE",
+              error: `Cannot enable or assign role "${body.id}": local model "${requestedLocalModel}" is not installed. Install it or choose an available model.`,
+            });
+            return;
+          }
         }
         const config = upsertTeamRole(ROOT, body as Partial<TeamRoleConfig> & { id: string }, {
           actor: "owner",
@@ -2974,4 +3327,3 @@ async function boot() {
 }
 
 void boot();
-

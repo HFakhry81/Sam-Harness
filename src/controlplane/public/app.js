@@ -207,9 +207,11 @@ const els = {
   btnSend: $("btnSend"),
   chatForm: $("chatForm"),
   chatMessages: $("chatMessages"),
+  chatModel: $("chatModel"),
   btnClearChat: $("btnClearChat"),
   btnBack: $("btnBack"),
   btnStop: $("btnStop"),
+  btnStopTop: $("btnStopTop"),
   btnNewTask: $("btnNewTask"),
   btnNewTaskTop: $("btnNewTaskTop"),
   btnRerun: $("btnRerun"),
@@ -514,6 +516,15 @@ function showStage(name) {
   });
 }
 
+function setStopControls(active) {
+  const enabled = Boolean(active);
+  els.btnStop.disabled = !enabled;
+  if (els.btnStopTop) {
+    els.btnStopTop.hidden = !enabled;
+    els.btnStopTop.disabled = !enabled;
+  }
+}
+
 function showPlatformPanel(view) {
   hideAllMainPanels();
   document.querySelectorAll("#platformNav button").forEach((b) => {
@@ -555,12 +566,66 @@ async function loadTeamUi() {
   const status = $("teamStatus");
   if (!body) return;
   try {
-    const data = await api("/api/team").then((r) => r.json());
+    const [teamResponse, modelsResponse] = await Promise.all([
+      api("/api/team"),
+      api("/api/team/models"),
+    ]);
+    const data = await teamResponse.json();
+    if (!teamResponse.ok || !data.ok) {
+      throw new Error(data.error || `Team settings failed (${teamResponse.status})`);
+    }
+    let modelsData;
+    try {
+      modelsData = await modelsResponse.json();
+    } catch {
+      modelsData = { ok: false, error: "Invalid model inventory response" };
+    }
     const cfg = data.config || {};
     const routing = data.routing || [];
     const routeByRole = Object.fromEntries(
       (routing || []).map((d) => [d.role, d.route])
     );
+    const modelByRole = Object.fromEntries(
+      (modelsData.roles || []).map((entry) => [entry.id, entry])
+    );
+    const modelList = $("teamOllamaModels");
+    if (modelList) {
+      modelList.replaceChildren();
+      (modelsData.models || []).forEach((model) => {
+        const option = document.createElement("option");
+        option.value = model.name;
+        modelList.appendChild(option);
+      });
+    }
+    if ($("teamRoleLocalModel") && !$("teamRoleLocalModel").value) {
+      $("teamRoleLocalModel").value = modelsData.models?.[0]?.name || "";
+    }
+    const modelStatus = $("teamModelStatus");
+    if (modelStatus) {
+      if (modelsData.available) {
+        const missing = (modelsData.roles || [])
+          .filter((entry) => entry.enabled && entry.installed === false)
+          .map((entry) => `${entry.id} → ${entry.model}`);
+        modelStatus.textContent = missing.length
+          ? `${t("team.modelMissing") || "Unavailable model assignments"}: ${missing.join(", ")}`
+          : `${t("team.modelsAvailable") || "Ollama ready"} · ${(modelsData.models || []).length} ${t("team.modelsCount") || "models"}`;
+        modelStatus.classList.toggle("error", missing.length > 0);
+        modelStatus.classList.toggle("success", missing.length === 0);
+      } else if (modelsData.provider === "external") {
+        modelStatus.textContent =
+          t("team.externalProvider") || "Local provider is external; model checks are unavailable.";
+        modelStatus.classList.remove("error", "success");
+      } else if (modelsData.code === "TEAM_CONFIG_INVALID") {
+        modelStatus.textContent =
+          `${t("team.configInvalid") || "Team configuration is invalid"}: ${modelsData.error}`;
+        modelStatus.classList.add("error");
+      } else {
+        modelStatus.textContent =
+          `${t("team.ollamaUnavailable") || "Ollama status unavailable"}: ${modelsData.error || modelsResponse.statusText || modelsResponse.status}`;
+        modelStatus.classList.add("error");
+        modelStatus.classList.remove("success");
+      }
+    }
     if ($("teamPipelineOrder")) {
       $("teamPipelineOrder").value = (cfg.pipeline?.downstreamOrder || []).join(",");
     }
@@ -575,24 +640,115 @@ async function loadTeamUi() {
         <td><code>${escapeHtml(role.id)}</code>${role.builtin ? "" : " · custom"}</td>
         <td>${escapeHtml(role.title || "")}</td>
         <td>${role.enabled ? "✓" : "—"}</td>
-        <td><code>${escapeHtml(role.models?.local || "")}</code></td>
-        <td><code>${escapeHtml(role.models?.cloud || "")}</code></td>
+        <td class="team-model-cell"></td>
+        <td class="team-model-cell"><input class="team-cloud-model" aria-label="${escapeHtml(role.id)} cloud model" value="${escapeHtml(role.models?.cloud || "")}" /></td>
         <td>${escapeHtml(routeLabel)}</td>
         <td class="ops-actions"></td>`;
+      const localCell = tr.querySelector(".team-model-cell");
+      const localInput = document.createElement("input");
+      localInput.className = "team-local-model";
+      localInput.setAttribute("aria-label", `${role.id} local model`);
+      localInput.setAttribute("list", "teamOllamaModels");
+      localInput.value = role.models?.local || "";
+      localInput.autocomplete = "off";
+      localCell.appendChild(localInput);
+      const health = modelByRole[role.id];
+      const cloudInput = tr.querySelector(".team-cloud-model");
+      localInput.disabled = Boolean(health?.overridden?.local);
+      cloudInput.disabled = Boolean(health?.overridden?.cloud);
+      if (localInput.disabled || cloudInput.disabled) {
+        localInput.title = cloudInput.title =
+          t("team.envOverride") || "This model is controlled by an environment override.";
+      }
+      if (health?.installed === false) {
+        const warning = document.createElement("small");
+        warning.className = "team-model-warning";
+        warning.textContent = t("team.modelMissingShort") || "Not installed";
+        localCell.appendChild(warning);
+      }
       const actions = tr.querySelector(".ops-actions");
+      const save = document.createElement("button");
+      save.type = "button";
+      save.className = "btn ghost tiny";
+      save.textContent = t("team.saveModel") || "Save models";
+      save.disabled = Boolean(
+        health?.overridden?.local && health?.overridden?.cloud
+      );
+      save.addEventListener("click", async () => {
+        try {
+          const models = {};
+          if (!health?.overridden?.local) {
+            models.local = localInput.value.trim();
+          }
+          if (!health?.overridden?.cloud) {
+            models.cloud = cloudInput.value.trim();
+          }
+          if (!Object.keys(models).length) return;
+          const response = await api("/api/team/roles", {
+            method: "POST",
+            body: JSON.stringify({
+              id: role.id,
+              models,
+            }),
+          });
+          const result = await response.json();
+          if (!response.ok || !result.ok) {
+            throw new Error(result.error || `Save failed (${response.status})`);
+          }
+          if (status) status.textContent = `${role.id} · ${t("team.saved") || "saved"}`;
+          await loadTeamUi();
+        } catch (e) {
+          if (status) status.textContent = e.message || String(e);
+        }
+      });
+      actions.appendChild(save);
+      const check = document.createElement("button");
+      check.type = "button";
+      check.className = "btn ghost tiny";
+      check.textContent = t("team.checkModel") || "Check";
+      check.addEventListener("click", async () => {
+        try {
+          const response = await api("/api/team/models/check", {
+            method: "POST",
+            body: JSON.stringify({ model: localInput.value.trim() }),
+          });
+          const result = await response.json();
+          if (!response.ok || !result.ok) {
+            throw new Error(result.error || `Model check failed (${response.status})`);
+          }
+          if (status) {
+            status.textContent = `${result.model.name} · ${t("team.modelReady") || "installed and reachable"}`;
+          }
+        } catch (e) {
+          if (status) status.textContent = e.message || String(e);
+        }
+      });
+      actions.appendChild(check);
       if (role.stage === "downstream" || !role.builtin) {
         const toggle = document.createElement("button");
         toggle.type = "button";
         toggle.className = "btn ghost tiny";
+        toggle.disabled = !role.enabled && health?.installed === false;
+        if (toggle.disabled) {
+          toggle.title = t("team.assignBeforeEnable") || "Assign an installed model before enabling this role.";
+        }
         toggle.textContent = role.enabled
           ? t("team.disable") || "Disable"
           : t("team.enable") || "Enable";
         toggle.addEventListener("click", async () => {
-          await api("/api/team/roles", {
-            method: "POST",
-            body: JSON.stringify({ id: role.id, enabled: !role.enabled }),
-          });
-          loadTeamUi();
+          try {
+            const response = await api("/api/team/roles", {
+              method: "POST",
+              body: JSON.stringify({ id: role.id, enabled: !role.enabled }),
+            });
+            const result = await response.json();
+            if (!response.ok || !result.ok) {
+              throw new Error(result.error || `Role update failed (${response.status})`);
+            }
+            await loadTeamUi();
+          } catch (e) {
+            if (status) status.textContent = e.message || String(e);
+          }
         });
         actions.appendChild(toggle);
       }
@@ -602,10 +758,19 @@ async function loadTeamUi() {
         del.className = "btn ghost tiny";
         del.textContent = t("team.delete") || "Delete";
         del.addEventListener("click", async () => {
-          await api(`/api/team/roles/${encodeURIComponent(role.id)}`, {
-            method: "DELETE",
-          });
-          loadTeamUi();
+          if (!window.confirm(t("team.confirmDelete") || `Delete role ${role.id}?`)) return;
+          try {
+            const response = await api(`/api/team/roles/${encodeURIComponent(role.id)}`, {
+              method: "DELETE",
+            });
+            const result = await response.json();
+            if (!response.ok || !result.ok) {
+              throw new Error(result.error || `Delete failed (${response.status})`);
+            }
+            await loadTeamUi();
+          } catch (e) {
+            if (status) status.textContent = e.message || String(e);
+          }
         });
         actions.appendChild(del);
       }
@@ -1043,7 +1208,7 @@ function showRun(draft) {
   configureRunOptions(draft);
   showStage("run");
   els.runGrid?.classList.remove("is-busy");
-  els.btnStop.disabled = true;
+  setStopControls(false);
   els.runState.textContent = "ready";
 }
 
@@ -1244,7 +1409,7 @@ function isChatRoute(route) {
   );
 }
 
-function appendChatBubble(role, content, route) {
+function appendChatBubble(role, content, route, extra = {}) {
   if (!els.chatMessages) return;
   const empty = els.chatMessages.querySelector(".chat-empty");
   if (empty) empty.remove();
@@ -1260,6 +1425,70 @@ function appendChatBubble(role, content, route) {
   const body = document.createElement("div");
   body.textContent = content || "";
   div.appendChild(body);
+  if (role === "assistant" && Array.isArray(extra.sources) && extra.sources.length) {
+    const sources = document.createElement("ul");
+    sources.className = "chat-sources";
+    extra.sources.forEach((source) => {
+      if (!source?.url || !/^https?:\/\//i.test(source.url)) return;
+      const item = document.createElement("li");
+      const link = document.createElement("a");
+      link.href = source.url;
+      link.target = "_blank";
+      link.rel = "noopener noreferrer";
+      link.textContent = source.title || source.url;
+      item.appendChild(link);
+      sources.appendChild(item);
+    });
+    if (sources.childElementCount) div.appendChild(sources);
+  }
+  if (role === "assistant" && Array.isArray(extra.toolsUsed) && extra.toolsUsed.length) {
+    const tools = document.createElement("div");
+    tools.className = "chat-tool-meta";
+    const names = [...new Set(extra.toolsUsed.map((item) => item?.name).filter(Boolean))];
+    tools.textContent = `${t("compose.toolsUsed") || "Tools used"}: ${names.join(", ")}`;
+    div.appendChild(tools);
+  }
+  if (role === "assistant" && extra.clarification?.options?.length) {
+    const choices = document.createElement("div");
+    choices.className = "chat-choices";
+    extra.clarification.options.forEach((option) => {
+      const button = document.createElement("button");
+      button.type = "button";
+      button.className = "chat-choice";
+      button.textContent = option.label || option.value;
+      button.addEventListener("click", () => {
+        const prompt = els.prompt;
+        if (!prompt || busy) return;
+        const isArabic = /[\u0600-\u06ff]/u.test(
+          extra.clarification.originalMessage || ""
+        );
+        const taskPrefix = isArabic
+          ? "شغّل كوكالة كاملة: "
+          : "Run this as a full agency task: ";
+        const chatPrefix = isArabic
+          ? "أجب في المحادثة عن: "
+          : "Answer in chat about: ";
+        if (option.value === "task") {
+          prompt.value = `${taskPrefix}${extra.clarification.originalMessage || ""}`;
+        } else if (option.value === "chat") {
+          prompt.value = `${chatPrefix}${extra.clarification.originalMessage || ""}`;
+        } else {
+          prompt.value = isArabic
+            ? `اختياري هو: ${option.label || option.value}`
+            : `My choice is: ${option.label || option.value}`;
+        }
+        const wasForced = Boolean(els.forceAgency?.checked);
+        if (option.value === "task" && els.forceAgency) {
+          els.forceAgency.checked = true;
+        }
+        void sendChatMessage().finally(() => {
+          if (els.forceAgency) els.forceAgency.checked = wasForced;
+        });
+      });
+      choices.appendChild(button);
+    });
+    div.appendChild(choices);
+  }
   els.chatMessages.appendChild(div);
   els.chatMessages.scrollTop = els.chatMessages.scrollHeight;
 }
@@ -1276,7 +1505,9 @@ function renderConversation(messages) {
     return;
   }
   list.forEach((m) => {
-    appendChatBubble(m.role === "user" ? "user" : "assistant", m.content, m.route);
+    appendChatBubble(m.role === "user" ? "user" : "assistant", m.content, m.route, {
+      sources: m.sources,
+    });
   });
 }
 
@@ -1317,6 +1548,7 @@ async function sendChatMessage() {
         message: text,
         forceAgency,
         conversationId: conversationId || undefined,
+        modelPreference: els.chatModel?.value || "auto",
       }),
     });
     const data = await res.json();
@@ -1336,10 +1568,16 @@ async function sendChatMessage() {
       lastDraft = data.draft || lastDraft;
       showStage("run");
       clearInterval(chatTick);
+      busy = false;
+      if (els.btnSend) els.btnSend.disabled = false;
       await runMode("agency");
       return;
     }
-    appendChatBubble("assistant", data.reply || "", route);
+    appendChatBubble("assistant", data.reply || "", route, {
+      sources: data.sources,
+      clarification: data.clarification,
+      toolsUsed: data.toolsUsed,
+    });
     if (data.conversation?.messages) {
       conversationMessages = data.conversation.messages;
     }
@@ -1348,7 +1586,10 @@ async function sendChatMessage() {
       els.artifactPanel.hidden = true;
       els.artifactPanel.open = false;
     }
-    els.healthMeta.textContent = `ready · ${pathLabel(route)}`;
+    const modelLabel = data.model
+      ? ` · ${data.model} (${data.cloud ? "cloud" : "local"})`
+      : "";
+    els.healthMeta.textContent = `ready · ${pathLabel(route)}${modelLabel}`;
   } catch (e) {
     appendChatBubble(
       "assistant",
@@ -1383,7 +1624,7 @@ function showDone(entry) {
   if (chatStyle) {
     lastFailed = false;
     busy = false;
-    els.btnStop.disabled = true;
+    setStopControls(false);
     els.runGrid?.classList.remove("is-busy");
     if (entry.replyPath) setPathBadge(entry.replyPath);
     if (entry.summary) {
@@ -1399,9 +1640,13 @@ function showDone(entry) {
   }
   lastFailed = !entry.success;
   busy = false;
-  els.btnStop.disabled = true;
+  setStopControls(false);
   els.runGrid?.classList.remove("is-busy");
-  els.doneTitle.textContent = entry.success ? "تم بنجاح." : "لم تكتمل.";
+  els.doneTitle.textContent = entry.cancelled
+    ? "أُوقف التشغيل."
+    : entry.success
+      ? "تم بنجاح."
+      : "لم تكتمل.";
   const pathBit = entry.replyPath ? ` · ${pathLabel(entry.replyPath)}` : "";
   els.doneMeta.textContent = `${entry.title} · ${entry.route} · ${entry.mode}${pathBit} · exit ${entry.exitCode}`;
   if (entry.replyPath) setPathBadge(entry.replyPath);
@@ -1418,13 +1663,17 @@ function showDone(entry) {
   els.btnRerun.style.display = entry.success ? "none" : "";
   if (entry.success) clearLocalDraft();
   showStage("done");
-  els.healthMeta.textContent = entry.success ? "ready · task cleared" : "ready · retry kept";
+  els.healthMeta.textContent = entry.cancelled
+    ? "ready · run stopped · task kept"
+    : entry.success
+      ? "ready · task cleared"
+      : "ready · retry kept";
   if (showReports) loadArtifacts();
 }
 
 async function resetForNewTask() {
   if (busy) {
-    alert("انتظر انتهاء التشغيل الحالي أو أوقفه أولاً");
+    showStage("compose");
     return;
   }
   const hasText = (els.prompt.value || "").trim().length > 0;
@@ -1493,26 +1742,39 @@ async function runMode(mode) {
       "   Tip: follow [OK] / [Error] / LIVE lines like the desktop launcher.\n\n"
   );
   els.runState.textContent = `starting:${mode}`;
-  els.btnStop.disabled = false;
+  setStopControls(true);
   els.runGrid?.classList.add("is-busy");
   busy = true;
   showStage("run");
 
   const forceAgency = Boolean(els.forceAgency?.checked);
-  const res = await api("/api/run", {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({
-      mode,
-      confirmImplement: mode === "implement",
-      forceAgency,
-    }),
-  });
-  const data = await res.json();
+  let res;
+  let data;
+  try {
+    res = await api("/api/run", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        mode,
+        confirmImplement: mode === "implement",
+        forceAgency,
+      }),
+    });
+    data = await res.json();
+  } catch (error) {
+    busy = false;
+    setStopControls(false);
+    els.runState.textContent = "error";
+    els.runGrid?.classList.remove("is-busy");
+    const message = error?.message || String(error);
+    appendLog(`\n[Error] Could not start run: ${message}\n`);
+    els.healthMeta.textContent = `run start failed · ${message}`;
+    return;
+  }
   if (!res.ok || !data.ok) {
     busy = false;
     els.runState.textContent = "error";
-    els.btnStop.disabled = true;
+    setStopControls(false);
     els.runGrid?.classList.remove("is-busy");
     appendLog(`\n[Error] ${data.error || res.statusText}\n`);
     if (data.blockedRepeat) {
@@ -1611,13 +1873,34 @@ $("btnClarifySubmit").addEventListener("click", async () => {
 });
 
 els.btnBack.addEventListener("click", () => {
-  if (busy) return;
   showStage("compose");
 });
 
-els.btnStop.addEventListener("click", async () => {
-  await api("/api/stop", { method: "POST" });
-});
+async function stopRun() {
+  if (!busy) return;
+  els.btnStop.disabled = true;
+  if (els.btnStopTop) els.btnStopTop.disabled = true;
+  try {
+    const response = await api("/api/stop", { method: "POST" });
+    const result = await response.json();
+    if (!response.ok || !result.ok) {
+      throw new Error(result.error || response.statusText || "Could not stop the run");
+    }
+    if (result.stopped) {
+      els.runState.textContent = "stopping · waiting for process exit";
+      els.healthMeta.textContent = "run: stopping";
+    } else {
+      setStopControls(false);
+    }
+  } catch (error) {
+    appendLog(`\n[Error] Stop failed: ${error?.message || String(error)}\n`);
+    els.healthMeta.textContent = `stop failed · ${error?.message || String(error)}`;
+    setStopControls(true);
+  }
+}
+
+els.btnStop.addEventListener("click", stopRun);
+els.btnStopTop?.addEventListener("click", stopRun);
 
 els.btnNewTask.addEventListener("click", () => resetForNewTask());
 els.btnNewTaskTop.addEventListener("click", () => resetForNewTask());
@@ -1711,10 +1994,6 @@ els.route.addEventListener("change", () => {
 
 document.querySelectorAll("#platformNav button").forEach((btn) => {
   btn.addEventListener("click", () => {
-    if (busy) {
-      alert("انتظر انتهاء التشغيل أو أوقفه أولاً");
-      return;
-    }
     showPlatformPanel(btn.dataset.view);
   });
 });
@@ -1812,6 +2091,8 @@ $("btnTeamAddRole")?.addEventListener("click", async () => {
   const id = $("teamRoleId")?.value?.trim() || "";
   const title = $("teamRoleTitle")?.value?.trim() || "";
   const prompt = $("teamRolePrompt")?.value?.trim() || "";
+  const localModel = $("teamRoleLocalModel")?.value?.trim() || "";
+  const cloudModel = $("teamRoleCloudModel")?.value?.trim() || "";
   const res = await api("/api/team/roles", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
@@ -1822,7 +2103,7 @@ $("btnTeamAddRole")?.addEventListener("click", async () => {
       stage: "downstream",
       prefersCloud: false,
       enabled: true,
-      models: { local: "qwen2.5:1.5b", cloud: "gemma4:cloud", free: null },
+      models: { local: localModel, cloud: cloudModel, free: null },
     }),
   });
   const data = await res.json();
@@ -1833,6 +2114,7 @@ $("btnTeamAddRole")?.addEventListener("click", async () => {
     if ($("teamRoleId")) $("teamRoleId").value = "";
     if ($("teamRoleTitle")) $("teamRoleTitle").value = "";
     if ($("teamRolePrompt")) $("teamRolePrompt").value = "";
+    if ($("teamRoleLocalModel")) $("teamRoleLocalModel").value = "";
     loadTeamUi();
   }
 });
@@ -1960,6 +2242,10 @@ let bootAppReady = false;
 async function bootApp() {
   try {
     const h = await api("/api/health").then((r) => r.json());
+    if (h.running) {
+      busy = true;
+      setStopControls(true);
+    }
     els.healthMeta.textContent = h.running
       ? "run: active"
       : `ready · :${h.port} · ${h.tasksInSession || 0} tasks`;
@@ -2002,8 +2288,14 @@ async function bootApp() {
     });
     es.addEventListener("ready", () => {
       busy = false;
-      els.btnStop.disabled = true;
+      setStopControls(false);
       els.runGrid?.classList.remove("is-busy");
+    });
+    es.addEventListener("hello", (ev) => {
+      if (JSON.parse(ev.data).running) {
+        busy = true;
+        setStopControls(true);
+      }
     });
     es.addEventListener("run", (ev) => {
       const data = JSON.parse(ev.data);
@@ -2012,12 +2304,12 @@ async function bootApp() {
         showStage("run");
         els.runGrid?.classList.add("is-busy");
         els.runState.textContent = `running:${data.mode || data.script || "?"}`;
-        els.btnStop.disabled = false;
+        setStopControls(true);
         els.healthMeta.textContent = "run: active";
       }
       if (data.type === "end") {
         busy = false;
-        els.btnStop.disabled = true;
+        setStopControls(false);
         els.runGrid?.classList.remove("is-busy");
         els.runState.textContent = `done · exit ${data.exitCode}`;
         void loadProfiles();
@@ -2036,9 +2328,8 @@ async function bootApp() {
         }
       }
       if (data.type === "stopped") {
-        busy = false;
-        els.runState.textContent = "stopped";
-        els.btnStop.disabled = true;
+        els.runState.textContent = "stopped · preparing report";
+        setStopControls(false);
       }
     });
     es.onerror = () => {

@@ -47,6 +47,7 @@
           </select>
         </label>
         <button type="button" class="btn ghost tiny" id="btnNewTaskTop" data-i18n="top.newTask">مهمة جديدة</button>
+        <button type="button" class="btn danger tiny" id="btnStopTop" data-i18n="top.stopRun" hidden disabled>إيقاف التشغيل</button>
         <button type="button" class="btn ghost tiny" id="btnLogout" data-i18n="top.logout" data-i18n-title="top.logout" title="خروج">خروج</button>
         <div class="top-meta" id="healthMeta">…</div>
       </div>
@@ -103,6 +104,12 @@
                 <input type="checkbox" id="forceAgency" />
                 <span data-i18n="compose.forceAgency">تشغيل كوكالة كاملة</span>
               </label>
+              <label class="chat-model-label" for="chatModel" data-i18n="compose.modelLabel">النموذج</label>
+              <select id="chatModel" aria-label="Chat model">
+                <option value="auto" data-i18n="compose.modelAuto">تلقائي</option>
+                <option value="local" data-i18n="compose.modelLocal">محلي</option>
+                <option value="cloud" data-i18n="compose.modelCloud">سحابي</option>
+              </select>
               <span class="path-badge" id="pathBadge" data-path="chat" title="">chat</span>
               <button type="button" class="linkish" id="btnClearChat" data-i18n="compose.clearChat">مسح المحادثة</button>
             </div>
@@ -231,6 +238,8 @@
               <button type="button" class="btn primary" id="btnTeamSavePipeline" data-i18n="team.savePipeline">حفظ ترتيب المسار</button>
             </div>
             <p class="lede-sm" id="teamStatus">—</p>
+            <p class="lede-sm" id="teamModelStatus" role="status" aria-live="polite">—</p>
+            <datalist id="teamOllamaModels"></datalist>
             <p class="workspace-title" data-i18n="team.pipeline">ترتيب ما بعد الموافقة</p>
             <input id="teamPipelineOrder" type="text" class="composer" style="min-height:auto;padding:0.6rem 0.8rem" placeholder="architect,help,marketer,verifier" />
             <table class="ops-table" id="teamRolesTable" style="margin-top:1rem">
@@ -260,6 +269,14 @@
               <div class="field" style="grid-column: span 1">
                 <label for="teamRolePrompt" data-i18n="team.customPrompt">المطالبة</label>
                 <input id="teamRolePrompt" type="text" placeholder="Write a research brief…" />
+              </div>
+              <div class="field">
+                <label for="teamRoleLocalModel" data-i18n="team.customLocal">النموذج المحلي</label>
+                <input id="teamRoleLocalModel" type="text" list="teamOllamaModels" placeholder="qwen2.5:latest" />
+              </div>
+              <div class="field">
+                <label for="teamRoleCloudModel" data-i18n="team.customCloud">النموذج السحابي</label>
+                <input id="teamRoleCloudModel" type="text" value="gemma4:cloud" />
               </div>
               <button type="button" class="btn primary" id="btnTeamAddRole" data-i18n="team.addRole">إضافة دور مخصّص</button>
             </div>
