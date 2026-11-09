@@ -71,7 +71,7 @@ export function loadCostOptConfig(): CostOptConfig {
       1000,
       Math.floor(envNum("SAM_CONTEXT_TARGET_CHARS", 16_000))
     ),
-    localBaseUrl: envStr("SAM_LOCAL_BASE_URL", "http://localhost:11434"),
+    localBaseUrl: envStr("SAM_LOCAL_BASE_URL", "http://127.0.0.1:11434"),
     localModel: envStr("SAM_LOCAL_MODEL", envStr("CEO_MODEL", "qwen2.5-coder:1.5b")),
     freeBaseUrl: envStr("SAM_FREE_BASE_URL", ""),
     freeApiKey: envStr("SAM_FREE_API_KEY", ""),

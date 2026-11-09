@@ -48,6 +48,12 @@ A lesson that recurs `SAM_MEMORY_PROMOTE_HITS` times (default **3**) and has an 
 
 Local models **≤3B** may only be used for simple triage / classification / extraction. Never for planning, review, translation, or research. Memory ingest/retrieve/promote is **deterministic by default** (no extra paid calls; daily cloud cap still `$0.50`).
 
+## Chat memory
+
+Chat transcripts and explicitly saved user facts are stored in the tenant-scoped persistence database (`chat-conversations`), not as per-chat JSON or Markdown files. The chat uses a bounded slice of recent messages from earlier conversations as context; clearing the visible conversation does not remove saved facts.
+
+To save a durable user fact, start a message with `تذكّر:` / `تذكر:` or `Remember:`. Only this explicit request saves a fact. The chat's `Auto`, `Local`, and `Cloud` choices use the configured quick-role models; explicit Cloud requests still require a provider key and must fit the configured cost cap.
+
 ## CLI
 
 ```bash

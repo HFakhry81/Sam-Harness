@@ -13,9 +13,21 @@ import {
   renderChatHistory,
   trimChatTurns,
 } from "../src/lib/conversation/context.js";
-import { localOllamaOptions } from "../src/lib/ollamaLocal.js";
+import {
+  localOllamaOptions,
+  quickOllamaGpuLayers,
+  quickOllamaOptions,
+} from "../src/lib/ollamaLocal.js";
 import { buildQuickPromptPayload } from "../src/lib/quickPath/quickModel.js";
 import { runIntentRouter } from "../src/lib/intentRouter/index.js";
+import {
+  appendMessage,
+  buildChatMemoryContext,
+  listConversations,
+  loadConversation,
+  parseRememberRequest,
+  rememberChatFact,
+} from "../src/lib/conversation/history.js";
 
 const ENV_KEYS = [
   "SAM_CHAT_HISTORY_ENABLED",
@@ -52,6 +64,9 @@ describe("bounded chat context", () => {
 
   it("defaults expose a larger local window and a bounded history", () => {
     expect(localOllamaOptions().numCtx).toBe(16_384);
+    expect(quickOllamaOptions().numCtx).toBe(2048);
+    expect(quickOllamaOptions().numBatch).toBe(128);
+    expect(quickOllamaGpuLayers()).toBe(0);
     expect(chatHistoryMaxMessages()).toBe(12);
     expect(chatHistoryMaxChars()).toBe(6_000);
   });
@@ -168,6 +183,46 @@ describe("bounded chat context", () => {
   });
 });
 
+describe("persistent chat memory", () => {
+  let tmp: string;
+  let prevHome: string | undefined;
+
+  beforeEach(() => {
+    tmp = fs.mkdtempSync(path.join(os.tmpdir(), "sh-chat-memory-"));
+    prevHome = process.env.SAM_OUTPUT_HOME;
+    process.env.SAM_OUTPUT_HOME = path.join(tmp, "out");
+  });
+
+  afterEach(() => {
+    if (prevHome === undefined) delete process.env.SAM_OUTPUT_HOME;
+    else process.env.SAM_OUTPUT_HOME = prevHome;
+    fs.rmSync(tmp, { recursive: true, force: true });
+  });
+
+  it("persists chat turns in the database without creating transcript files", () => {
+    appendMessage("thread-one", { role: "user", content: "Remember this task." });
+    appendMessage("thread-one", { role: "assistant", content: "I will." });
+
+    expect(loadConversation("thread-one").messages.map((message) => message.content))
+      .toEqual(["Remember this task.", "I will."]);
+    expect(listConversations()).toContain("thread-one");
+    expect(fs.existsSync(path.join(process.env.SAM_OUTPUT_HOME!, "conversations")))
+      .toBe(false);
+  });
+
+  it("retrieves saved facts and recent context from other sessions", () => {
+    appendMessage("past-session", { role: "user", content: "I am building a desktop app." });
+    appendMessage("past-session", { role: "assistant", content: "We planned its chat interface." });
+    rememberChatFact("The user prefers Arabic replies.", "past-session");
+
+    const context = buildChatMemoryContext("current-session");
+    expect(context).toContain("The user prefers Arabic replies.");
+    expect(context).toContain("We planned its chat interface.");
+    expect(parseRememberRequest("تذكّر: أفضل الردود باللغة العربية"))
+      .toBe("أفضل الردود باللغة العربية");
+  });
+});
+
 describe("prompt payload with history", () => {
   it("uses a plain string for one-shot calls", () => {
     const payload = buildQuickPromptPayload({
@@ -242,7 +297,22 @@ describe("runIntentRouter history wiring", () => {
     expect(out).not.toBeNull();
     expect(out!.route).toBe("chat");
     expect(invokeModel).toHaveBeenCalledTimes(1);
-    const call = invokeModel.mock.calls[0][0] as { history?: unknown[] };
-    expect(call.history).toEqual(history);
+    const call = invokeModel.mock.calls[0][0] as {
+      messages?: Array<{ _getType(): string; content: unknown }>;
+      tools?: unknown[];
+    };
+    expect(call.messages?.map((message) => message._getType())).toEqual([
+      "system",
+      "human",
+      "ai",
+      "human",
+    ]);
+    expect(call.messages?.map((message) => message.content)).toContain(
+      "We are talking about web APIs."
+    );
+    expect(call.messages?.map((message) => message.content)).toContain(
+      "What is a REST API?"
+    );
+    expect(call.tools).toHaveLength(3);
   });
 });

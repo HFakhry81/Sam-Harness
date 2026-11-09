@@ -92,12 +92,12 @@ describe("phase 3 — classifier corrections", () => {
     }
   });
 
-  it("routes filesystem counting questions to task", () => {
+  it("routes read-only filesystem inspection questions to chat tools", () => {
     for (const p of [
       "كم عدد الملفات في مجلد التنزيلات؟",
       "how many files are in the Downloads folder?",
     ]) {
-      expect(classifyIntentHeuristic(p).route, p).toBe("task");
+      expect(classifyIntentHeuristic(p).route, p).toBe("chat");
     }
   });
 
