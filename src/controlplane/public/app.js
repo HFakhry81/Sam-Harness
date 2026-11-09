@@ -207,6 +207,7 @@ const els = {
   btnSend: $("btnSend"),
   chatForm: $("chatForm"),
   chatMessages: $("chatMessages"),
+  chatModel: $("chatModel"),
   btnClearChat: $("btnClearChat"),
   btnBack: $("btnBack"),
   btnStop: $("btnStop"),
@@ -1244,7 +1245,7 @@ function isChatRoute(route) {
   );
 }
 
-function appendChatBubble(role, content, route) {
+function appendChatBubble(role, content, route, extra = {}) {
   if (!els.chatMessages) return;
   const empty = els.chatMessages.querySelector(".chat-empty");
   if (empty) empty.remove();
@@ -1260,6 +1261,70 @@ function appendChatBubble(role, content, route) {
   const body = document.createElement("div");
   body.textContent = content || "";
   div.appendChild(body);
+  if (role === "assistant" && Array.isArray(extra.sources) && extra.sources.length) {
+    const sources = document.createElement("ul");
+    sources.className = "chat-sources";
+    extra.sources.forEach((source) => {
+      if (!source?.url || !/^https?:\/\//i.test(source.url)) return;
+      const item = document.createElement("li");
+      const link = document.createElement("a");
+      link.href = source.url;
+      link.target = "_blank";
+      link.rel = "noopener noreferrer";
+      link.textContent = source.title || source.url;
+      item.appendChild(link);
+      sources.appendChild(item);
+    });
+    if (sources.childElementCount) div.appendChild(sources);
+  }
+  if (role === "assistant" && Array.isArray(extra.toolsUsed) && extra.toolsUsed.length) {
+    const tools = document.createElement("div");
+    tools.className = "chat-tool-meta";
+    const names = [...new Set(extra.toolsUsed.map((item) => item?.name).filter(Boolean))];
+    tools.textContent = `${t("compose.toolsUsed") || "Tools used"}: ${names.join(", ")}`;
+    div.appendChild(tools);
+  }
+  if (role === "assistant" && extra.clarification?.options?.length) {
+    const choices = document.createElement("div");
+    choices.className = "chat-choices";
+    extra.clarification.options.forEach((option) => {
+      const button = document.createElement("button");
+      button.type = "button";
+      button.className = "chat-choice";
+      button.textContent = option.label || option.value;
+      button.addEventListener("click", () => {
+        const prompt = els.prompt;
+        if (!prompt || busy) return;
+        const isArabic = /[\u0600-\u06ff]/u.test(
+          extra.clarification.originalMessage || ""
+        );
+        const taskPrefix = isArabic
+          ? "شغّل كوكالة كاملة: "
+          : "Run this as a full agency task: ";
+        const chatPrefix = isArabic
+          ? "أجب في المحادثة عن: "
+          : "Answer in chat about: ";
+        if (option.value === "task") {
+          prompt.value = `${taskPrefix}${extra.clarification.originalMessage || ""}`;
+        } else if (option.value === "chat") {
+          prompt.value = `${chatPrefix}${extra.clarification.originalMessage || ""}`;
+        } else {
+          prompt.value = isArabic
+            ? `اختياري هو: ${option.label || option.value}`
+            : `My choice is: ${option.label || option.value}`;
+        }
+        const wasForced = Boolean(els.forceAgency?.checked);
+        if (option.value === "task" && els.forceAgency) {
+          els.forceAgency.checked = true;
+        }
+        void sendChatMessage().finally(() => {
+          if (els.forceAgency) els.forceAgency.checked = wasForced;
+        });
+      });
+      choices.appendChild(button);
+    });
+    div.appendChild(choices);
+  }
   els.chatMessages.appendChild(div);
   els.chatMessages.scrollTop = els.chatMessages.scrollHeight;
 }
@@ -1276,7 +1341,9 @@ function renderConversation(messages) {
     return;
   }
   list.forEach((m) => {
-    appendChatBubble(m.role === "user" ? "user" : "assistant", m.content, m.route);
+    appendChatBubble(m.role === "user" ? "user" : "assistant", m.content, m.route, {
+      sources: m.sources,
+    });
   });
 }
 
@@ -1317,6 +1384,7 @@ async function sendChatMessage() {
         message: text,
         forceAgency,
         conversationId: conversationId || undefined,
+        modelPreference: els.chatModel?.value || "auto",
       }),
     });
     const data = await res.json();
@@ -1339,7 +1407,11 @@ async function sendChatMessage() {
       await runMode("agency");
       return;
     }
-    appendChatBubble("assistant", data.reply || "", route);
+    appendChatBubble("assistant", data.reply || "", route, {
+      sources: data.sources,
+      clarification: data.clarification,
+      toolsUsed: data.toolsUsed,
+    });
     if (data.conversation?.messages) {
       conversationMessages = data.conversation.messages;
     }
@@ -1348,7 +1420,10 @@ async function sendChatMessage() {
       els.artifactPanel.hidden = true;
       els.artifactPanel.open = false;
     }
-    els.healthMeta.textContent = `ready · ${pathLabel(route)}`;
+    const modelLabel = data.model
+      ? ` · ${data.model} (${data.cloud ? "cloud" : "local"})`
+      : "";
+    els.healthMeta.textContent = `ready · ${pathLabel(route)}${modelLabel}`;
   } catch (e) {
     appendChatBubble(
       "assistant",

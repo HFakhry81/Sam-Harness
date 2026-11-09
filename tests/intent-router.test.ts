@@ -14,8 +14,31 @@ import {
 } from "../src/lib/intentRouter/index.js";
 import { appendMessage, loadConversation, newConversationId } from "../src/lib/conversation/history.js";
 import { getOutputHome, ensureOutputHome } from "../src/lib/outputHome.js";
+import { parseStructuredIntentOutput } from "../src/lib/intentRouter/model.js";
+import type { WebSearchResult } from "../src/lib/quickPath/webSearch.js";
 
 describe("intent router heuristics", () => {
+  it("parses structured model tool decisions and bounds clarification choices", () => {
+    expect(
+      parseStructuredIntentOutput(
+        '{"action":"search_web","query":"current Sam-Harness status"}'
+      )
+    ).toEqual({
+      route: "research",
+      searchQuery: "current Sam-Harness status",
+    });
+    expect(
+      parseStructuredIntentOutput(
+        '{"action":"ask_clarification","question":"Which format?","options":["A","B","C","D","E"]}'
+      )
+    ).toEqual({
+      route: "clarify",
+      clarifyQuestion: "Which format?",
+      clarifyOptions: ["A", "B", "C", "D"],
+    });
+    expect(parseStructuredIntentOutput('{"action":"unknown"}')).toBeNull();
+  });
+
   it("routes Arabic/English greetings to chat", () => {
     for (const p of [
       "اهلا",
@@ -88,6 +111,28 @@ describe("intent router heuristics", () => {
     expect(c.route).toBe("complex");
     expect(c.source).toBe("forced");
   });
+
+  it("accepts structured search and clarification decisions", async () => {
+    const search = await classifyIntent("Maybe this", {
+      modelClassify: async () => ({
+        route: "research",
+        searchQuery: "Sam-Harness model routing",
+      }),
+    });
+    expect(search.route).toBe("research");
+    expect(search.searchQuery).toBe("Sam-Harness model routing");
+
+    const clarify = await classifyIntent("Please do it", {
+      modelClassify: async () => ({
+        route: "clarify",
+        clarifyQuestion: "Which output format should I use?",
+        clarifyOptions: ["Markdown", "JSON"],
+      }),
+    });
+    expect(clarify.route).toBe("clarify");
+    expect(clarify.clarifyQuestion).toBe("Which output format should I use?");
+    expect(clarify.clarifyOptions).toEqual(["Markdown", "JSON"]);
+  });
 });
 
 describe("runIntentRouter chat has no artifacts", () => {
@@ -159,17 +204,19 @@ describe("runIntentRouter chat has no artifacts", () => {
 
   it("falls back without escalating when model throws", async () => {
     const out = await runIntentRouter({
-      prompt: "مرحبا",
+      prompt: "What is 2 + 2?",
       cwd: tmp,
       heuristicOnly: true,
       invokeModel: async () => {
-        throw new Error("ollama down");
+        throw new Error("connect ECONNREFUSED 127.0.0.1:11434");
       },
     });
     expect(out!.route).toBe("chat");
     expect(out!.ok).toBe(true);
     expect(out!.noArtifacts).toBe(true);
-    expect(out!.reply.length).toBeGreaterThan(0);
+    expect(out!.reply).toContain("Could not connect to the local Ollama model");
+    expect(out!.reply).toContain("ECONNREFUSED");
+    expect(out!.error).toContain("ECONNREFUSED");
   });
 
   it("returns null for complex so agency can run", async () => {
@@ -179,7 +226,45 @@ describe("runIntentRouter chat has no artifacts", () => {
       heuristicOnly: true,
       invokeModel: vi.fn() as any,
     });
+
     expect(out).toBeNull();
+  });
+
+  it("executes a structured web-search action in chat without writing a note", async () => {
+    const cwd = path.join(tmp, "search-cwd");
+    fs.mkdirSync(cwd, { recursive: true });
+    let searchQuery = "";
+    const webSearch = async (input: { query: string }): Promise<WebSearchResult> => {
+      searchQuery = input.query;
+      return {
+        provider: "custom",
+        query: input.query,
+        hits: [],
+        pages: [],
+        usable: false,
+        attempts: [],
+        failureReason: "No test results",
+      };
+    };
+    const out = await runIntentRouter({
+      prompt: "Look into Sam-Harness",
+      cwd,
+      classify: async () => ({
+        route: "research",
+        intent: "web_research",
+        confidence: 0.9,
+        reason: "structured search tool call",
+        source: "model",
+        searchQuery: "Sam-Harness current release",
+      }),
+      webSearch,
+      writeResearchNote: false,
+    });
+
+    expect(searchQuery).toBe("Sam-Harness current release");
+    expect(out?.route).toBe("research");
+    expect(out?.noArtifacts).toBe(true);
+    expect(out?.notePath).toBeUndefined();
   });
 
   it("fallbackChatReply speaks Arabic for Arabic greetings", () => {
@@ -204,7 +289,7 @@ describe("conversation history under output home", () => {
     fs.rmSync(tmp, { recursive: true, force: true });
   });
 
-  it("persists messages under conversations/", () => {
+  it("persists messages in the database without creating transcript files", () => {
     const id = newConversationId();
     appendMessage(id, { role: "user", content: "مرحبا" });
     appendMessage(id, {
@@ -215,7 +300,13 @@ describe("conversation history under output home", () => {
     });
     const loaded = loadConversation(id);
     expect(loaded.messages).toHaveLength(2);
-    const file = path.join(getOutputHome(), "conversations", `${id}.json`);
-    expect(fs.existsSync(file)).toBe(true);
+    const conversations = path.join(getOutputHome(), "conversations");
+    if (fs.existsSync(conversations)) {
+      expect(
+        fs.readdirSync(conversations).filter(
+          (file) => file === `${id}.json` || file === `${id}.md`
+        )
+      ).toEqual([]);
+    }
   });
 });

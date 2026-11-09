@@ -143,6 +143,35 @@ describe("model routing", () => {
     expect(route.headers?.Authorization).toMatch(/Bearer/);
   });
 
+  it("honors explicit chat cloud selection when credentials and budget allow", () => {
+    process.env.OLLAMA_API_KEY = "sk-test";
+    const route = resolveModelRoute({
+      cwd: tmp,
+      role: "quick",
+      forceCloud: true,
+      cloudModel: "gemma4:cloud",
+      localModel: "qwen2.5:1.5b",
+      prompt: "Explain the prior conversation context.",
+    });
+    expect(route.tier).toBe("paid");
+    expect(route.cloud).toBe(true);
+    expect(route.model).toBe("gemma4:cloud");
+  });
+
+  it("does not bypass the cost cap for explicit chat cloud selection", () => {
+    process.env.OLLAMA_API_KEY = "sk-test";
+    saveHybridProfile(tmp, { mode: "auto", costCapUsd: 0 });
+    const route = resolveModelRoute({
+      cwd: tmp,
+      role: "quick",
+      forceCloud: true,
+      cloudModel: "gemma4:cloud",
+      localModel: "qwen2.5:1.5b",
+    });
+    expect(route.cloud).toBe(false);
+    expect(route.reason).toMatch(/cap/i);
+  });
+
   it("degrades to local near the cost cap and never selects paid", () => {
     process.env.OLLAMA_API_KEY = "sk-test";
     process.env.SAM_COST_NEAR_CAP_RATIO = "0.5"; // degrade when ≤50% left

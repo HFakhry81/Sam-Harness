@@ -136,8 +136,11 @@ import {
 import type { IntentRoute } from "../lib/intentRouter/types.js";
 import {
   appendMessage,
+  buildChatMemoryContext,
   loadConversation,
   newConversationId,
+  parseRememberRequest,
+  rememberChatFact,
   resetConversation,
 } from "../lib/conversation/history.js";
 import { buildChatContext } from "../lib/conversation/context.js";
@@ -669,6 +672,25 @@ async function finalizeRun(mode: RunMode, exitCode: number | null) {
   if (session.entries.length > 50) session.entries.length = 50;
   saveSession(ROOT, session);
 
+  if (pendingChatTaskConversationId) {
+    const taskConversationId = pendingChatTaskConversationId;
+    pendingChatTaskConversationId = null;
+    appendMessage(
+      taskConversationId,
+      {
+        role: "assistant",
+        content: `${success ? "Task completed" : "Task did not complete"}: ${title}\n${arts.summary.slice(0, 2_000)}`,
+        route: route === "operational" ? "task" : "complex",
+        noArtifacts: false,
+      },
+      tenantOutputHome()
+    );
+    broadcast(
+      "conversation",
+      loadConversation(taskConversationId, tenantOutputHome())
+    );
+  }
+
   try {
     appendRunLesson(ROOT, {
       title,
@@ -883,6 +905,7 @@ async function finalizeQuickRun(opts: {
 /** Active chat conversation id for Control Plane (persisted under SAM_OUTPUT_HOME). */
 let conversationId =
   String(process.env.SAM_CONVERSATION_ID || "").trim() || newConversationId();
+let pendingChatTaskConversationId: string | null = null;
 
 /**
  * Chat-first send: intent router before any pipeline.
@@ -896,6 +919,7 @@ async function handleChat(req: http.IncomingMessage, res: http.ServerResponse) {
     forceAgency?: boolean;
     conversationId?: string;
     networkApproved?: boolean | string;
+    modelPreference?: "auto" | "local" | "cloud";
   };
   const message = String(body.message || "").trim();
   if (!message) {
@@ -920,7 +944,37 @@ async function handleChat(req: http.IncomingMessage, res: http.ServerResponse) {
       numPredict: 220,
     },
   });
+  const memoryContext = buildChatMemoryContext(
+    conversationId,
+    tenantOutputHome()
+  );
   appendMessage(conversationId, { role: "user", content: message }, tenantOutputHome());
+
+  const rememberedFact = parseRememberRequest(message);
+  if (rememberedFact) {
+    rememberChatFact(rememberedFact, conversationId, tenantOutputHome());
+    const reply = /[\u0600-\u06ff]/u.test(message)
+      ? "حفظت هذه المعلومة في ذاكرتي للمحادثات القادمة."
+      : "I’ll remember that for future conversations.";
+    appendMessage(
+      conversationId,
+      { role: "assistant", content: reply, route: "chat", noArtifacts: true },
+      tenantOutputHome()
+    );
+    const conversation = loadConversation(conversationId, tenantOutputHome());
+    broadcast("conversation", conversation);
+    sendJson(res, 200, {
+      ok: true,
+      route: "chat",
+      pipeline: false,
+      conversationId,
+      reply,
+      conversation,
+      noArtifacts: true,
+      memorySaved: true,
+    });
+    return;
+  }
 
   // Forced or complex/task → write task.ts then let client/callers hit /api/run
   if (
@@ -940,6 +994,19 @@ async function handleChat(req: http.IncomingMessage, res: http.ServerResponse) {
       sendJson(res, 400, { ok: false, error: e?.message || String(e) });
       return;
     }
+    pendingChatTaskConversationId = conversationId;
+    appendMessage(
+      conversationId,
+      {
+        role: "assistant",
+        content: /[\u0600-\u06ff]/u.test(message)
+          ? "تم توجيه طلبك إلى مسار مهام Sam-Harness. سيظل التنفيذ خاضعاً لموافقات الحماية المعتادة."
+          : "Your request is now with the Sam-Harness task workflow. Existing approval gates still apply.",
+        route: forceAgency ? "complex" : decision.route,
+        noArtifacts: true,
+      },
+      tenantOutputHome()
+    );
     const conv = loadConversation(conversationId, tenantOutputHome());
     broadcast("task", { draft, spec: draft.spec });
     sendJson(res, 200, {
@@ -975,6 +1042,12 @@ async function handleChat(req: http.IncomingMessage, res: http.ServerResponse) {
       runId,
       forceAgency: false,
       history: chatContext.turns,
+      memoryContext,
+      modelPreference:
+        body.modelPreference === "local" || body.modelPreference === "cloud"
+          ? body.modelPreference
+          : "auto",
+      writeResearchNote: false,
       networkApproved: body.networkApproved,
       onEvent: (ev) => {
         appendLog(`[intent-router] ${ev.type}: ${ev.message}\n`);
@@ -982,11 +1055,48 @@ async function handleChat(req: http.IncomingMessage, res: http.ServerResponse) {
     });
 
     const result = quick?.result;
+    if (!quick) {
+      const clarification = /[\u0600-\u06ff]/u.test(message)
+        ? {
+            question: "هل تريد رداً في المحادثة أم تشغيل مهمة؟",
+            originalMessage: message,
+            options: [
+              { label: "أجب في المحادثة", value: "chat" },
+              { label: "شغّل كوكالة كاملة", value: "task" },
+            ],
+          }
+        : {
+            question: "Would you like a chat response or a task run?",
+            originalMessage: message,
+            options: [
+              { label: "Answer in chat", value: "chat" },
+              { label: "Run as a full task", value: "task" },
+            ],
+          };
+      appendMessage(
+        conversationId,
+        { role: "assistant", content: clarification.question, route: "clarify", noArtifacts: true },
+        tenantOutputHome()
+      );
+      const conversation = loadConversation(conversationId, tenantOutputHome());
+      sendJson(res, 200, {
+        ok: true,
+        route: "clarify",
+        pipeline: false,
+        conversationId,
+        reply: clarification.question,
+        clarification,
+        conversation,
+        noArtifacts: true,
+      });
+      return;
+    }
     const reply =
       result?.reply ||
       decision.clarifyQuestion ||
       "OK";
     const route = (result?.route || decision.route) as IntentRoute;
+    const responseDecision = quick.classification;
 
     appendMessage(
       conversationId,
@@ -1033,8 +1143,32 @@ async function handleChat(req: http.IncomingMessage, res: http.ServerResponse) {
       notePath: result?.notePath || null,
       noArtifacts: true,
       skippedModel: result?.skippedModel !== false,
+      toolsUsed: result?.toolsUsed || [],
       durationMs: result?.durationMs || 0,
       model: result?.model || null,
+      cloud: result?.cloud ?? false,
+      modelError: result?.error || null,
+      clarification:
+        route === "clarify"
+          ? {
+              question: reply,
+              originalMessage: message,
+              options: responseDecision.clarifyOptions?.length
+                ? responseDecision.clarifyOptions.map((option) => ({
+                    label: option,
+                    value: option,
+                  }))
+                : /[\u0600-\u06ff]/u.test(message)
+                  ? [
+                    { label: "أجب في المحادثة", value: "chat" },
+                    { label: "شغّل كوكالة كاملة", value: "task" },
+                  ]
+                  : [
+                    { label: "Answer in chat", value: "chat" },
+                    { label: "Run as a full task", value: "task" },
+                  ],
+            }
+          : null,
       historyTurns: chatContext.turns.length,
       historyChars: chatContext.chars,
     });
@@ -1255,7 +1389,12 @@ async function handleRun(req: http.IncomingMessage, res: http.ServerResponse) {
           runId: durable.id,
           forceAgency: false,
           history: chatContext.turns,
+          memoryContext: buildChatMemoryContext(
+            conversationId,
+            tenantOutputHome()
+          ),
           networkApproved: body.networkApproved,
+          writeResearchNote: false,
           onEvent: (ev) => {
             appendLog(`[intent-router] ${ev.type}: ${ev.message}\n`);
           },
@@ -2974,4 +3113,3 @@ async function boot() {
 }
 
 void boot();
-

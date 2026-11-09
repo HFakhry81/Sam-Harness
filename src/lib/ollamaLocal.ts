@@ -24,8 +24,8 @@ function envInt(name: string, fallback: number): number {
   return Number.isFinite(raw) && raw > 0 ? Math.floor(raw) : fallback;
 }
 
-function keepAliveValue(): string | number {
-  const raw = String(process.env.SAM_LOCAL_KEEP_ALIVE ?? "-1").trim();
+function keepAliveValue(name = "SAM_LOCAL_KEEP_ALIVE", fallback = "-1"): string | number {
+  const raw = String(process.env[name] ?? fallback).trim();
   if (!raw) return -1;
   const n = Number(raw);
   return Number.isFinite(n) ? n : raw;
@@ -46,4 +46,20 @@ export function localOllamaOptions(): LocalOllamaOptions {
     numPredict: envInt("SAM_LOCAL_NUM_PREDICT", 768),
     keepAlive: keepAliveValue(),
   };
+}
+
+/** Lower-memory defaults for interactive chat; long-form agent roles keep full tuning. */
+export function quickOllamaOptions(): LocalOllamaOptions {
+  const shared = localOllamaOptions();
+  return {
+    ...shared,
+    numCtx: envInt("SAM_QUICK_NUM_CTX", Math.min(shared.numCtx, 2048)),
+    numBatch: envInt("SAM_QUICK_NUM_BATCH", Math.min(shared.numBatch, 128)),
+    keepAlive: keepAliveValue("SAM_QUICK_KEEP_ALIVE", "5m"),
+  };
+}
+
+export function quickOllamaGpuLayers(): number {
+  const raw = Number(String(process.env.SAM_QUICK_NUM_GPU ?? "0").trim());
+  return Number.isInteger(raw) && raw >= 0 ? raw : 0;
 }

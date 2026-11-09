@@ -29,7 +29,8 @@ export type DocKind =
   | "controlplane-session"
   | "delivery-board"
   | "rollback-journal"
-  | "approvals";
+  | "approvals"
+  | "chat-conversations";
 
 export type RunStatus =
   | "pending"

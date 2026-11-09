@@ -51,6 +51,8 @@ export type RouteInput = DifficultyInput & {
   freeModel?: string;
   /** Skip paid even if difficulty is premium (e.g. FORCE_LOCAL). */
   forceLocal?: boolean;
+  /** Explicit cloud request; still obeys credentials, hybrid policy, and spend caps. */
+  forceCloud?: boolean;
   /** Team/role prefersCloud hint (Phase 8). */
   prefersCloud?: boolean;
   /** Override config (tests). */
@@ -325,6 +327,17 @@ export function resolveModelRoute(input: RouteInput = {}): ModelRoute {
     freeTierConfigured(cfg) || Boolean(String(input.freeModel || "").trim());
 
   if (degraded) {
+    if (input.forceCloud) {
+      return annotate(
+        localRoute(
+          cfg,
+          difficulty,
+          localModel,
+          "cloud requested but the daily cost cap forces local",
+          true
+        )
+      );
+    }
     if (freeConfigured && difficulty !== "cheap") {
       return annotate({
         ...freeRouteForRole(
@@ -346,6 +359,22 @@ export function resolveModelRoute(input: RouteInput = {}): ModelRoute {
           : "near/at cost cap — local tier (cap wins)",
         true
       )
+    );
+  }
+
+  if (input.forceCloud) {
+    if (!cloudKeyPresent()) {
+      return annotate(
+        localRoute(cfg, difficulty, localModel, "cloud requested but no provider key is configured", false)
+      );
+    }
+    if (!canAffordPaid(cwd, est, cfg)) {
+      return annotate(
+        localRoute(cfg, difficulty, localModel, "cloud requested but the daily cost cap would be exceeded", true)
+      );
+    }
+    return annotate(
+      paidRoute(cfg, difficulty, paidModel, est, "explicit cloud selection")
     );
   }
 

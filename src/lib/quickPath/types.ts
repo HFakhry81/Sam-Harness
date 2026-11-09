@@ -30,6 +30,7 @@ export type IntentClassification = {
   /** New top-level route when available. */
   route?: IntentRoute;
   clarifyQuestion?: string;
+  clarifyOptions?: string[];
 };
 
 export type DetectedLanguage = "ar" | "en" | "mixed" | "other";
@@ -56,6 +57,7 @@ export type QuickPathResult = {
   searchFailureReason?: string;
   /** True when web path skipped the LLM because there was no usable evidence. */
   skippedModel?: boolean;
+  toolsUsed?: Array<{ name: string; ok: boolean; message: string }>;
   /** True when chat/clarify wrote no report/task artifacts. */
   noArtifacts?: boolean;
   notePath?: string;

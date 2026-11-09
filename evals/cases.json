@@ -69,13 +69,13 @@
       "id": "intent-count-files-ar",
       "suite": "intent",
       "prompt": "كم عدد الملفات في مجلد التنزيلات؟",
-      "expect": { "route": "task", "intent": "simple_task" }
+      "expect": { "route": "chat", "intent": "simple_question" }
     },
     {
       "id": "intent-count-files-en",
       "suite": "intent",
       "prompt": "how many files are in the Downloads folder?",
-      "expect": { "route": "task", "intent": "simple_task" }
+      "expect": { "route": "chat", "intent": "simple_question" }
     },
     {
       "id": "intent-fix-login-bug",
