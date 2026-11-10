@@ -22,6 +22,8 @@ beforeAll(async () => {
   cpIso = makeIsolatedCpEnv({
     CONTROL_PLANE_PORT: "0",
     CONTROL_PLANE_TOKEN: TOKEN,
+    SAM_LOCALE: "ar",
+    SAM_UI_LOCALE: "",
   });
   const tsxBin = path.join(ROOT, "node_modules", "tsx", "dist", "cli.mjs");
   child = spawn(process.execPath, [tsxBin, path.join(ROOT, "src/controlplane/server.ts")], {
