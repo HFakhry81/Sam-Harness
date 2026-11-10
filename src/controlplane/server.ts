@@ -146,6 +146,12 @@ import {
 import { buildChatContext } from "../lib/conversation/context.js";
 import { localOllamaOptions } from "../lib/ollamaLocal.js";
 import {
+  inspectLocalOllamaModel,
+  listLocalOllamaModels,
+  ollamaModelNamesMatch,
+  usesOllamaLocalProvider,
+} from "../lib/ollamaModels.js";
+import {
   addDailyJob,
   loadDailyOps,
   recordDailyResult,
@@ -2564,6 +2570,104 @@ const server = http.createServer(async (req, res) => {
     }
 
     // —— Phase 8 — team config CRUD ——
+    if (method === "GET" && p === "/api/team/models") {
+      let config: TeamConfig;
+      try {
+        config = loadTeamConfig(ROOT);
+      } catch (e: any) {
+        sendJson(res, 503, {
+          ok: false,
+          available: false,
+          code: "TEAM_CONFIG_INVALID",
+          error: e?.message || String(e),
+          models: [],
+          roles: [],
+        });
+        return;
+      }
+      const ollama = usesOllamaLocalProvider();
+      let models: Awaited<ReturnType<typeof listLocalOllamaModels>> = [];
+      if (ollama) {
+        try {
+          models = await listLocalOllamaModels({ refresh: true });
+        } catch (e: any) {
+          sendJson(res, 503, {
+            ok: false,
+            available: false,
+            provider: "ollama",
+            error: e?.message || String(e),
+            models: [],
+            roles: [],
+          });
+          return;
+        }
+      }
+      sendJson(res, 200, {
+        ok: true,
+        available: ollama,
+        provider: ollama ? "ollama" : "external",
+        models,
+        roles: config.roles.map((role) => ({
+          id: role.id,
+          enabled: role.enabled,
+          model: role.models.local,
+          installed: ollama
+            ? models.some((entry) =>
+                ollamaModelNamesMatch(entry.name, role.models.local)
+              )
+            : null,
+          overridden: {
+            local: Boolean(
+              String(
+                process.env[
+                  `SAM_ROLE_${role.id.toUpperCase().replace(/[^A-Z0-9]/g, "_")}_MODEL`
+                ] || ""
+              ).trim()
+            ),
+            cloud: Boolean(
+              String(
+                process.env[
+                  `SAM_ROLE_${role.id.toUpperCase().replace(/[^A-Z0-9]/g, "_")}_CLOUD_MODEL`
+                ] || ""
+              ).trim()
+            ),
+          },
+        })),
+      });
+      return;
+    }
+    if (method === "POST" && p === "/api/team/models/check") {
+      let body: { model?: unknown };
+      try {
+        body = JSON.parse((await readBody(req)) || "{}");
+      } catch {
+        sendJson(res, 400, { ok: false, error: "Invalid JSON" });
+        return;
+      }
+      if (typeof body.model !== "string" || !body.model.trim()) {
+        sendJson(res, 400, { ok: false, error: "model is required" });
+        return;
+      }
+      if (!usesOllamaLocalProvider()) {
+        sendJson(res, 409, {
+          ok: false,
+          error: "Model checks are only available for the native Ollama provider.",
+        });
+        return;
+      }
+      try {
+        const result = await inspectLocalOllamaModel(body.model);
+        sendJson(res, 200, { ok: true, ...result });
+      } catch (e: any) {
+        const error = e?.message || String(e);
+        sendJson(res, /not installed|not found|HTTP 404/i.test(error) ? 404 : 503, {
+          ok: false,
+          installed: false,
+          error,
+        });
+      }
+      return;
+    }
     if (method === "GET" && p === "/api/team") {
       sendJson(res, 200, {
         ok: true,
@@ -2601,6 +2705,56 @@ const server = http.createServer(async (req, res) => {
         if (!body.id) {
           sendJson(res, 400, { ok: false, error: "id required" });
           return;
+        }
+        const current = loadTeamConfig(ROOT).roles.find(
+          (role) => role.id === body.id
+        );
+        const roleEnvKey = body.id.toUpperCase().replace(/[^A-Z0-9]/g, "_");
+        if (
+          (typeof body.models?.local === "string" &&
+            String(process.env[`SAM_ROLE_${roleEnvKey}_MODEL`] || "").trim()) ||
+          (typeof body.models?.cloud === "string" &&
+            String(process.env[`SAM_ROLE_${roleEnvKey}_CLOUD_MODEL`] || "").trim())
+        ) {
+          sendJson(res, 409, {
+            ok: false,
+            code: "ROLE_MODEL_ENV_OVERRIDE",
+            error: `Role "${body.id}" has a model override in the environment. Update SAM_ROLE_${roleEnvKey}_MODEL or SAM_ROLE_${roleEnvKey}_CLOUD_MODEL before editing that assignment.`,
+          });
+          return;
+        }
+        const requestedLocalModel =
+          typeof body.models?.local === "string"
+            ? body.models.local.trim()
+            : current?.models.local;
+        if (
+          usesOllamaLocalProvider() &&
+          requestedLocalModel &&
+          (body.enabled === true || typeof body.models?.local === "string")
+        ) {
+          let models;
+          try {
+            models = await listLocalOllamaModels({ refresh: true });
+          } catch (e: any) {
+            sendJson(res, 503, {
+              ok: false,
+              code: "OLLAMA_UNAVAILABLE",
+              error: e?.message || String(e),
+            });
+            return;
+          }
+          if (
+            !models.some(
+              (model) => ollamaModelNamesMatch(model.name, requestedLocalModel)
+            )
+          ) {
+            sendJson(res, 409, {
+              ok: false,
+              code: "LOCAL_MODEL_UNAVAILABLE",
+              error: `Cannot enable or assign role "${body.id}": local model "${requestedLocalModel}" is not installed. Install it or choose an available model.`,
+            });
+            return;
+          }
         }
         const config = upsertTeamRole(ROOT, body as Partial<TeamRoleConfig> & { id: string }, {
           actor: "owner",

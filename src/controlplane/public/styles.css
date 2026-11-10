@@ -1168,6 +1168,33 @@ body {
   font-size: 0.75rem;
 }
 
+.team-model-cell {
+  min-width: 10rem;
+}
+
+.team-model-cell input {
+  width: 100%;
+  min-width: 9rem;
+  padding: 0.35rem 0.45rem;
+  direction: ltr;
+  text-align: left;
+  font: 0.75rem var(--mono);
+}
+
+.team-model-warning {
+  display: block;
+  margin-top: 0.25rem;
+  color: var(--danger, #c65353);
+}
+
+#teamModelStatus.error {
+  color: var(--danger, #c65353);
+}
+
+#teamModelStatus.success {
+  color: var(--success, #4a9d68);
+}
+
 .chip {
   display: inline-block;
   padding: 0.15rem 0.5rem;

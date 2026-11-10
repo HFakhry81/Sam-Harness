@@ -112,6 +112,25 @@ describe("team config load/validate", () => {
     expect(validateTeamConfig(bad).ok).toBe(false);
   });
 
+  it("rejects empty local and cloud model assignments", () => {
+    const config = defaultTeamConfig();
+    const auditor = config.roles.find((role) => role.id === "auditor")!;
+    auditor.models.local = " ";
+    const result = validateTeamConfig(config);
+    expect(result.ok).toBe(false);
+    expect(
+      result.issues.some((issue) => issue.path.endsWith(".models.local"))
+    ).toBe(true);
+
+    auditor.models.local = "gemma3:1b";
+    auditor.models.cloud = "";
+    const cloudResult = validateTeamConfig(config);
+    expect(cloudResult.ok).toBe(false);
+    expect(
+      cloudResult.issues.some((issue) => issue.path.endsWith(".models.cloud"))
+    ).toBe(true);
+  });
+
   it("applies SAM_ROLE_*_MODEL env overrides", () => {
     process.env.SAM_ROLE_STRATEGIST_MODEL = "custom-local:7b";
     process.env.SAM_ROLE_AUDITOR_CLOUD_MODEL = "custom-cloud";

@@ -255,8 +255,25 @@ export function validateTeamConfig(raw: unknown): TeamValidationResult {
     if (typeof r.prefersCloud !== "boolean") {
       issues.push({ path: `${p}.prefersCloud`, message: "prefersCloud must be boolean" });
     }
-    if (!isPlainObject(r.models) || typeof r.models.local !== "string" || typeof r.models.cloud !== "string") {
+    if (
+      !isPlainObject(r.models) ||
+      typeof r.models.local !== "string" ||
+      typeof r.models.cloud !== "string"
+    ) {
       issues.push({ path: `${p}.models`, message: "models.local and models.cloud required" });
+    } else {
+      if (!r.models.local.trim()) {
+        issues.push({
+          path: `${p}.models.local`,
+          message: "models.local must not be empty",
+        });
+      }
+      if (!r.models.cloud.trim()) {
+        issues.push({
+          path: `${p}.models.cloud`,
+          message: "models.cloud must not be empty",
+        });
+      }
     }
     const stages = new Set([
       "intake",

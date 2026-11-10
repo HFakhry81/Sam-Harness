@@ -40,6 +40,7 @@ import {
 } from "../agency/modelPolicy.js";
 import { LONG_FORM_REPEAT_PENALTY } from "../agency/repetitionGuard.js";
 import { localOllamaOptions } from "../lib/ollamaLocal.js";
+import { guardLocalOllamaInvocation } from "../lib/ollamaModels.js";
 
 export { CostCapExceededError };
 export type { ModelRoute };
@@ -183,6 +184,7 @@ function openAiCompatTarget(
 function chatFromRoute(
   route: ModelRoute,
   opts: {
+    role?: string;
     temperature: number;
     numPredict?: number;
     numCtx?: number;
@@ -212,7 +214,7 @@ function chatFromRoute(
     });
   }
 
-  return new ChatOllama({
+  const model = new ChatOllama({
     baseUrl: route.baseUrl,
     ...(route.headers ? { headers: route.headers } : {}),
     model: route.model,
@@ -231,6 +233,22 @@ function chatFromRoute(
       ? { repeatPenalty: opts.repeatPenalty }
       : {}),
   });
+  if (route.tier !== "local") return model;
+
+  const invoke = guardLocalOllamaInvocation(
+    model.invoke.bind(model),
+    route.model,
+    opts.role || "unknown",
+    { baseUrl: route.baseUrl }
+  );
+  return new Proxy(model, {
+    get(target, property, receiver) {
+      if (property === "invoke") {
+        return invoke;
+      }
+      return Reflect.get(target, property, receiver);
+    },
+  });
 }
 
 /** Local/fast model for CEO routing & short drafts */
@@ -246,6 +264,7 @@ export function makeCeoModel() {
     prefersCloud: false,
   });
   return chatFromRoute(route, {
+    role: "ceo_router",
     temperature: 0.1,
     numPredict: 512,
   });
@@ -357,6 +376,7 @@ export function makeSpecialistModel(opts: {
   }
 
   return chatFromRoute(route, {
+    role,
     temperature: opts.temperature ?? roleCfg?.temperature ?? 0.2,
     numPredict: opts.numPredict ?? roleCfg?.numPredict ?? 1200,
     // Local calls inherit SAM_LOCAL_NUM_CTX (16k default) so long evidence

@@ -284,11 +284,15 @@ action_pull_models() {
     sam_fail "ollama not in PATH"
     return 1
   fi
-  local m failed=0
+  local m failed=0 model_output role_ids
   local models=()
+  if ! model_output="$(sam_team_local_models)"; then
+    sam_fail "Could not safely read local model assignments from config/team.json"
+    return 1
+  fi
   while IFS= read -r m; do
     [[ -n "$m" ]] && models+=("$m")
-  done < <(sam_team_local_models)
+  done <<< "$model_output"
   sam_info "models: ${models[*]}"
   for m in "${models[@]}"; do
     [[ -z "$m" ]] && continue
@@ -297,6 +301,11 @@ action_pull_models() {
       sam_ok "$m"
     else
       sam_warn "pull failed: $m"
+      if ! role_ids="$(sam_team_roles_for_model "$m")"; then
+        sam_fail "Could not map model assignments from config/team.json"
+      elif [[ -n "$role_ids" ]]; then
+        sam_fail "Unavailable model remains assigned to roles: ${role_ids//$'\n'/, }. Replace it in Team settings before running those roles."
+      fi
       failed=$((failed + 1))
     fi
   done

@@ -7,6 +7,7 @@
  */
 import { spawnSync } from "node:child_process";
 import * as fs from "node:fs";
+import * as os from "node:os";
 import * as path from "node:path";
 import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
@@ -490,6 +491,55 @@ describe("Tools manager", () => {
     expect(r.status, r.stderr).toBe(0);
     for (const m of locals) {
       expect(r.stdout).toContain(m);
+    }
+  });
+
+  it("fails closed on malformed team config and maps pull failures to assigned roles", () => {
+    const psHelper = readUtf8(path.join(tools, "lib", "SamHarness.Common.ps1"));
+    const psManager = readUtf8(path.join(tools, "Sam-Harness-Manager.ps1"));
+    const shManager = readUtf8(path.join(tools, "sam-harness-manager.sh"));
+    expect(psHelper).toMatch(/refusing fallback models/i);
+    expect(psManager).toMatch(/Unavailable model remains assigned to roles/);
+    expect(shManager).toMatch(/Unavailable model remains assigned to roles/);
+    if (!usableBash) return;
+
+    const temp = fs.mkdtempSync(path.join(os.tmpdir(), "sam-team-models-"));
+    try {
+      fs.mkdirSync(path.join(temp, "config"), { recursive: true });
+      fs.writeFileSync(
+        path.join(temp, "config", "team.json"),
+        JSON.stringify({
+          roles: [
+            { id: "strategist", models: { local: "qwen-claude:27b-fast" } },
+            { id: "auditor", models: { local: "qwen-claude:27b-fast" } },
+          ],
+        })
+      );
+      const toolsPosix = tools.replace(/\\/g, "/");
+      const tempPosix = temp.replace(/\\/g, "/");
+      const source = [
+        `TOOLS_DIR='${toolsPosix.replace(/'/g, `'\\''`)}'`,
+        `PROJECT_ROOT='${tempPosix.replace(/'/g, `'\\''`)}'`,
+        'source "$TOOLS_DIR/lib/sam-harness-common.sh"',
+      ].join("\n");
+      const mapped = spawnSync(
+        usableBash,
+        ["-lc", `${source}\nsam_team_local_models\nsam_team_roles_for_model 'qwen-claude:27b-fast'`],
+        { encoding: "utf8", windowsHide: true }
+      );
+      expect(mapped.status, mapped.stderr).toBe(0);
+      expect(mapped.stdout).toMatch(/qwen-claude:27b-fast/);
+      expect(mapped.stdout).toMatch(/strategist[\s\S]*auditor/);
+
+      fs.writeFileSync(path.join(temp, "config", "team.json"), "{invalid");
+      const malformed = spawnSync(
+        usableBash,
+        ["-lc", `${source}\nsam_team_local_models`],
+        { encoding: "utf8", windowsHide: true }
+      );
+      expect(malformed.status).not.toBe(0);
+    } finally {
+      fs.rmSync(temp, { recursive: true, force: true });
     }
   });
 

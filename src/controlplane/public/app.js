@@ -556,12 +556,66 @@ async function loadTeamUi() {
   const status = $("teamStatus");
   if (!body) return;
   try {
-    const data = await api("/api/team").then((r) => r.json());
+    const [teamResponse, modelsResponse] = await Promise.all([
+      api("/api/team"),
+      api("/api/team/models"),
+    ]);
+    const data = await teamResponse.json();
+    if (!teamResponse.ok || !data.ok) {
+      throw new Error(data.error || `Team settings failed (${teamResponse.status})`);
+    }
+    let modelsData;
+    try {
+      modelsData = await modelsResponse.json();
+    } catch {
+      modelsData = { ok: false, error: "Invalid model inventory response" };
+    }
     const cfg = data.config || {};
     const routing = data.routing || [];
     const routeByRole = Object.fromEntries(
       (routing || []).map((d) => [d.role, d.route])
     );
+    const modelByRole = Object.fromEntries(
+      (modelsData.roles || []).map((entry) => [entry.id, entry])
+    );
+    const modelList = $("teamOllamaModels");
+    if (modelList) {
+      modelList.replaceChildren();
+      (modelsData.models || []).forEach((model) => {
+        const option = document.createElement("option");
+        option.value = model.name;
+        modelList.appendChild(option);
+      });
+    }
+    if ($("teamRoleLocalModel") && !$("teamRoleLocalModel").value) {
+      $("teamRoleLocalModel").value = modelsData.models?.[0]?.name || "";
+    }
+    const modelStatus = $("teamModelStatus");
+    if (modelStatus) {
+      if (modelsData.available) {
+        const missing = (modelsData.roles || [])
+          .filter((entry) => entry.enabled && entry.installed === false)
+          .map((entry) => `${entry.id} → ${entry.model}`);
+        modelStatus.textContent = missing.length
+          ? `${t("team.modelMissing") || "Unavailable model assignments"}: ${missing.join(", ")}`
+          : `${t("team.modelsAvailable") || "Ollama ready"} · ${(modelsData.models || []).length} ${t("team.modelsCount") || "models"}`;
+        modelStatus.classList.toggle("error", missing.length > 0);
+        modelStatus.classList.toggle("success", missing.length === 0);
+      } else if (modelsData.provider === "external") {
+        modelStatus.textContent =
+          t("team.externalProvider") || "Local provider is external; model checks are unavailable.";
+        modelStatus.classList.remove("error", "success");
+      } else if (modelsData.code === "TEAM_CONFIG_INVALID") {
+        modelStatus.textContent =
+          `${t("team.configInvalid") || "Team configuration is invalid"}: ${modelsData.error}`;
+        modelStatus.classList.add("error");
+      } else {
+        modelStatus.textContent =
+          `${t("team.ollamaUnavailable") || "Ollama status unavailable"}: ${modelsData.error || modelsResponse.statusText || modelsResponse.status}`;
+        modelStatus.classList.add("error");
+        modelStatus.classList.remove("success");
+      }
+    }
     if ($("teamPipelineOrder")) {
       $("teamPipelineOrder").value = (cfg.pipeline?.downstreamOrder || []).join(",");
     }
@@ -576,24 +630,115 @@ async function loadTeamUi() {
         <td><code>${escapeHtml(role.id)}</code>${role.builtin ? "" : " · custom"}</td>
         <td>${escapeHtml(role.title || "")}</td>
         <td>${role.enabled ? "✓" : "—"}</td>
-        <td><code>${escapeHtml(role.models?.local || "")}</code></td>
-        <td><code>${escapeHtml(role.models?.cloud || "")}</code></td>
+        <td class="team-model-cell"></td>
+        <td class="team-model-cell"><input class="team-cloud-model" aria-label="${escapeHtml(role.id)} cloud model" value="${escapeHtml(role.models?.cloud || "")}" /></td>
         <td>${escapeHtml(routeLabel)}</td>
         <td class="ops-actions"></td>`;
+      const localCell = tr.querySelector(".team-model-cell");
+      const localInput = document.createElement("input");
+      localInput.className = "team-local-model";
+      localInput.setAttribute("aria-label", `${role.id} local model`);
+      localInput.setAttribute("list", "teamOllamaModels");
+      localInput.value = role.models?.local || "";
+      localInput.autocomplete = "off";
+      localCell.appendChild(localInput);
+      const health = modelByRole[role.id];
+      const cloudInput = tr.querySelector(".team-cloud-model");
+      localInput.disabled = Boolean(health?.overridden?.local);
+      cloudInput.disabled = Boolean(health?.overridden?.cloud);
+      if (localInput.disabled || cloudInput.disabled) {
+        localInput.title = cloudInput.title =
+          t("team.envOverride") || "This model is controlled by an environment override.";
+      }
+      if (health?.installed === false) {
+        const warning = document.createElement("small");
+        warning.className = "team-model-warning";
+        warning.textContent = t("team.modelMissingShort") || "Not installed";
+        localCell.appendChild(warning);
+      }
       const actions = tr.querySelector(".ops-actions");
+      const save = document.createElement("button");
+      save.type = "button";
+      save.className = "btn ghost tiny";
+      save.textContent = t("team.saveModel") || "Save models";
+      save.disabled = Boolean(
+        health?.overridden?.local && health?.overridden?.cloud
+      );
+      save.addEventListener("click", async () => {
+        try {
+          const models = {};
+          if (!health?.overridden?.local) {
+            models.local = localInput.value.trim();
+          }
+          if (!health?.overridden?.cloud) {
+            models.cloud = cloudInput.value.trim();
+          }
+          if (!Object.keys(models).length) return;
+          const response = await api("/api/team/roles", {
+            method: "POST",
+            body: JSON.stringify({
+              id: role.id,
+              models,
+            }),
+          });
+          const result = await response.json();
+          if (!response.ok || !result.ok) {
+            throw new Error(result.error || `Save failed (${response.status})`);
+          }
+          if (status) status.textContent = `${role.id} · ${t("team.saved") || "saved"}`;
+          await loadTeamUi();
+        } catch (e) {
+          if (status) status.textContent = e.message || String(e);
+        }
+      });
+      actions.appendChild(save);
+      const check = document.createElement("button");
+      check.type = "button";
+      check.className = "btn ghost tiny";
+      check.textContent = t("team.checkModel") || "Check";
+      check.addEventListener("click", async () => {
+        try {
+          const response = await api("/api/team/models/check", {
+            method: "POST",
+            body: JSON.stringify({ model: localInput.value.trim() }),
+          });
+          const result = await response.json();
+          if (!response.ok || !result.ok) {
+            throw new Error(result.error || `Model check failed (${response.status})`);
+          }
+          if (status) {
+            status.textContent = `${result.model.name} · ${t("team.modelReady") || "installed and reachable"}`;
+          }
+        } catch (e) {
+          if (status) status.textContent = e.message || String(e);
+        }
+      });
+      actions.appendChild(check);
       if (role.stage === "downstream" || !role.builtin) {
         const toggle = document.createElement("button");
         toggle.type = "button";
         toggle.className = "btn ghost tiny";
+        toggle.disabled = !role.enabled && health?.installed === false;
+        if (toggle.disabled) {
+          toggle.title = t("team.assignBeforeEnable") || "Assign an installed model before enabling this role.";
+        }
         toggle.textContent = role.enabled
           ? t("team.disable") || "Disable"
           : t("team.enable") || "Enable";
         toggle.addEventListener("click", async () => {
-          await api("/api/team/roles", {
-            method: "POST",
-            body: JSON.stringify({ id: role.id, enabled: !role.enabled }),
-          });
-          loadTeamUi();
+          try {
+            const response = await api("/api/team/roles", {
+              method: "POST",
+              body: JSON.stringify({ id: role.id, enabled: !role.enabled }),
+            });
+            const result = await response.json();
+            if (!response.ok || !result.ok) {
+              throw new Error(result.error || `Role update failed (${response.status})`);
+            }
+            await loadTeamUi();
+          } catch (e) {
+            if (status) status.textContent = e.message || String(e);
+          }
         });
         actions.appendChild(toggle);
       }
@@ -603,10 +748,19 @@ async function loadTeamUi() {
         del.className = "btn ghost tiny";
         del.textContent = t("team.delete") || "Delete";
         del.addEventListener("click", async () => {
-          await api(`/api/team/roles/${encodeURIComponent(role.id)}`, {
-            method: "DELETE",
-          });
-          loadTeamUi();
+          if (!window.confirm(t("team.confirmDelete") || `Delete role ${role.id}?`)) return;
+          try {
+            const response = await api(`/api/team/roles/${encodeURIComponent(role.id)}`, {
+              method: "DELETE",
+            });
+            const result = await response.json();
+            if (!response.ok || !result.ok) {
+              throw new Error(result.error || `Delete failed (${response.status})`);
+            }
+            await loadTeamUi();
+          } catch (e) {
+            if (status) status.textContent = e.message || String(e);
+          }
         });
         actions.appendChild(del);
       }
@@ -1887,6 +2041,8 @@ $("btnTeamAddRole")?.addEventListener("click", async () => {
   const id = $("teamRoleId")?.value?.trim() || "";
   const title = $("teamRoleTitle")?.value?.trim() || "";
   const prompt = $("teamRolePrompt")?.value?.trim() || "";
+  const localModel = $("teamRoleLocalModel")?.value?.trim() || "";
+  const cloudModel = $("teamRoleCloudModel")?.value?.trim() || "";
   const res = await api("/api/team/roles", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
@@ -1897,7 +2053,7 @@ $("btnTeamAddRole")?.addEventListener("click", async () => {
       stage: "downstream",
       prefersCloud: false,
       enabled: true,
-      models: { local: "qwen2.5:1.5b", cloud: "gemma4:cloud", free: null },
+      models: { local: localModel, cloud: cloudModel, free: null },
     }),
   });
   const data = await res.json();
@@ -1908,6 +2064,7 @@ $("btnTeamAddRole")?.addEventListener("click", async () => {
     if ($("teamRoleId")) $("teamRoleId").value = "";
     if ($("teamRoleTitle")) $("teamRoleTitle").value = "";
     if ($("teamRolePrompt")) $("teamRolePrompt").value = "";
+    if ($("teamRoleLocalModel")) $("teamRoleLocalModel").value = "";
     loadTeamUi();
   }
 });

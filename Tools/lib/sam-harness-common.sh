@@ -174,20 +174,40 @@ sam_team_local_models() {
     printf '%s\n' "qwen2.5-coder:1.5b" "gemma3:1b" "qwen2.5:1.5b"
     return
   fi
-  if command -v node >/dev/null 2>&1; then
-    node -e '
-      const fs=require("fs");
-      const j=JSON.parse(fs.readFileSync(process.argv[1],"utf8"));
-      const s=new Set();
-      for (const r of (j.roles||[])) {
-        const m=r && r.models && r.models.local;
-        if (m && String(m).trim()) s.add(String(m).trim());
-      }
-      for (const m of s) console.log(m);
-    ' "$path" 2>/dev/null && return
+  if ! command -v node >/dev/null 2>&1; then
+    printf '%s\n' "Node.js is required to safely read config/team.json." >&2
+    return 1
   fi
-  # fallback grep
-  grep -oE '"local"[[:space:]]*:[[:space:]]*"[^"]+"' "$path" | sed -E 's/.*"([^"]+)"/\1/' | sort -u
+  node -e '
+    const fs=require("fs");
+    const j=JSON.parse(fs.readFileSync(process.argv[1],"utf8"));
+    if (!j || !Array.isArray(j.roles)) throw new Error("roles array is missing");
+    const s=new Set();
+    for (const r of j.roles) {
+      const m=r && r.models && r.models.local;
+      if (m && String(m).trim()) s.add(String(m).trim());
+    }
+    if (!s.size) throw new Error("team config has no local models");
+    for (const m of s) console.log(m);
+  ' "$path"
+}
+
+sam_team_roles_for_model() {
+  local root path
+  root="$(sam_project_root)"
+  path="$root/config/team.json"
+  [[ -f "$path" ]] || return 0
+  node -e '
+    const fs=require("fs");
+    const j=JSON.parse(fs.readFileSync(process.argv[1],"utf8"));
+    if (!j || !Array.isArray(j.roles)) throw new Error("roles array is missing");
+    const model=process.argv[2];
+    for (const r of j.roles) {
+      if (r && r.models && String(r.models.local || "").trim() === model) {
+        console.log(String(r.id || "(unknown role)"));
+      }
+    }
+  ' "$path" "$1"
 }
 
 sam_manifest_actions() {

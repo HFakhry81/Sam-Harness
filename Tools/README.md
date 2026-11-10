@@ -35,7 +35,7 @@ bash Tools/sam-harness-manager.sh --action update --non-interactive
 | 4 | `update` | Refuse dirty tree → `git pull --ff-only` current branch → install → `migrate` → `doctor` |
 | 5 | `build-check` | `typecheck` + `test` + `doctor` |
 | 6 | `start-ui` | Control Plane → http://127.0.0.1:8787/ |
-| 7 | `pull-models` | Unique **local** models from `config/team.json` via Ollama |
+| 7 | `pull-models` | Unique **local** models from `config/team.json` via Ollama; failed pulls name affected roles and remain failures |
 | 8 | `doctor` | `pnpm run doctor` |
 | 9 | `help` | `pnpm run help` |
 | 10 | `backup` | Zip DB + `config/*.json` + `.env` → `SAM_OUTPUT_HOME/exports/` |
@@ -88,6 +88,8 @@ The manager `install` action **delegates** to those scripts (no duplicated logic
 - Git  
 - Ollama optional (local models from `config/team.json`)  
 - **Windows PowerShell 5.1** supported (no pwsh 7 required)
+
+If `config/team.json` is malformed, `pull-models` fails instead of substituting an unrelated default list. A failed model stays assigned until changed in Control Plane → **Team**; unavailable local models are shown as not ready and blocked before invocation.
 
 After setup: `pnpm run doctor` then `pnpm run ui` (or menu item 6).
 

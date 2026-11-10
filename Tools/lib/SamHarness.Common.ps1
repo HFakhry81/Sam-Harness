@@ -187,6 +187,9 @@ function Get-SamTeamLocalModels {
   }
   try {
     $json = Get-Content -LiteralPath $path -Raw -Encoding UTF8 | ConvertFrom-Json
+    if (-not $json -or -not $json.roles) {
+      throw "roles array is missing"
+    }
     foreach ($role in $json.roles) {
       $local = $null
       if ($role.models -and $role.models.local) { $local = [string]$role.models.local }
@@ -195,12 +198,32 @@ function Get-SamTeamLocalModels {
       }
     }
   } catch {
-    return @("qwen2.5-coder:1.5b", "gemma3:1b", "qwen2.5:1.5b")
+    throw "Cannot read config/team.json; refusing fallback models. $($_.Exception.Message)"
   }
   if ($models.Count -eq 0) {
-    return @("qwen2.5-coder:1.5b", "gemma3:1b", "qwen2.5:1.5b")
+    throw "config/team.json contains no local models; refusing fallback models"
   }
   return $models.ToArray()
+}
+
+function Get-SamTeamRoleIdsForModel {
+  param([string]$ProjectRoot, [string]$Model)
+  $path = Join-Path $ProjectRoot "config\team.json"
+  if (-not (Test-Path -LiteralPath $path)) { return @() }
+  try {
+    $json = Get-Content -LiteralPath $path -Raw -Encoding UTF8 | ConvertFrom-Json
+    if (-not $json -or -not $json.roles) { throw "roles array is missing" }
+    return @(
+      $json.roles |
+        Where-Object {
+          $_.models -and [string]$_.models.local -and
+          ([string]$_.models.local).Trim() -eq $Model
+        } |
+        ForEach-Object { [string]$_.id }
+    )
+  } catch {
+    throw "Cannot map local model assignments in config/team.json. $($_.Exception.Message)"
+  }
 }
 
 function Invoke-SamNative {
