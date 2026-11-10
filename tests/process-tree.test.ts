@@ -1,5 +1,5 @@
 import { spawn, type ChildProcess } from "child_process";
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { terminateChildProcessTree } from "../src/controlplane/processTree.js";
 
 function waitForLine(child: ChildProcess): Promise<string> {
@@ -38,6 +38,10 @@ async function waitForProcessExit(pid: number): Promise<boolean> {
   }
 }
 
+afterEach(() => {
+  vi.restoreAllMocks();
+});
+
 describe("terminateChildProcessTree", () => {
   it("terminates a spawned process and its descendants", async () => {
     const script = [
@@ -53,6 +57,17 @@ describe("terminateChildProcessTree", () => {
     try {
       const descendantPid = Number(await waitForLine(child));
       expect(descendantPid).toBeGreaterThan(0);
+      if (process.platform !== "win32") {
+        const originalKill = process.kill.bind(process);
+        vi.spyOn(process, "kill").mockImplementation((pid, signal) => {
+          if (pid < 0 && signal !== 0) {
+            const error = new Error("simulated group-signal permission restriction") as NodeJS.ErrnoException;
+            error.code = "EPERM";
+            throw error;
+          }
+          return originalKill(pid, signal);
+        });
+      }
       await terminateChildProcessTree(child);
       expect(child.exitCode !== null || child.signalCode !== null).toBe(true);
       expect(await waitForProcessExit(descendantPid)).toBe(true);
