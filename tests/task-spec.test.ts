@@ -63,4 +63,11 @@ describe("task-spec engine", () => {
     expect(spec.route).toBe("architecture");
     expect(spec.workspaceMode).toBe("code");
   });
+
+  it("routes Arabic bug-fix requests to implementation", () => {
+    const spec = buildTaskSpec({
+      prompt: "حل مشكلة إيقاف المهمة وتحسين تقرير التشغيل",
+    });
+    expect(spec.route).toBe("implement");
+  });
 });

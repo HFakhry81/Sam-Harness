@@ -114,7 +114,7 @@ export function detectRoute(prompt: string, hint?: UiRoute | "auto"): UiRoute {
   const t = prompt.toLowerCase();
 
   if (
-    /implement|level.?3|--go|apply patch|طبق على الكود|عدّل الكود|عدل الكود|نف[ّ']?ذ.*(?:الكود|code|tickets|التذاكر)/i.test(
+    /implement|level.?3|--go|apply patch|طبق على الكود|عدّل الكود|عدل الكود|نف[ّ']?ذ.*(?:الكود|code|tickets|التذاكر)|(?:حل|حلّ)\s+(?:ال)?مشكلة|(?:أصلح|اصلح|صلّ?ح)\s+(?:ال)?(?:خطأ|عطل|مشكلة)/i.test(
       t
     )
   ) {

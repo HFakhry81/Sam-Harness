@@ -25,6 +25,7 @@ export type SessionEntry = {
   endedAt: string;
   exitCode: number | null;
   success: boolean;
+  cancelled?: boolean;
   summary: string;
   artifacts: string[];
   logTail: string;
@@ -180,7 +181,9 @@ export function renderSessionMarkdown(session: AgencySession): string {
     lines.push(`## ${i + 1}. ${e.title}`);
     lines.push(`- id: \`${e.id}\``);
     lines.push(`- route: \`${e.route}\` · mode: \`${e.mode}\``);
-    lines.push(`- result: ${e.success ? "OK" : "FAIL"} (exit ${e.exitCode})`);
+    lines.push(
+      `- result: ${e.cancelled ? "STOPPED" : e.success ? "OK" : "FAIL"} (exit ${e.exitCode})`
+    );
     lines.push(`- window: ${e.startedAt} → ${e.endedAt}`);
     if (e.targetRepo) lines.push(`- target: \`${e.targetRepo}\``);
     lines.push(`- artifacts: ${e.artifacts.join(", ") || "—"}`);
