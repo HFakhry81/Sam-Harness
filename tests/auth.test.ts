@@ -4,7 +4,10 @@ import {
   __resetSessionsForTests,
   assertCsrfOrigin,
   authenticateRequest,
+  completeMfa,
   createSession,
+  generateTOTP,
+  initiateMfa,
   isAllowedHost,
   isAllowedOrigin,
   sessionCookieHeader,
@@ -61,8 +64,8 @@ describe("Control Plane auth", () => {
     ).toThrow(/foreign Origin/i);
   });
 
-  it("/api/run without token → 401", () => {
-    const auth = authenticateRequest(fakeReq({ method: "POST", url: "/api/run" }), OWNER, {
+  it("/api/run without token → 401", async () => {
+    const auth = await authenticateRequest(fakeReq({ method: "POST", url: "/api/run" }), OWNER, {
       port: PORT,
     });
     expect(auth.ok).toBe(false);
@@ -71,8 +74,8 @@ describe("Control Plane auth", () => {
     }
   });
 
-  it("foreign Origin with bearer → 403", () => {
-    const auth = authenticateRequest(
+  it("foreign Origin with bearer → 403", async () => {
+    const auth = await authenticateRequest(
       fakeReq({
         method: "POST",
         url: "/api/run",
@@ -90,8 +93,8 @@ describe("Control Plane auth", () => {
     }
   });
 
-  it("accepts Bearer owner token on loopback without Origin", () => {
-    const auth = authenticateRequest(
+  it("accepts Bearer owner token on loopback without Origin", async () => {
+    const auth = await authenticateRequest(
       fakeReq({
         method: "POST",
         url: "/api/run",
@@ -104,9 +107,9 @@ describe("Control Plane auth", () => {
     if (auth.ok) expect(auth.via).toBe("bearer");
   });
 
-  it("session + CSRF header authorizes mutating routes", () => {
-    const sess = createSession();
-    const auth = authenticateRequest(
+  it("session + CSRF header authorizes mutating routes", async () => {
+    const sess = await createSession();
+    const auth = await authenticateRequest(
       fakeReq({
         method: "POST",
         url: "/api/run",
@@ -123,9 +126,30 @@ describe("Control Plane auth", () => {
     if (auth.ok) expect(auth.via).toBe("session");
   });
 
-  it("session without CSRF on POST → 403", () => {
-    const sess = createSession();
-    const auth = authenticateRequest(
+  it("session survives an in-memory cache reset", async () => {
+    const sess = await createSession();
+    __resetSessionsForTests();
+
+    const auth = await authenticateRequest(
+      fakeReq({
+        method: "POST",
+        url: "/api/run",
+        headers: {
+          cookie: sessionCookieHeader(sess.id).split(";")[0],
+          "x-csrf-token": sess.csrfToken,
+          origin: `http://127.0.0.1:${PORT}`,
+        },
+      }),
+      OWNER,
+      { port: PORT }
+    );
+    expect(auth.ok).toBe(true);
+    if (auth.ok) expect(auth.via).toBe("session");
+  });
+
+  it("session without CSRF on POST → 403", async () => {
+    const sess = await createSession();
+    const auth = await authenticateRequest(
       fakeReq({
         method: "POST",
         url: "/api/run",
@@ -139,5 +163,12 @@ describe("Control Plane auth", () => {
     );
     expect(auth.ok).toBe(false);
     if (!auth.ok) expect(auth.status).toBe(403);
+  });
+
+  it("generates and verifies RFC 6238 codes from a Base32 secret", async () => {
+    const session = await createSession();
+    const pending = initiateMfa(session.id);
+    expect(pending.secret).toMatch(/^[A-Z2-7]+$/);
+    expect(completeMfa(session.id, generateTOTP(pending.secret))).toBe(true);
   });
 });

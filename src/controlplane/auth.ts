@@ -6,6 +6,13 @@ import * as crypto from "crypto";
 import * as fs from "fs";
 import * as http from "http";
 import * as path from "path";
+import {
+  cleanupExpiredSessions,
+  createSession as dbCreateSession,
+  deleteSession as dbDeleteSession,
+  getSessionByToken,
+  getUserSessions,
+} from "./session-store.js";
 
 export const TOKEN_FILE = ".controlplane-token";
 export const SESSION_COOKIE = "sh_session";
@@ -24,6 +31,8 @@ export type AuthSession = {
   expiresAt: number;
   mfaVerified?: boolean; // هل تم التحقق من MFA لهذه الجلسة
   role?: UserRole; // دور المستخدم في نظام RBAC
+  userAgent?: string; // User-Agent للجلسة
+  ipAddress?: string; // عنوان IP للمستخدم
 };
 
 /** ---------- نظام RBAC (التحكم في الوصول بناءً على الدور) ---------- */
@@ -113,24 +122,57 @@ const MFA_SECRET_ENV = "CONTROL_PLANE_MFA_SECRET";
 const MFA_CODE_TTL_MS = 5 * 60 * 1000; // رمز MFA صالح لمدة 5 دقائق
 const mfaPending = new Map<string, { secret: string; expiresAt: number }>(); // sessionId -> secret
 
-/** توليد مفتاح سري لـ TOTP إذا لم يكن محددًا في متغيرات البيئة. */
-function getMfaSecret(): string {
-  const env = process.env[MFA_SECRET_ENV];
-  if (env) return env;
-  // إنشاء مفتاح افتراضي من رمز التحكم (ليست مثالية للإنتاج ولكنها تعمل للتطوير)
-  const token = loadOrCreateOwnerToken(".");
-  return crypto.createHash("sha256").update(token + "mfa-salt").digest("hex").slice(0, 32);
+/** توليد مفتاح سري فريد لكل جلسة MFA (لا نستخدم مفتاح عالمي). */
+function generateUniqueMfaSecret(): string {
+  const alphabet = "ABCDEFGHIJKLMNOPQRSTUVWXYZ234567";
+  const bytes = crypto.randomBytes(20);
+  let value = 0;
+  let bits = 0;
+  let encoded = "";
+
+  for (const byte of bytes) {
+    value = (value << 8) | byte;
+    bits += 8;
+    while (bits >= 5) {
+      bits -= 5;
+      encoded += alphabet[(value >>> bits) & 31];
+      value &= (1 << bits) - 1;
+    }
+  }
+  if (bits > 0) encoded += alphabet[(value << (5 - bits)) & 31];
+  return encoded;
 }
 
-/** إنشاء رمز TOTP للمصادقة الثنائية (بناءً على الوقت الحالي). */
-export function generateTOTP(secret: string, timeStepMs: number = 30_000): string {
-  let timeCounter = Math.floor(Date.now() / timeStepMs);
-  const counterBuffer = Buffer.alloc(8);
-  for (let i = 7; i >= 0; i--) {
-    counterBuffer[i] = timeCounter & 0xff;
-    timeCounter = timeCounter >>> 8;
+function decodeBase32(secret: string): Buffer {
+  const alphabet = "ABCDEFGHIJKLMNOPQRSTUVWXYZ234567";
+  const normalized = secret.toUpperCase().replace(/=+$/, "");
+  if (!normalized || !/^[A-Z2-7]+$/.test(normalized)) {
+    throw new Error("Invalid base32 TOTP secret");
   }
-  const key = Buffer.from(secret, "utf8");
+
+  let value = 0;
+  let bits = 0;
+  const bytes: number[] = [];
+  for (const character of normalized) {
+    value = (value << 5) | alphabet.indexOf(character);
+    bits += 5;
+    if (bits >= 8) {
+      bits -= 8;
+      bytes.push((value >>> bits) & 0xff);
+      value &= (1 << bits) - 1;
+    }
+  }
+  return Buffer.from(bytes);
+}
+
+function generateTOTPForCounter(secret: string, counter: number): string {
+  const counterBuffer = Buffer.alloc(8);
+  let timeCounter = BigInt(counter);
+  for (let i = 7; i >= 0; i--) {
+    counterBuffer[i] = Number(timeCounter & 0xffn);
+    timeCounter >>= 8n;
+  }
+  const key = decodeBase32(secret);
   const hmac = crypto.createHmac("sha1", key).update(counterBuffer).digest();
   const offset = hmac[hmac.length - 1] & 0x0f;
   const binary =
@@ -142,28 +184,19 @@ export function generateTOTP(secret: string, timeStepMs: number = 30_000): strin
   return otp;
 }
 
+/** إنشاء رمز TOTP للمصادقة الثنائية (بناءً على الوقت الحالي). */
+export function generateTOTP(secret: string, timeStepMs: number = 30_000): string {
+  if (!Number.isFinite(timeStepMs) || timeStepMs <= 0) {
+    throw new RangeError("TOTP time step must be positive");
+  }
+  return generateTOTPForCounter(secret, Math.floor(Date.now() / timeStepMs));
+}
+
 /** التحقق من رمز TOTP الذي أدخله المستخدم (يسمح بفارق خطوة واحدة للأمام والوراء). */
-function verifyTOTP(secret: string, code: string): boolean {
-  const now = Date.now();
+function verifyTOTP(secret: string, code: string, now: number): boolean {
+  const timeCounter = Math.floor(now / 30_000);
   for (let step = -1; step <= 1; step++) {
-    const adjustedTime = Math.floor((now + step * 30_000) / 30_000);
-    const expected = generateTOTP(secret, 30_000);
-    // generateTOTP يستخدم الوقت الحالي، لذا نعدله يدويًا لكل خطوة
-    const counterBuffer = Buffer.alloc(8);
-    let counter = adjustedTime;
-    for (let i = 7; i >= 0; i--) {
-      counterBuffer[i] = counter & 0xff;
-      counter = counter >>> 8;
-    }
-    const key = Buffer.from(secret, "utf8");
-    const hmac = crypto.createHmac("sha1", key).update(counterBuffer).digest();
-    const offset = hmac[hmac.length - 1] & 0x0f;
-    const binary =
-      ((hmac[offset] & 0x7f) << 24) |
-      ((hmac[offset + 1] & 0xff) << 16) |
-      ((hmac[offset + 2] & 0xff) << 8) |
-      (hmac[offset + 3] & 0xff);
-    const otp = (binary % 1_000_000).toString().padStart(6, "0");
+    const otp = generateTOTPForCounter(secret, timeCounter + step);
     if (timingSafeEqualString(otp, code)) return true;
   }
   return false;
@@ -171,7 +204,7 @@ function verifyTOTP(secret: string, code: string): boolean {
 
 /** بدء جلسة MFA معلقة لمستخدم ما (يتم استدعاؤها قبل تنفيذ عملية حساسة). */
 export function initiateMfa(sessionId: string): { secret: string; expiresAt: number } {
-  const secret = getMfaSecret();
+  const secret = generateUniqueMfaSecret(); // مفتاح فريد لكل عملية
   const entry = { secret, expiresAt: Date.now() + MFA_CODE_TTL_MS };
   mfaPending.set(sessionId, entry);
   return entry;
@@ -185,7 +218,7 @@ export function completeMfa(sessionId: string, code: string): boolean {
     mfaPending.delete(sessionId);
     return false;
   }
-  if (!verifyTOTP(entry.secret, code)) return false;
+  if (!verifyTOTP(entry.secret, code, Date.now())) return false;
   // تعيين الجلسة كموثقة عبر MFA
   const session = sessions.get(sessionId);
   if (session) {
@@ -254,13 +287,16 @@ function decryptToken(encrypted: string): string {
 export function timingSafeEqualString(a: string, b: string): boolean {
   const ba = Buffer.from(String(a), "utf8");
   const bb = Buffer.from(String(b), "utf8");
-  if (ba.length !== bb.length) {
-    // Constant-time sink so length mismatch is not a fast-path oracle
-    crypto.timingSafeEqual(ba, ba);
-    return false;
-  }
-  if (ba.length === 0) return true;
-  return crypto.timingSafeEqual(ba, bb);
+  // Use constant-time comparison even for different lengths
+  // Pad the shorter buffer to avoid length-based timing attacks
+  const maxLen = Math.max(ba.length, bb.length);
+  if (maxLen === 0) return true;
+  const paddedA = Buffer.alloc(maxLen, 0);
+  const paddedB = Buffer.alloc(maxLen, 0);
+  ba.copy(paddedA);
+  bb.copy(paddedB);
+  const contentEqual = crypto.timingSafeEqual(paddedA, paddedB);
+  return contentEqual && ba.length === bb.length;
 }
 
 export function loadOrCreateOwnerToken(root: string): string {
@@ -282,45 +318,99 @@ export function loadOrCreateOwnerToken(root: string): string {
   return token;
 }
 
-export function createSession(): AuthSession {
-  pruneSessions();
-  // فرض حد أقصى على عدد الجلسات النشطة
-  if (sessions.size >= MAX_SESSIONS) {
-    const oldestKey = sessions.keys().next().value;
-    if (oldestKey !== undefined) sessions.delete(oldestKey);
+export async function createSession(userAgent?: string, ipAddress?: string): Promise<AuthSession> {
+  await cleanupExpiredSessions(); // تنظيف الجلسات المنتهية
+  const activeSessions = await getUserSessions("owner");
+  for (const oldSession of activeSessions.slice(MAX_SESSIONS - 1)) {
+    await dbDeleteSession(oldSession.sessionToken);
+    sessions.delete(oldSession.sessionToken);
   }
   const session: AuthSession = {
     id: crypto.randomBytes(24).toString("base64url"),
     csrfToken: crypto.randomBytes(24).toString("base64url"),
     createdAt: Date.now(),
     expiresAt: Date.now() + SESSION_TTL_MS,
+    userAgent,
+    ipAddress,
   };
+  // حفظ الجلسة في قاعدة البيانات للتخزين الدائم
+  await dbCreateSession({
+    sessionToken: session.id,
+    userId: "owner", // TODO: ربط الجلسة بمستخدم محدد
+    csrfToken: session.csrfToken,
+    userAgent: userAgent || "unknown",
+    ipAddress: ipAddress || "unknown",
+    createdAt: session.createdAt,
+    expiresAt: session.expiresAt,
+  });
+  // إضافة الجلسة إلى الذاكرة للتخزين المؤقت
   sessions.set(session.id, session);
   return session;
 }
 
-export function getSession(id: string | undefined | null): AuthSession | null {
+export async function getSession(id: string | undefined | null): Promise<AuthSession | null> {
   if (!id) return null;
-  const s = sessions.get(id);
-  if (!s) return null;
+  
+  // محاولة جلب الجلسة من الذاكرة أولاً (التخزين المؤقت)
+  let s = sessions.get(id);
+  
+  if (!s) {
+    // إذا لم تكن في الذاكرة، جلبها من قاعدة البيانات
+    const dbSession = await getSessionByToken(id);
+    if (!dbSession) return null;
+    
+    // تحويل الجلسة من قاعدة البيانات إلى AuthSession
+    s = {
+      id: dbSession.sessionToken,
+      csrfToken: dbSession.csrfToken,
+      createdAt: dbSession.createdAt,
+      expiresAt: dbSession.expiresAt,
+      userAgent: dbSession.userAgent,
+      ipAddress: dbSession.ipAddress,
+    };
+    sessions.set(id, s);
+  }
+  
   if (Date.now() > s.expiresAt) {
     sessions.delete(id);
+    await dbDeleteSession(id);
     return null;
   }
+  
   // تدوير الجلسة إذا مرت أكثر من 4 ساعات منذ إنشائها
   if (Date.now() > s.createdAt + SESSION_ROTATE_AFTER_MS) {
     sessions.delete(id);
-    const rotated = createSession();
-    // نسخ CSRF توكن من الجلسة القديمة للحفاظ على الاستمرارية
-    rotated.csrfToken = s.csrfToken;
+    await dbDeleteSession(id);
+    const rotated = await createSession(s.userAgent, s.ipAddress);
+    // الحفاظ على CSRF token القديم ولكن إنشاء واحد جديد للجلسة الجديدة
+    // يجب على العميل الحصول على CSRF جديد من الاستجابة
+    rotated.csrfToken = s.csrfToken; // للحفاظ على الطلبات الحالية
+    rotated.role = s.role; // الحفاظ على الدور
+    rotated.mfaVerified = s.mfaVerified; // الحفاظ على حالة MFA
+    rotated.createdAt = s.createdAt; // الحفاظ على وقت الإنشاء الأصلي
+    
+    // تحديث قاعدة البيانات بالجلسة الجديدة
+    await dbCreateSession({
+      sessionToken: rotated.id,
+      userId: "owner",
+      csrfToken: rotated.csrfToken,
+      userAgent: rotated.userAgent || "unknown",
+      ipAddress: rotated.ipAddress || "unknown",
+      createdAt: rotated.createdAt,
+      expiresAt: rotated.expiresAt,
+    });
+    
     sessions.set(rotated.id, rotated);
     return rotated;
   }
+  
   return s;
 }
 
-export function destroySession(id: string | undefined | null): void {
-  if (id) sessions.delete(id);
+export async function destroySession(id: string | undefined | null): Promise<void> {
+  if (!id) return;
+  sessions.delete(id);
+  await dbDeleteSession(id);
 }
 
 function pruneSessions() {
@@ -466,11 +556,11 @@ export type AuthResult =
  * - Authorization: Bearer <ownerToken>, or
  * - ?token= for EventSource
  */
-export function authenticateRequest(
+export async function authenticateRequest(
   req: http.IncomingMessage,
   ownerToken: string,
   opts?: { requireCsrf?: boolean; port?: number; allowMissingOriginWithBearer?: boolean }
-): AuthResult {
+): Promise<AuthResult> {
   const port = opts?.port ?? 8787;
   const host = req.headers.host as string | undefined;
   if (!isAllowedHost(host, port)) {
@@ -478,7 +568,7 @@ export function authenticateRequest(
   }
 
   const cookies = parseCookies(req.headers.cookie);
-  const session = getSession(cookies[SESSION_COOKIE]);
+  const session = await getSession(cookies[SESSION_COOKIE]);
   const bearerOrQuery = extractOwnerTokenFromRequest(req);
   const method = (req.method || "GET").toUpperCase();
   const mutating = !["GET", "HEAD", "OPTIONS"].includes(method);
