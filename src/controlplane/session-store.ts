@@ -1,4 +1,5 @@
-import { db } from '../lib/db/index';
+import { getDriver } from "../lib/db/index.js";
+import type { SqlRow } from "../lib/db/types.js";
 
 export interface SessionData {
   sessionToken: string;
@@ -11,126 +12,104 @@ export interface SessionData {
   rotatedAt?: number;
 }
 
-const SESSIONS_TABLE = 'user_sessions';
+const SESSIONS_TABLE = "user_sessions";
 
-export async function initSessionStore(): Promise<void> {
-  await db.exec(`
-    CREATE TABLE IF NOT EXISTS ${SESSIONS_TABLE} (
-      id INTEGER PRIMARY KEY AUTOINCREMENT,
-      session_token TEXT UNIQUE NOT NULL,
-      user_id TEXT NOT NULL,
-      csrf_token TEXT NOT NULL,
-      user_agent TEXT NOT NULL,
-      ip_address TEXT NOT NULL,
-      created_at INTEGER NOT NULL,
-      expires_at INTEGER NOT NULL,
-      rotated_at INTEGER,
-      FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
-    )
-  `);
-  
-  await db.exec(`
-    CREATE INDEX IF NOT EXISTS idx_sessions_token 
-    ON ${SESSIONS_TABLE}(session_token)
-  `);
-  
-  await db.exec(`
-    CREATE INDEX IF NOT EXISTS idx_sessions_user 
-    ON ${SESSIONS_TABLE}(user_id)
-  `);
-  
-  await db.exec(`
-    CREATE INDEX IF NOT EXISTS idx_sessions_expires 
-    ON ${SESSIONS_TABLE}(expires_at)
-  `);
-}
+function mapSessionRow(row: SqlRow): SessionData {
+  const sessionToken = row.session_token;
+  const userId = row.user_id;
+  const csrfToken = row.csrf_token;
+  const userAgent = row.user_agent;
+  const ipAddress = row.ip_address;
+  const createdAt = row.created_at;
+  const expiresAt = row.expires_at;
+  const rotatedAt = row.rotated_at;
 
-export async function createSession(data: SessionData): Promise<void> {
-  await db.run(`
-    INSERT INTO ${SESSIONS_TABLE} 
-    (session_token, user_id, csrf_token, user_agent, ip_address, created_at, expires_at)
-    VALUES (?, ?, ?, ?, ?, ?, ?)
-  `,
-    data.sessionToken,
-    data.userId,
-    data.csrfToken,
-    data.userAgent,
-    data.ipAddress,
-    data.createdAt,
-    data.expiresAt
-  );
-}
+  if (
+    typeof sessionToken !== "string" ||
+    typeof userId !== "string" ||
+    typeof csrfToken !== "string" ||
+    typeof userAgent !== "string" ||
+    typeof ipAddress !== "string" ||
+    typeof createdAt !== "number" ||
+    typeof expiresAt !== "number" ||
+    (rotatedAt !== null && rotatedAt !== undefined && typeof rotatedAt !== "number")
+  ) {
+    throw new Error("Invalid control-plane session row");
+  }
 
-export async function getSessionByToken(sessionToken: string): Promise<SessionData | null> {
-  const row = await db.get(`
-    SELECT session_token, user_id, csrf_token, user_agent, ip_address, 
-           created_at, expires_at, rotated_at
-    FROM ${SESSIONS_TABLE}
-    WHERE session_token = ? AND expires_at > ?
-  `, sessionToken, Date.now());
-  
-  if (!row) return null;
-  
   return {
-    sessionToken: row.session_token,
-    userId: row.user_id,
-    csrfToken: row.csrf_token,
-    userAgent: row.user_agent,
-    ipAddress: row.ip_address,
-    createdAt: row.created_at,
-    expiresAt: row.expires_at,
-    rotatedAt: row.rotated_at,
+    sessionToken,
+    userId,
+    csrfToken,
+    userAgent,
+    ipAddress,
+    createdAt,
+    expiresAt,
+    rotatedAt: typeof rotatedAt === "number" ? rotatedAt : undefined,
   };
 }
 
+export async function createSession(data: SessionData): Promise<void> {
+  getDriver()
+    .prepare(`
+      INSERT INTO ${SESSIONS_TABLE}
+        (session_token, user_id, csrf_token, user_agent, ip_address, created_at, expires_at)
+      VALUES (?, ?, ?, ?, ?, ?, ?)
+    `)
+    .run(
+      data.sessionToken,
+      data.userId,
+      data.csrfToken,
+      data.userAgent,
+      data.ipAddress,
+      data.createdAt,
+      data.expiresAt
+    );
+}
+
+export async function getSessionByToken(sessionToken: string): Promise<SessionData | null> {
+  const row = getDriver()
+    .prepare(`
+      SELECT session_token, user_id, csrf_token, user_agent, ip_address,
+             created_at, expires_at, rotated_at
+      FROM ${SESSIONS_TABLE}
+      WHERE session_token = ? AND expires_at > ?
+    `)
+    .get(sessionToken, Date.now());
+  if (!row) return null;
+  return mapSessionRow(row);
+}
+
 export async function updateSessionRotation(sessionToken: string, rotatedAt: number): Promise<void> {
-  await db.run(`
-    UPDATE ${SESSIONS_TABLE}
-    SET rotated_at = ?
-    WHERE session_token = ?
-  `, rotatedAt, sessionToken);
+  getDriver()
+    .prepare(`UPDATE ${SESSIONS_TABLE} SET rotated_at = ? WHERE session_token = ?`)
+    .run(rotatedAt, sessionToken);
 }
 
 export async function deleteSession(sessionToken: string): Promise<void> {
-  await db.run(`
-    DELETE FROM ${SESSIONS_TABLE}
-    WHERE session_token = ?
-  `, sessionToken);
+  getDriver().prepare(`DELETE FROM ${SESSIONS_TABLE} WHERE session_token = ?`).run(sessionToken);
 }
 
 export async function deleteAllUserSessions(userId: string): Promise<void> {
-  await db.run(`
-    DELETE FROM ${SESSIONS_TABLE}
-    WHERE user_id = ?
-  `, userId);
+  getDriver().prepare(`DELETE FROM ${SESSIONS_TABLE} WHERE user_id = ?`).run(userId);
 }
 
 export async function cleanupExpiredSessions(): Promise<number> {
-  const result = await db.run(`
-    DELETE FROM ${SESSIONS_TABLE}
-    WHERE expires_at <= ?
-  `, Date.now());
-  
-  return result.changes ?? 0;
+  const result = getDriver()
+    .prepare(`DELETE FROM ${SESSIONS_TABLE} WHERE expires_at <= ?`)
+    .run(Date.now());
+  return result.changes;
 }
 
 export async function getUserSessions(userId: string): Promise<SessionData[]> {
-  const rows = await db.all(`
-    SELECT session_token, user_id, csrf_token, user_agent, ip_address, 
-           created_at, expires_at, rotated_at
-    FROM ${SESSIONS_TABLE}
-    WHERE user_id = ? AND expires_at > ?
-    ORDER BY created_at DESC
-  `, userId, Date.now());
-  
-  return rows.map(row => ({
-    sessionToken: row.session_token,
-    userId: row.user_id,
-    csrfToken: row.csrf_token,
-    userAgent: row.user_agent,
-    ipAddress: row.ip_address,
-    createdAt: row.created_at,
-    expiresAt: row.expires_at,
-    rotatedAt: row.rotated_at,
-  }));
+  const rows = getDriver()
+    .prepare(`
+      SELECT session_token, user_id, csrf_token, user_agent, ip_address,
+             created_at, expires_at, rotated_at
+      FROM ${SESSIONS_TABLE}
+      WHERE user_id = ? AND expires_at > ?
+      ORDER BY created_at DESC
+    `)
+    .all(userId, Date.now());
+  return rows.map(mapSessionRow);
 }

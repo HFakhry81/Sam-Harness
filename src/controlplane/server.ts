@@ -1779,7 +1779,8 @@ const server = http.createServer(async (req, res) => {
         sendJson(res, 401, { ok: false, error: "Invalid owner token" });
         return;
       }
-      const sess = await createSession(req.headers["user-agent"] as string, clientIp(req));
+      const clientIp = (req.socket.remoteAddress || "unknown").replace(/^::ffff:/, "");
+      const sess = await createSession(req.headers["user-agent"] as string, clientIp);
       res.writeHead(200, {
         "Content-Type": "application/json; charset=utf-8",
         "Cache-Control": "no-store",
@@ -1940,7 +1941,7 @@ const server = http.createServer(async (req, res) => {
     }
     if (method === "POST" && p === "/api/logout") {
       const cookies = parseCookies(req.headers.cookie);
-      destroySession(cookies[SESSION_COOKIE]);
+      await destroySession(cookies[SESSION_COOKIE]);
       res.writeHead(200, {
         "Content-Type": "application/json; charset=utf-8",
         "Cache-Control": "no-store",

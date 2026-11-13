@@ -6,7 +6,13 @@ import * as crypto from "crypto";
 import * as fs from "fs";
 import * as http from "http";
 import * as path from "path";
-import { initSessionStore, createSession as dbCreateSession, getSessionByToken, updateSessionRotation, deleteSession as dbDeleteSession, cleanupExpiredSessions } from "./session-store";
+import {
+  cleanupExpiredSessions,
+  createSession as dbCreateSession,
+  deleteSession as dbDeleteSession,
+  getSessionByToken,
+  getUserSessions,
+} from "./session-store.js";
 
 export const TOKEN_FILE = ".controlplane-token";
 export const SESSION_COOKIE = "sh_session";
@@ -118,19 +124,55 @@ const mfaPending = new Map<string, { secret: string; expiresAt: number }>(); // 
 
 /** توليد مفتاح سري فريد لكل جلسة MFA (لا نستخدم مفتاح عالمي). */
 function generateUniqueMfaSecret(): string {
-  // توليد مفتاح سري فريد لكل عملية MFA
-  return crypto.randomBytes(20).toString("base32").toUpperCase().replace(/=/g, "");
+  const alphabet = "ABCDEFGHIJKLMNOPQRSTUVWXYZ234567";
+  const bytes = crypto.randomBytes(20);
+  let value = 0;
+  let bits = 0;
+  let encoded = "";
+
+  for (const byte of bytes) {
+    value = (value << 8) | byte;
+    bits += 8;
+    while (bits >= 5) {
+      bits -= 5;
+      encoded += alphabet[(value >>> bits) & 31];
+      value &= (1 << bits) - 1;
+    }
+  }
+  if (bits > 0) encoded += alphabet[(value << (5 - bits)) & 31];
+  return encoded;
 }
 
-/** إنشاء رمز TOTP للمصادقة الثنائية (بناءً على الوقت الحالي). */
-export function generateTOTP(secret: string, timeStepMs: number = 30_000): string {
-  let timeCounter = Math.floor(Date.now() / timeStepMs);
-  const counterBuffer = Buffer.alloc(8);
-  for (let i = 7; i >= 0; i--) {
-    counterBuffer[i] = timeCounter & 0xff;
-    timeCounter = timeCounter >>> 8;
+function decodeBase32(secret: string): Buffer {
+  const alphabet = "ABCDEFGHIJKLMNOPQRSTUVWXYZ234567";
+  const normalized = secret.toUpperCase().replace(/=+$/, "");
+  if (!normalized || !/^[A-Z2-7]+$/.test(normalized)) {
+    throw new Error("Invalid base32 TOTP secret");
   }
-  const key = Buffer.from(secret, "utf8");
+
+  let value = 0;
+  let bits = 0;
+  const bytes: number[] = [];
+  for (const character of normalized) {
+    value = (value << 5) | alphabet.indexOf(character);
+    bits += 5;
+    if (bits >= 8) {
+      bits -= 8;
+      bytes.push((value >>> bits) & 0xff);
+      value &= (1 << bits) - 1;
+    }
+  }
+  return Buffer.from(bytes);
+}
+
+function generateTOTPForCounter(secret: string, counter: number): string {
+  const counterBuffer = Buffer.alloc(8);
+  let timeCounter = BigInt(counter);
+  for (let i = 7; i >= 0; i--) {
+    counterBuffer[i] = Number(timeCounter & 0xffn);
+    timeCounter >>= 8n;
+  }
+  const key = decodeBase32(secret);
   const hmac = crypto.createHmac("sha1", key).update(counterBuffer).digest();
   const offset = hmac[hmac.length - 1] & 0x0f;
   const binary =
@@ -142,17 +184,19 @@ export function generateTOTP(secret: string, timeStepMs: number = 30_000): strin
   return otp;
 }
 
+/** إنشاء رمز TOTP للمصادقة الثنائية (بناءً على الوقت الحالي). */
+export function generateTOTP(secret: string, timeStepMs: number = 30_000): string {
+  if (!Number.isFinite(timeStepMs) || timeStepMs <= 0) {
+    throw new RangeError("TOTP time step must be positive");
+  }
+  return generateTOTPForCounter(secret, Math.floor(Date.now() / timeStepMs));
+}
+
 /** التحقق من رمز TOTP الذي أدخله المستخدم (يسمح بفارق خطوة واحدة للأمام والوراء). */
-function verifyTOTP(secret: string, code: string): boolean {
-  const now = Date.now();
+function verifyTOTP(secret: string, code: string, now: number): boolean {
+  const timeCounter = Math.floor(now / 30_000);
   for (let step = -1; step <= 1; step++) {
-    // تعديل الوقت الحالي لكل خطوة
-    const adjustedNow = now + step * 30_000;
-    // استخدام generateTOTP مع الوقت المعدل
-    const originalNow = Date.now();
-    Date.prototype.now = function() { return adjustedNow; };
-    const otp = generateTOTP(secret, 30_000);
-    Date.prototype.now = function() { return originalNow; };
+    const otp = generateTOTPForCounter(secret, timeCounter + step);
     if (timingSafeEqualString(otp, code)) return true;
   }
   return false;
@@ -174,7 +218,7 @@ export function completeMfa(sessionId: string, code: string): boolean {
     mfaPending.delete(sessionId);
     return false;
   }
-  if (!verifyTOTP(entry.secret, code)) return false;
+  if (!verifyTOTP(entry.secret, code, Date.now())) return false;
   // تعيين الجلسة كموثقة عبر MFA
   const session = sessions.get(sessionId);
   if (session) {
@@ -276,6 +320,11 @@ export function loadOrCreateOwnerToken(root: string): string {
 
 export async function createSession(userAgent?: string, ipAddress?: string): Promise<AuthSession> {
   await cleanupExpiredSessions(); // تنظيف الجلسات المنتهية
+  const activeSessions = await getUserSessions("owner");
+  for (const oldSession of activeSessions.slice(MAX_SESSIONS - 1)) {
+    await dbDeleteSession(oldSession.sessionToken);
+    sessions.delete(oldSession.sessionToken);
+  }
   const session: AuthSession = {
     id: crypto.randomBytes(24).toString("base64url"),
     csrfToken: crypto.randomBytes(24).toString("base64url"),
@@ -358,8 +407,10 @@ export async function getSession(id: string | undefined | null): Promise<AuthSes
   return s;
 }
 
-export function destroySession(id: string | undefined | null): void {
-  if (id) sessions.delete(id);
+export async function destroySession(id: string | undefined | null): Promise<void> {
+  if (!id) return;
+  sessions.delete(id);
+  await dbDeleteSession(id);
 }
 
 function pruneSessions() {

@@ -194,6 +194,25 @@ CREATE TABLE IF NOT EXISTS gate_results (
 CREATE INDEX IF NOT EXISTS idx_gate_results_run ON gate_results (tenant_id, run_id, at);
 `,
   },
+  {
+    version: 4,
+    name: "controlplane_sessions",
+    sql: `
+CREATE TABLE IF NOT EXISTS user_sessions (
+  session_token TEXT PRIMARY KEY,
+  user_id TEXT NOT NULL,
+  csrf_token TEXT NOT NULL,
+  user_agent TEXT NOT NULL,
+  ip_address TEXT NOT NULL,
+  created_at INTEGER NOT NULL,
+  expires_at INTEGER NOT NULL,
+  rotated_at INTEGER
+);
+
+CREATE INDEX IF NOT EXISTS idx_sessions_user ON user_sessions (user_id);
+CREATE INDEX IF NOT EXISTS idx_sessions_expires ON user_sessions (expires_at);
+`,
+  },
 ];
 
 function pgAdapt(sql: string): string {
