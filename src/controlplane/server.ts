@@ -1779,7 +1779,8 @@ const server = http.createServer(async (req, res) => {
         sendJson(res, 401, { ok: false, error: "Invalid owner token" });
         return;
       }
-      const sess = createSession();
+      const clientIp = (req.socket.remoteAddress || "unknown").replace(/^::ffff:/, "");
+      const sess = await createSession(req.headers["user-agent"] as string, clientIp);
       res.writeHead(200, {
         "Content-Type": "application/json; charset=utf-8",
         "Cache-Control": "no-store",
@@ -1795,7 +1796,7 @@ const server = http.createServer(async (req, res) => {
       return;
     }
     if (method === "GET" && p === "/api/auth/status") {
-      const auth = authenticateRequest(req, OWNER_TOKEN, {
+      const auth = await authenticateRequest(req, OWNER_TOKEN, {
         port: LISTEN_PORT,
         requireCsrf: false,
         allowMissingOriginWithBearer: true,
@@ -1810,7 +1811,7 @@ const server = http.createServer(async (req, res) => {
     }
     // —— MFA: initiate, verify, status ——
     if (method === "POST" && p === "/api/mfa/initiate") {
-      const auth = authenticateRequest(req, OWNER_TOKEN, {
+      const auth = await authenticateRequest(req, OWNER_TOKEN, {
         port: LISTEN_PORT,
         requireCsrf: true,
         allowMissingOriginWithBearer: true,
@@ -1831,7 +1832,7 @@ const server = http.createServer(async (req, res) => {
       return;
     }
     if (method === "POST" && p === "/api/mfa/verify") {
-      const auth = authenticateRequest(req, OWNER_TOKEN, {
+      const auth = await authenticateRequest(req, OWNER_TOKEN, {
         port: LISTEN_PORT,
         requireCsrf: true,
         allowMissingOriginWithBearer: true,
@@ -1856,7 +1857,7 @@ const server = http.createServer(async (req, res) => {
       return;
     }
     if (method === "GET" && p === "/api/mfa/status") {
-      const auth = authenticateRequest(req, OWNER_TOKEN, {
+      const auth = await authenticateRequest(req, OWNER_TOKEN, {
         port: LISTEN_PORT,
         requireCsrf: false,
         allowMissingOriginWithBearer: true,
@@ -1872,7 +1873,7 @@ const server = http.createServer(async (req, res) => {
     }
     // —— RBAC: roles, me, set-role ——
     if (method === "GET" && p === "/api/rbac/roles") {
-      const auth = authenticateRequest(req, OWNER_TOKEN, {
+      const auth = await authenticateRequest(req, OWNER_TOKEN, {
         port: LISTEN_PORT,
         requireCsrf: false,
         allowMissingOriginWithBearer: true,
@@ -1888,7 +1889,7 @@ const server = http.createServer(async (req, res) => {
       return;
     }
     if (method === "GET" && p === "/api/rbac/me") {
-      const auth = authenticateRequest(req, OWNER_TOKEN, {
+      const auth = await authenticateRequest(req, OWNER_TOKEN, {
         port: LISTEN_PORT,
         requireCsrf: false,
         allowMissingOriginWithBearer: true,
@@ -1910,7 +1911,7 @@ const server = http.createServer(async (req, res) => {
       return;
     }
     if (method === "POST" && p === "/api/rbac/role") {
-      const auth = authenticateRequest(req, OWNER_TOKEN, {
+      const auth = await authenticateRequest(req, OWNER_TOKEN, {
         port: LISTEN_PORT,
         requireCsrf: true,
         allowMissingOriginWithBearer: true,
@@ -1940,7 +1941,7 @@ const server = http.createServer(async (req, res) => {
     }
     if (method === "POST" && p === "/api/logout") {
       const cookies = parseCookies(req.headers.cookie);
-      destroySession(cookies[SESSION_COOKIE]);
+      await destroySession(cookies[SESSION_COOKIE]);
       res.writeHead(200, {
         "Content-Type": "application/json; charset=utf-8",
         "Cache-Control": "no-store",
@@ -2093,7 +2094,7 @@ const server = http.createServer(async (req, res) => {
 
     // —— Require auth for every other /api/* route ——
     if (p.startsWith("/api/") && !PUBLIC_API.has(p) && !isPublicHelpPath(p)) {
-      const auth = authenticateRequest(req, OWNER_TOKEN, {
+      const auth = await authenticateRequest(req, OWNER_TOKEN, {
         port: LISTEN_PORT,
         requireCsrf: true,
         allowMissingOriginWithBearer: true,
