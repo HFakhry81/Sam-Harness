@@ -103,6 +103,20 @@ export function validateBranchProtection(
   }
 }
 
+export function hasSharedGitHistory(
+  repository: string,
+  baseRef: string,
+  headRef: string
+): boolean {
+  const result = spawnSync("git", ["merge-base", baseRef, headRef], {
+    cwd: repository,
+    encoding: "utf8",
+    stdio: "pipe",
+  });
+  if (result.error) throw result.error;
+  return result.status === 0 && Boolean(String(result.stdout || "").trim());
+}
+
 function ensureBranchProtection(branch: "main" | "staging"): void {
   const repository = github("repo", "view", "--json", "nameWithOwner", "--jq", ".nameWithOwner");
   const protection = JSON.parse(
@@ -402,8 +416,8 @@ function createReleasePullRequest(): void {
   fetchOrigin("staging", "main");
   ensureBranchProtection("staging");
   ensureBranchProtection("main");
-  if (!isAncestor("origin/main", "origin/staging")) {
-    throw new Error("origin/staging does not contain origin/main; reconcile the protected branches first.");
+  if (!hasSharedGitHistory(root, "origin/main", "origin/staging")) {
+    throw new Error("origin/main and origin/staging have no shared history; refusing to create a release PR.");
   }
   const commits = Number(git("rev-list", "--count", "origin/main..origin/staging"));
   if (commits === 0) {
