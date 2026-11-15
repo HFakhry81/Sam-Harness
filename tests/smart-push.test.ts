@@ -1,9 +1,12 @@
 import * as fs from "node:fs";
+import * as os from "node:os";
 import * as path from "node:path";
+import { spawnSync } from "node:child_process";
 import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
 import {
   fillPullRequestTemplate,
+  hasSharedGitHistory,
   markPullRequestChecksGreen,
   validateBranchProtection,
 } from "../scripts/git/smart-push.js";
@@ -60,5 +63,44 @@ describe("smart push pull request tracking", () => {
         checks: [...protection.checks, "branch-flow"],
       })
     ).not.toThrow();
+  });
+
+  it("allows divergent release branches only when they share history", () => {
+    const repository = fs.mkdtempSync(path.join(os.tmpdir(), "sam-release-history-"));
+    const git = (...args: string[]) => {
+      const result = spawnSync("git", args, {
+        cwd: repository,
+        encoding: "utf8",
+      });
+      if (result.error) throw result.error;
+      if (result.status !== 0) throw new Error(result.stderr);
+      return String(result.stdout || "").trim();
+    };
+
+    try {
+      git("init");
+      git("config", "user.name", "Test");
+      git("config", "user.email", "test@example.com");
+      fs.writeFileSync(path.join(repository, "base.txt"), "base\n");
+      git("add", "base.txt");
+      git("commit", "-m", "base");
+      git("branch", "-M", "main");
+      git("switch", "-c", "staging");
+      fs.writeFileSync(path.join(repository, "staging.txt"), "staging\n");
+      git("add", "staging.txt");
+      git("commit", "-m", "staging");
+      expect(hasSharedGitHistory(repository, "main", "staging")).toBe(true);
+
+      const unrelatedCommit = git(
+        "commit-tree",
+        git("write-tree"),
+        "-m",
+        "unrelated"
+      );
+      git("branch", "unrelated", unrelatedCommit);
+      expect(hasSharedGitHistory(repository, "main", "unrelated")).toBe(false);
+    } finally {
+      fs.rmSync(repository, { recursive: true, force: true });
+    }
   });
 });
