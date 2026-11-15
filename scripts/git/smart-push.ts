@@ -59,6 +59,26 @@ function isAncestor(ancestor: string, descendant: string): boolean {
   return result.status === 0;
 }
 
+function fetchOrigin(...refs: string[]): void {
+  const args = ["fetch", "--prune", "origin", ...refs];
+  for (let attempt = 1; attempt <= 3; attempt += 1) {
+    try {
+      execute("git", args);
+      return;
+    } catch (error) {
+      if (attempt === 3) {
+        throw new Error(
+          `Could not fetch origin after ${attempt} attempts: ${
+            error instanceof Error ? error.message : String(error)
+          }`
+        );
+      }
+      console.warn(`[smart-push] Fetch failed (attempt ${attempt}/3); retrying in 2 seconds.`);
+      Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 2000);
+    }
+  }
+}
+
 function github(...args: string[]): string {
   return execute("gh", args, true);
 }
@@ -321,22 +341,22 @@ function syncAndDeleteMergedFeatureBranch(branch: string): void {
   if (git("branch", "--show-current") !== branch) {
     throw new Error(`Current branch changed during checks; refusing to delete '${branch}'.`);
   }
+  fetchOrigin();
   execute("git", ["switch", "staging"]);
-  execute("git", ["pull", "--ff-only", "origin", "staging"]);
+  execute("git", ["merge", "--ff-only", "origin/staging"]);
   // Squash merges do not preserve feature commit ancestry in the target branch.
   execute("git", ["branch", "-D", branch]);
-  execute("git", ["fetch", "--prune", "origin"]);
 }
 
 function syncLocalProtectedBranches(): void {
   if (git("status", "--porcelain")) {
     throw new Error("The worktree changed during release checks; refusing to update local protected branches.");
   }
+  fetchOrigin("main", "staging");
   execute("git", ["switch", "main"]);
-  execute("git", ["pull", "--ff-only", "origin", "main"]);
+  execute("git", ["merge", "--ff-only", "origin/main"]);
   execute("git", ["switch", "staging"]);
-  execute("git", ["pull", "--ff-only", "origin", "staging"]);
-  execute("git", ["fetch", "--prune", "origin"]);
+  execute("git", ["merge", "--ff-only", "origin/staging"]);
 }
 
 function createFeaturePullRequest(): void {
@@ -346,7 +366,7 @@ function createFeaturePullRequest(): void {
     throw new Error(`Refusing smart push from unsupported branch '${branch}'.`);
   }
 
-  execute("git", ["fetch", "origin", "staging"]);
+  fetchOrigin("staging");
   if (!isAncestor("origin/staging", "HEAD")) {
     throw new Error("Feature branch is not based on the latest origin/staging; update it before pushing.");
   }
@@ -379,7 +399,7 @@ function createFeaturePullRequest(): void {
 
 function createReleasePullRequest(): void {
   assertCleanWorktree();
-  execute("git", ["fetch", "origin", "staging", "main"]);
+  fetchOrigin("staging", "main");
   ensureBranchProtection("staging");
   ensureBranchProtection("main");
   if (!isAncestor("origin/main", "origin/staging")) {
