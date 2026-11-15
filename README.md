@@ -23,6 +23,23 @@ The installer checks/installs Node + pnpm, runs `pnpm install`, creates `.env` f
 
 Uninstall: `scripts\install\uninstall.ps1` / `bash scripts/install/uninstall.sh`
 
+### Install the project-auditor skill globally
+
+The shared `hybrid-project-auditor` skill can be installed in user-level skill
+folders for Agent Skills-compatible tools, including Copilot, Antigravity,
+Gemini CLI, Claude Code, Cursor, OpenCode, and Codex:
+
+```bash
+pnpm run skill:install
+```
+
+This copies the same `SKILL.md` into each platform's global skills folder.
+Restart or refresh the AI application after installation. If a different skill
+with this name already exists, review it first; use
+`pnpm run skill:install -- --force` only to replace that skill file. The optional
+`--home <directory>` argument installs into a different user home (for example,
+for testing).
+
 ### Manual (Windows Tools)
 
 1. Open `Tools\README.md` and run **`Tools\01-setup-prereqs.bat`**
@@ -72,7 +89,9 @@ Filesystem tools use a **desktop-controller** sandbox: normal user environment (
 
 ```bash
 pnpm run git:new-branch -- feat/my-change
-pnpm run git:open-pr
+pnpm run git:smart-push
+# Release staging to main through a separate protected PR:
+pnpm run git:smart-push -- --release
 ```
 
 See [`CONTRIBUTING.md`](CONTRIBUTING.md), [`AGENTS.md`](AGENTS.md), and [`docs/GIT_WORKFLOW.md`](docs/GIT_WORKFLOW.md). CI guard check name: **`branch-flow`**.

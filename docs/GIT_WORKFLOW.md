@@ -31,6 +31,20 @@ pnpm run git:open-pr
 3. **CI must pass**: `quality (ubuntu-latest)`, `quality (windows-latest)`, and **`branch-flow`**.
 4. Merge into `staging` only after review + green CI.
 
+### Smart push
+
+`pnpm run git:smart-push` runs the secret scan, typecheck, and unit tests before
+pushing the current feature branch. It opens or reuses a PR into `staging`,
+enables GitHub auto-merge and delete-on-merge for short-lived heads, then watches
+the required status checks. After GitHub confirms the merge, it fast-forwards
+the local `staging` branch and removes only that merged local feature branch.
+It never pushes directly to `main` or `staging`.
+
+Use `pnpm run git:smart-push -- --release` to open a separate PR from `staging`
+to `main`; the script tracks the same required checks and queues a merge commit
+only through GitHub's protected-branch rules. It does not force-update either
+protected branch.
+
 ## Release
 
 1. Open a **release PR: `staging` → `main`**.
