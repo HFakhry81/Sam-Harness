@@ -8,6 +8,7 @@
     "git:setup-hooks": "node scripts/git/setup-hooks.mjs",
     "git:new-branch": "bash scripts/git/new-branch.sh",
     "git:open-pr": "bash scripts/git/open-pr.sh",
+    "git:smart-push": "tsx scripts/git/smart-push.ts",
     "git:check-pr": "bash scripts/git/check-pr-flow.sh",
     "ensure-task": "tsx scripts/ensure-task.ts",
     "secrets:check": "tsx scripts/check-no-private-keys.ts",
@@ -55,7 +56,8 @@
     "install:unix": "bash scripts/install/install.sh --non-interactive",
     "install:win": "powershell -NoProfile -ExecutionPolicy Bypass -File scripts/install/install.ps1 -NonInteractive",
     "uninstall:unix": "bash scripts/install/uninstall.sh --non-interactive",
-    "uninstall:win": "powershell -NoProfile -ExecutionPolicy Bypass -File scripts/install/uninstall.ps1 -NonInteractive"
+    "uninstall:win": "powershell -NoProfile -ExecutionPolicy Bypass -File scripts/install/uninstall.ps1 -NonInteractive",
+    "skill:install": "tsx scripts/install-global-skill.ts"
   },
   "keywords": [],
   "author": "",
