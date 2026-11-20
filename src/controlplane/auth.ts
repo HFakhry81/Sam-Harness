@@ -249,6 +249,77 @@ export function requiresMfa(operation: string): boolean {
   return MFA_REQUIRED_OPS.has(operation);
 }
 
+/** ---------- Rate Limiting للمصادقة ---------- */
+const RATE_LIMIT_WINDOW_MS = 30 * 60 * 1000; // 30 دقيقة
+const RATE_LIMIT_MAX_ATTEMPTS = 5; // أقصى عدد محاولات
+const RATE_LIMIT_BASE_DELAY_MS = 1000; // التأخير الأساسي (1 ثانية)
+const RATE_LIMIT_MAX_DELAY_MS = 32000; // الحد الأقصى للتأخير (32 ثانية)
+
+interface RateLimitEntry {
+  attempts: number;
+  lastAttempt: number;
+}
+
+const rateLimitStore = new Map<string, RateLimitEntry>();
+
+/** حساب التأخير بناءً على عدد المحاولات الفاشلة (تأخير متزايد). */
+function calculateDelay(attempts: number): number {
+  const delay = RATE_LIMIT_BASE_DELAY_MS * Math.pow(2, attempts - 1);
+  return Math.min(delay, RATE_LIMIT_MAX_DELAY_MS);
+}
+
+/** تنظيف مدخلات rate limit المنتهية الصلاحية. */
+function cleanupRateLimits(): void {
+  const now = Date.now();
+  for (const [key, entry] of rateLimitStore.entries()) {
+    if (now - entry.lastAttempt > RATE_LIMIT_WINDOW_MS) {
+      rateLimitStore.delete(key);
+    }
+  }
+}
+
+/** التحقق من rate limit والحصول على التأخير المطلوب (إن وجد). */
+export function checkRateLimit(identifier: string): { allowed: boolean; delayMs?: number; retryAfter?: number } {
+  cleanupRateLimits();
+  const now = Date.now();
+  const entry = rateLimitStore.get(identifier);
+
+  if (!entry || now - entry.lastAttempt > RATE_LIMIT_WINDOW_MS) {
+    // دخول جديد أو انتهاء النافذة الزمنية
+    return { allowed: true };
+  }
+
+  const timeSinceLastAttempt = now - entry.lastAttempt;
+  const delay = calculateDelay(entry.attempts);
+  const retryAfter = delay - timeSinceLastAttempt;
+
+  if (retryAfter > 0) {
+    return { allowed: false, delayMs: delay, retryAfter };
+  }
+
+  // انقضت فترة الانتظار، إعادة تعيين المحاولة
+  rateLimitStore.delete(identifier);
+  return { allowed: true };
+}
+
+/** تسجيل محاولة مصادقة فاشلة. */
+export function recordFailedAttempt(identifier: string): void {
+  const now = Date.now();
+  const entry = rateLimitStore.get(identifier);
+
+  if (entry && now - entry.lastAttempt <= RATE_LIMIT_WINDOW_MS) {
+    entry.attempts++;
+    entry.lastAttempt = now;
+  } else {
+    rateLimitStore.set(identifier, { attempts: 1, lastAttempt: now });
+  }
+}
+
+/** إعادة تعيين rate limit لمعرف معين (بعد مصادقة ناجحة). */
+export function resetRateLimit(identifier: string): void {
+  rateLimitStore.delete(identifier);
+}
+
 function getEncryptionKey(): Buffer {
   const keyEnv = process.env.CONTROL_PLANE_ENCRYPTION_KEY;
   if (keyEnv) {
