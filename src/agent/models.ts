@@ -20,6 +20,7 @@ import {
   getCachedResponse,
   lightNormalize,
   loadCostOptConfig,
+  paidKeyPresent,
   resolveModelRoute,
   setCachedResponse,
   shouldDegradeToLocal,
@@ -112,7 +113,7 @@ export function isCostCapExhausted(cwd: string = process.cwd()): boolean {
  */
 export function useOllamaCloudNow(): boolean {
   if (hybridForcesLocal()) return false;
-  if (!cloudKeyPresent()) return false;
+  if (!paidKeyPresent()) return false;
   if (isCostCapExhausted()) return false;
   if (shouldDegradeToLocal()) return false;
   return true;
