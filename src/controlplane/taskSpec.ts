@@ -277,6 +277,32 @@ export function collectTaskRoots(spec: {
 /**
  * Build structured Task Spec from natural language (+ optional clarify answers).
  */
+/** First existing absolute path written in the prompt (explicit user intent). */
+function explicitPromptPath(prompt: string): string {
+  const found = prompt.match(/[A-Za-z]:\\[^\s"'`<>|*?\r\n]+/g) || [];
+  for (const raw of found.reverse()) {
+    const candidate = raw.replace(/[\\/.,;:)\]}]+$/, "");
+    try {
+      if (candidate.length > 3 && fs.existsSync(candidate)) return candidate;
+    } catch {
+      /* ignore */
+    }
+  }
+  return "";
+}
+
+/** Prefer the first existing candidate; otherwise the first one. */
+function firstExisting(candidates: string[]): string {
+  for (const c of candidates) {
+    try {
+      if (c && fs.existsSync(c)) return c;
+    } catch {
+      /* ignore */
+    }
+  }
+  return candidates[0] || "";
+}
+
 export function buildTaskSpec(input: SpecBuildInput): TaskSpec {
   const rawPrompt = normalizePathEscapes((input.prompt || "").trim());
   if (!rawPrompt) throw new Error("اكتب المهمة أولاً / Prompt is required");
@@ -304,10 +330,11 @@ export function buildTaskSpec(input: SpecBuildInput): TaskSpec {
       /sam-?harness/i.test(prompt));
   const promptIsClientProduct = /maw3ed|موعد|fanni|فني/i.test(prompt);
 
-  let targetRepo = (input.targetRepo || "").trim();
+  let targetRepo = (input.targetRepo || "").trim() || explicitPromptPath(prompt);
   if (!targetRepo) {
     if (route === "operational") targetRepo = desk;
-    else if (/maw3ed|موعد/i.test(prompt)) targetRepo = "E:\\UpNexa.com\\maw3ed";
+    else if (/maw3ed|موعد/i.test(prompt))
+      targetRepo = firstExisting(["E:\\Maw3ed", "E:\\UpNexa.com\\maw3ed"]);
     else if (/fanni|فني/i.test(prompt)) targetRepo = "E:\\UpNexa.com\\Fanni";
     else targetRepo = defaultArchitectureRepo();
   }

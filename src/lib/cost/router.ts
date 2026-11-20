@@ -212,6 +212,22 @@ function freeRoute(
   };
 }
 
+function paidApiKey(cfg: CostOptConfig): string {
+  const explicit = String(process.env.SAM_PAID_API_KEY || "").trim();
+  if (explicit) return explicit;
+  const base = String(cfg.paidBaseUrl || "").toLowerCase();
+  if (base.includes("anthropic")) {
+    return String(process.env.ANTHROPIC_API_KEY || "").trim();
+  }
+  if (base.includes("ollama")) return ollamaApiKey();
+  return String(process.env.OPENAI_API_KEY || ollamaApiKey() || "").trim();
+}
+
+/** True only when the paid endpoint has a matching credential. */
+export function paidKeyPresent(cfg: CostOptConfig = loadCostOptConfig()): boolean {
+  return Boolean(paidApiKey(cfg));
+}
+
 function paidRoute(
   cfg: CostOptConfig,
   difficulty: DifficultyTier,
@@ -219,7 +235,7 @@ function paidRoute(
   estimatedUsd: number,
   reason: string
 ): ModelRoute {
-  const key = ollamaApiKey();
+  const key = paidApiKey(cfg);
   return {
     tier: "paid",
     difficulty,
@@ -287,7 +303,7 @@ export function resolveModelRoute(input: RouteInput = {}): ModelRoute {
       !input.forceLocal &&
       !hybridForcesLocal(cwd) &&
       roleMode !== "local" &&
-      cloudKeyPresent() &&
+      paidKeyPresent(cfg) &&
       canAffordPaid(cwd, estimatePaidUsd(paidModel, String(input.prompt || "").length), cfg)
     ) {
       return annotate(
@@ -363,7 +379,7 @@ export function resolveModelRoute(input: RouteInput = {}): ModelRoute {
   }
 
   if (input.forceCloud) {
-    if (!cloudKeyPresent()) {
+    if (!paidKeyPresent(cfg)) {
       return annotate(
         localRoute(cfg, difficulty, localModel, "cloud requested but no provider key is configured", false)
       );
@@ -386,7 +402,7 @@ export function resolveModelRoute(input: RouteInput = {}): ModelRoute {
   }
 
   // roleMode === "local" already returned above
-  const paidOk = cloudKeyPresent() && canAffordPaid(cwd, est, cfg);
+  const paidOk = paidKeyPresent(cfg) && canAffordPaid(cwd, est, cfg);
 
   // Hybrid mode / per-role `cloud`: prefer paid for non-cheap work when key + budget allow.
   if (roleMode === "cloud" && paidOk && difficulty !== "cheap") {
